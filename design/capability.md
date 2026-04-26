@@ -1242,6 +1242,24 @@ The query text is too high-cardinality and too potentially sensitive to cache
 without explicit opt-in. The LLM can opt in by setting `cacheable: true` on the
 QuerySpec when it's confident the query is deterministic and side-effect-free.
 
+### 8.4 Cache and replay
+
+Cache is a runtime performance optimization, not part of the persisted state.
+Replay (walking the investigation event stream to reconstruct state — see
+persistence.md §2.1) bypasses both caches by design. Replayed reads always
+hit the immutable `OcsfEvent` rows and the persisted `ObservedData` graph
+directly; cache state at original-write time is irrelevant to replay
+correctness.
+
+This means:
+- Two analysts replaying the same investigation observe identical state,
+  regardless of whether the original session had warm or cold caches.
+- Cache eviction policy can be tuned freely without affecting historical
+  reproducibility.
+- The two caches' lifecycle bindings (raw-response TTL; ObservedData cache
+  cleared on conclusion/archive) are operational concerns only — they
+  don't constrain what was true in the persisted record.
+
 ---
 
 ## 9. Fixture Layer

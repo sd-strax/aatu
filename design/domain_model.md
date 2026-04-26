@@ -156,7 +156,10 @@ Records a single reasoning act.
                           (canonical enum — see "Interpretation types" below)
   input_refs              list of node ids (STIX or OcsfEvent) reasoned over
   output_refs             list of STIX node ids produced
-  rationale               string (why this mapping was made)
+  rationale               string (why this mapping was made; bounded ~500 chars
+                          — terse by design. Full transcript / tool-call detail
+                          lives in side stores per persistence.md §6 Layer B
+                          and is referenced from the Interpretation, not embedded.)
   confidence              optional HIGH | MEDIUM | LOW
 
 Actor model (canonical across the system):

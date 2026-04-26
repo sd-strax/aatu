@@ -28,6 +28,8 @@ The proposed four tiers are mostly right but conflate two orthogonal axes: **rev
 
 **Escalation rule:** any T2 action targeting more than `policy.blast_radius.t2_to_t3_threshold` distinct entities is automatically promoted to T3. Default threshold: 10 entities, configurable per action class. This is non-negotiable in code — it's not a policy override the org can disable, only adjust.
 
+The escalator promotes the *tier*, not the *authorization mode*. An analyst-authored auto-approval policy whose predicate matches an escalated T3 action will still auto-approve it. This is intentional: analysts who author such policies are accountable for the predicates' blast-radius implications, and the spec does not second-guess them. AI-originated auto-approvals on T3 are separately blocked at the policy layer by the baseline DENY in §4.3 (Example 2), which is non-removable.
+
 ### Why not collapse to three or split to five
 
 Three (read / annotate / external) loses the reversibility distinction, which is exactly the distinction analysts care about under time pressure: "I can untoast this in 30 seconds if I'm wrong" vs "this is final." Five tiers (splitting reversible-targeted vs reversible-broad, etc.) duplicates what the blast-radius escalator handles. Four with an escalator gives you the cognitive simplicity of four cuts and the precision of five.
