@@ -36,9 +36,11 @@ STIX 2.1 is the vocabulary for the interpretation layer. OCSF is the vocabulary 
 
 Identity follows STIX deterministic UUIDv5 rules. The same entity (e.g., 8.8.8.8) produces the same ID across producers and investigations. Cross-investigation entity identity is preserved by default. Aliasing between entities is an explicit edge, never a destructive merge.
 
+Three deliberate deviations from strict STIX 2.1 apply to `process`, `email-addr`, and `user-account` identity computation — required for cross-tool stitching to work in real enterprise environments where every authentication system, mail platform, and EDR is case-insensitive in practice. See capability.md §7.2 for the per-type rules and rationale.
+
 An investigation is a STIX Grouping plus four extensions: Seed, Lifecycle, ReasoningThread, ConclusionSlot.
 
-The only invented primitive is Interpretation, which records reasoning acts (who, when, from-what, to-what, why). Hypotheses, predictions, and findings are not separate primitives - they are outputs of Interpretations and live as STIX-shaped nodes inside the Grouping.
+The genuinely invented primitives are Interpretation (records reasoning acts: who, when, from-what, to-what, why) and x-action (state-changing operations against the world; see auth.md). Hypotheses and predictions are not separate primitives — they are outputs of Interpretations and live as STIX-shaped nodes inside the Grouping.
 
 Bottom-layer primitives are node, edge, payload. No constraints enforced at the core. Conventions validated at consumer boundaries (ingress, API egress, AI tool calls, persistence write paths).
 
@@ -62,7 +64,7 @@ INTERPRETATION LAYER
 --------------------
 All objects follow STIX 2.1 conventions. Identity is "<type>--<uuidv5>". Common fields (created, modified, created_by_ref) follow STIX semantics throughout.
 
-Entity (STIX SCO). v0 types: ipv4-addr, ipv6-addr, domain-name, url, file, email-addr, user-account, process, x-host. Canonical identifiers normalized on construction.
+Entity (STIX SCO). v0 types: ipv4-addr, ipv6-addr, domain-name, url, file, directory, network-traffic, email-addr, email-message, user-account, process, x-host, x-registry-key, x-scheduled-task, x-group. Canonical identifiers normalized on construction. The four `x-` types are custom SCOs covering Windows registry keys, scheduled tasks (and equivalents — cron, launchd, systemd), directory groups (AD / Entra / Okta), and host entities, which STIX 2.1 does not cover natively. Identity rules (including the three deviations noted above) are in capability.md §7.2.
 
 ObservedData (STIX SDO):
   id                  observed-data--<uuid>
@@ -96,7 +98,11 @@ Grouping (substrate):
   name            string
   description     string
   context         "investigation" or "hunt"
-  object_refs     list of STIX object ids (members)
+  object_refs     list of STIX object ids (members). Mutable: members are
+                  added and (soft-)removed over an investigation's life via
+                  MemberAdded / MemberRemoved events (persistence.md §3).
+                  Soft removal preserves history — the change lives in the
+                  event stream, not as a destructive edit to object_refs.
   created, modified, created_by_ref (STIX standard)
 
 Extension 1 - Seed (immutable, set at creation). One of:
@@ -120,8 +126,8 @@ Extension 3 - ReasoningThread. Ordered list of Interpretation node references. E
 Extension 4 - ConclusionSlot. Nullable reference to a STIX Report object.
 
 
-INTERPRETATION (the only invented primitive)
---------------------------------------------
+INTERPRETATION (records a reasoning act)
+----------------------------------------
 Records a single reasoning act.
 
   id                      x-interpretation--<uuid>
@@ -177,6 +183,14 @@ Interpretation types (canonical enum, referenced by all components):
                     rationale MUST be populated. Periodic review of "other"
                     Interpretations drives new typed values when patterns emerge.
 
+Interpretation lifecycle and correction:
+- Append-only by default. An Interpretation, once recorded, is the immutable
+  record of one reasoning act.
+- Supersession (correction) is supported via the InterpretationSuperseded
+  event (persistence.md §3): the new Interpretation becomes the current view
+  in the thread, and the superseded one remains visible. There is no
+  destructive deletion.
+
 
 CUSTOM STIX OBJECTS
 -------------------
@@ -205,6 +219,31 @@ x-prediction (testable consequence of a hypothesis):
   test_result_refs    list of ObservedData or Sighting ids
   created, modified, created_by_ref (STIX standard)
 
+x-action (state-changing operation against the world):
+  id                  x-action--<uuid>
+  action_type         string (controlled vocabulary, e.g., "host.isolate",
+                      "email.purge", "detection.deploy")
+  tier                T2 | T3
+  status              REQUESTED | APPROVED | EXECUTING | SUCCEEDED |
+                      FAILED | REJECTED | EXPIRED | REVERSED
+  targets             list of TargetSpec (entity_ref + resolved_identifier)
+  evidence_refs       list of STIX ids that justified the action
+  investigation_ref   grouping--<uuid>
+  reversal_of_ref     optional x-action id (if this action reverses another)
+  reversed_by_ref     optional x-action id (set when this is reversed)
+  authorization       Authorization sub-record (see auth.md §3.3)
+  execution           Execution sub-record (see auth.md §6.1)
+  created, modified, created_by_ref (STIX standard)
+
+  Notes:
+  - Sibling primitive to x-hypothesis and x-prediction — has its own
+    lifecycle (the status field) rather than being a single recorded act.
+  - The producing reasoning is captured by an Interpretation of type
+    "action-request"; subsequent state changes produce action-approval,
+    action-rejection, action-expiry, action-dispatch, action-result, or
+    action-reversal Interpretations. See auth.md §3.2 for the full state
+    machine and §3.3 / §6 for the authorization and execution sub-records.
+
 
 EDGE TYPES (v0 vocabulary, open)
 --------------------------------
@@ -217,6 +256,11 @@ x-supports        Sighting      -> x-hypothesis    evidence supports (with weigh
 x-refutes         Sighting      -> x-hypothesis    evidence refutes (with weight: STRONG | MODERATE | WEAK)
 aliases           Entity        -> Entity          identity assertion
 parent-of         x-hypothesis  -> x-hypothesis    hypothesis refinement
+reverses          x-action      -> x-action        a reversing action negates a
+                                                   previously-SUCCEEDED action.
+                                                   Also expressible via x-action.
+                                                   reversal_of_ref; the edge form
+                                                   supports graph queries (auth.md §7)
 
 Standard STIX relationship types (indicates, uses, targets, communicates-with, resolves-to, located-at, etc.) are also valid where applicable.
 
@@ -253,19 +297,29 @@ Adopted from working SOC tooling and IR methodology (TheHive, NIST 800-61): case
 Adopted from event-sourcing patterns: reasoning thread as append-only ordered log.
 
 Invented:
-- The x-interpretation primitive (the only genuinely new concept)
-- Custom STIX objects x-hypothesis and x-prediction
-- Custom STIX relationship types x-supports and x-refutes
+- The x-interpretation primitive (records a reasoning act)
+- The x-action primitive (state-changing operations; lifecycle and authorization in auth.md)
+- Custom STIX SDOs: x-hypothesis, x-prediction
+- Custom STIX SCOs: x-host, x-registry-key, x-scheduled-task, x-group
+  (entity types not covered by STIX 2.1 native; identity rules in capability.md §7.2)
+- Custom STIX relationship types: x-supports, x-refutes, reverses
 - The investigation extension structure (Seed, Lifecycle, ReasoningThread, ConclusionSlot) on top of Grouping
 
 
 OPEN QUESTIONS DELIBERATELY LEFT TO IMPLEMENTATION
 --------------------------------------------------
 These are not domain-model gaps. The model accommodates either choice.
-- Whether STIX promotion from OCSF is eager (at ingest) or lazy (on reference)
 - Whether labels on x-hypothesis bind to a controlled vocabulary (e.g., MITRE ATT&CK technique IDs) or remain freeform
-- Whether the reasoning thread is materialized as a list or derived from produced-by edges plus timestamps
 - Partitioning strategy for cross-investigation entity references at scale
+
+CLOSED (resolved by other specs):
+- STIX promotion from OCSF is eager. Every tool response is normalized at
+  ingest into ObservedData and SCOs, with the raw OcsfEvent retained as
+  ground truth and re-normalizable on demand. See capability.md §4.13.
+- The reasoning thread is materialized as a projection (investigation_thread)
+  rebuilt from the event stream; the canonical ordering lives in the events'
+  sequence_no, not in a list field on the Grouping. The Grouping's
+  ReasoningThread extension is the logical view. See persistence.md §4.2.
 
 
 END OF SPEC
