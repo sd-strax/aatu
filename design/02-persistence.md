@@ -2,7 +2,7 @@
 
 ## Project context
 
-"Cursor for SOC analysts" — AI-native investigation environment. Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend, transport-neutral capability layer for tool federation (adapters: MCP, native vendor APIs, custom integrations; see capability.md §5.4). Personas v0: threat hunters and IR responders. Workflows v0: investigation (entity-rooted) and hunting (hypothesis-rooted). v0 prototype runs against OCSF fixtures via the fixture adapter, not real tenants.
+"Cursor for SOC analysts" — AI-native investigation environment. Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend, transport-neutral capability layer for tool federation (adapters: MCP, native vendor APIs, custom integrations; see 03-capability-layer.md §5.4). Personas v0: threat hunters and IR responders. Workflows v0: investigation (entity-rooted) and hunting (hypothesis-rooted). v0 prototype runs against OCSF fixtures via the fixture adapter, not real tenants.
 
 This spec defines how investigation state is persisted. It assumes the investigation domain model spec as authoritative input.
 
@@ -16,7 +16,7 @@ This spec defines how investigation state is persisted. It assumes the investiga
 
 - The domain model itself (separate thread, taken as given)
 - Action authorization mechanics (referenced where it touches event shape; full design separate)
-- Capability layer (covered by capability.md)
+- Capability layer (covered by 03-capability-layer.md)
 - Query model and API surface beyond what projections require
 - UI projections beyond their backing data shape
 
@@ -36,11 +36,11 @@ This spec defines how investigation state is persisted. It assumes the investiga
 
 ## 2. Persistence model
 
-**All persistence is per-tenant.** Every layer below — the investigation aggregate event stream, STIX object store, OCSF telemetry, AI tool-call and transcript side stores — is logically partitioned by tenant. v0 ships as a single Postgres instance with `tenant_id` on every row; physical sharding (separate databases per tenant, or table partitioning) is an operational concern deferred until tenant volume warrants it. Identity computation uses a per-tenant namespace UUID assigned at tenant creation (see domain_model.md ARCHITECTURAL COMMITMENTS and capability.md §7.1), so cross-tenant id collision is impossible by construction — the partitioning is correct-by-default rather than enforced solely by row-level filters.
+**All persistence is per-tenant.** Every layer below — the investigation aggregate event stream, STIX object store, OCSF telemetry, AI tool-call and transcript side stores — is logically partitioned by tenant. v0 ships as a single Postgres instance with `tenant_id` on every row; physical sharding (separate databases per tenant, or table partitioning) is an operational concern deferred until tenant volume warrants it. Identity computation uses a per-tenant namespace UUID assigned at tenant creation (see 01-domain-model.md ARCHITECTURAL COMMITMENTS and 03-capability-layer.md §7.1), so cross-tenant id collision is impossible by construction — the partitioning is correct-by-default rather than enforced solely by row-level filters.
 
 ### 2.1 Investigation aggregate (event-sourced)
 
-The Investigation aggregate is the unit of event sourcing. Boundary: one Grouping plus its four extensions (Seed, Lifecycle, ReasoningThread, ConclusionSlot), its membership, its Interpretations, and its x-actions (the REQUESTED → APPROVED → EXECUTING → terminal lifecycle for any state-changing action taken from this investigation; see auth.md §3 for the action model and §3.2 for the lifecycle).
+The Investigation aggregate is the unit of event sourcing. Boundary: one Grouping plus its four extensions (Seed, Lifecycle, ReasoningThread, ConclusionSlot), its membership, its Interpretations, and its x-actions (the REQUESTED → APPROVED → EXECUTING → terminal lifecycle for any state-changing action taken from this investigation; see 04-action-authorization.md §3 for the action model and §3.2 for the lifecycle).
 
 Things outside the boundary that the aggregate references but does not own: STIX entities, ObservedData, Sightings, OCSF events, AI tool calls, transcripts. The aggregate references them by id; their existence and lifecycle are managed elsewhere.
 
@@ -59,7 +59,7 @@ CREATE TABLE stix_edges (
   edge_id        UUID PRIMARY KEY,
   tenant_id      UUID NOT NULL,
   subject_id     TEXT NOT NULL,         -- STIX id (any type) or OcsfEvent id
-  predicate      TEXT NOT NULL,         -- edge type from domain_model.md EDGE TYPES
+  predicate      TEXT NOT NULL,         -- edge type from 01-domain-model.md EDGE TYPES
   object_id      TEXT NOT NULL,         -- STIX id (any type) or OcsfEvent id
   properties     JSONB,                 -- e.g., {weight: "STRONG"} for x-supports
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -122,18 +122,18 @@ Reasoning thread:
 - `InterpretationSuperseded` — payload: superseded_id, superseding_id, reason. No deletion; the thread shows both.
 
 Evidence linkage:
-- `EvidenceAttached` — payload: evidence_ref (`EvidenceRef` per domain_model.md INTERPRETATION → Reference types — `StixId | OcsfEventId`), interpretation_ref, role ("supports" | "refutes"), weight (STRONG | MODERATE | WEAK). Role and weight map directly to the `x-supports` / `x-refutes` edge vocabulary in domain_model.md EDGE TYPES. Non-evidentiary references — context, related-but-not-supporting, etc. — belong in the producing Interpretation's `input_refs`, not in this event.
+- `EvidenceAttached` — payload: evidence_ref (`EvidenceRef` per 01-domain-model.md INTERPRETATION → Reference types — `StixId | OcsfEventId`), interpretation_ref, role ("supports" | "refutes"), weight (STRONG | MODERATE | WEAK). Role and weight map directly to the `x-supports` / `x-refutes` edge vocabulary in 01-domain-model.md EDGE TYPES. Non-evidentiary references — context, related-but-not-supporting, etc. — belong in the producing Interpretation's `input_refs`, not in this event.
 - `EvidenceDetached` — payload: evidence_ref, reason
 
-Action lifecycle (see auth.md §3 for the action model and §3.2 for the state machine):
-- `ActionRequested` — payload: action_id, action_type, tier, targets, parameters, evidence_refs, expires_at, requesting_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "action-request"); shared `correlation_id` ties them. Permitted against a CONCLUDED investigation only when the request is a reversal action (see auth.md §9.1 and the domain_model.md Lifecycle invariants).
+Action lifecycle (see 04-action-authorization.md §3 for the action model and §3.2 for the state machine):
+- `ActionRequested` — payload: action_id, action_type, tier, targets, parameters, evidence_refs, expires_at, requesting_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "action-request"); shared `correlation_id` ties them. Permitted against a CONCLUDED investigation only when the request is a reversal action (see 04-action-authorization.md §9.1 and the 01-domain-model.md Lifecycle invariants).
 - `ActionApproved` — payload: action_id, authorization { mode (MANUAL | AUTO_POLICY | TWO_PARTY), stage (SOLO | PRIMARY | SECONDARY — SOLO for MANUAL/AUTO_POLICY; PRIMARY then SECONDARY for TWO_PARTY), primary_approver_ref, primary_approved_at, secondary_approver_ref?, secondary_approved_at?, policy_ref?, policy_version?, challenge_response? }, approval_interpretation_id. Resulting x-action status: PENDING_SECONDARY when (mode=TWO_PARTY, stage=PRIMARY); APPROVED otherwise. Subsequent rejection or expiry from PENDING_SECONDARY uses the existing `ActionRejected` / `ActionExpired` events.
 - `ActionRejected` — payload: action_id, reason, rejection_interpretation_id.
 - `ActionExpired` — payload: action_id, expiry_interpretation_id. System-emitted on `expires_at`.
 - `ActionDispatched` — payload: action_id, adapter, adapter_request_id, dispatched_at, dispatch_interpretation_id. System-emitted when the dispatcher picks up an APPROVED action.
 - `ActionResulted` — payload: action_id, final_outcome (SUCCEEDED | FAILED | PARTIAL | TIMEOUT), per_target_results, attempts, raw_response_ref?, result_interpretation_id. System-emitted; `per_target_results` is what makes PARTIAL outcomes auditable.
 - `ActionReversed` — payload: original_action_id, reversing_action_id, reversal_interpretation_id. The reversing action is itself a new x-action (with its own `ActionRequested` etc.); this event records that the original's status moves to REVERSED on the reversing action's success.
-- `PolicyEvaluated` — payload: action_id, evaluations (list of `{policy_ref, policy_version (content_hash), would_have_fired: bool, effect (AUTO_APPROVE | REQUIRE_TWO_PARTY | DENY), shadow: bool}`), matched_policy_ref (the policy whose effect actually drove authorization, or null if all matching policies were shadow and the action fell through to the manual flow). Recorded once per action-request, in the same aggregate transaction as `ActionRequested`. Captures both firing and shadow-mode policies — the shadow audit (auth.md §4.4) reads `would_have_fired = true AND shadow = true` from this event stream.
+- `PolicyEvaluated` — payload: action_id, evaluations (list of `{policy_ref, policy_version (content_hash), would_have_fired: bool, effect (AUTO_APPROVE | REQUIRE_TWO_PARTY | DENY), shadow: bool}`), matched_policy_ref (the policy whose effect actually drove authorization, or null if all matching policies were shadow and the action fell through to the manual flow). Recorded once per action-request, in the same aggregate transaction as `ActionRequested`. Captures both firing and shadow-mode policies — the shadow audit (04-action-authorization.md §4.4) reads `would_have_fired = true AND shadow = true` from this event stream.
 
 Total: ~18 event types at v0. Named after analyst verbs. No derived-fact events. No fork events (deferred to v1+ — taxonomy stays clean enough that forking can be added without schema migration).
 
@@ -231,7 +231,7 @@ The reasoning persistence problem decomposes into three layers. The split is the
 
 The Interpretation event payload contains:
 - `interpretation_id`
-- `interpretation_type` — string drawn from the canonical enum (see domain_model.md INTERPRETATION → Interpretation types; 18 values at v0)
+- `interpretation_type` — string drawn from the canonical enum (see 01-domain-model.md INTERPRETATION → Interpretation types; 18 values at v0)
 - `input_refs` — STIX or OCSF ids the reasoning departed from (matches `INTERPRETATION.input_refs` in the domain model)
 - `output_refs` — STIX ids the reasoning produced (matches `INTERPRETATION.output_refs` in the domain model)
 - `rationale` — bounded natural-language string (proposed cap ~500 chars). The "why," terse by design.
@@ -311,8 +311,8 @@ This is a *write-time check*, not a stored property. The event captures what was
 - **Cross-investigation linkage events.** Tag, "see-also," and similar relations between investigations. Add when product demand surfaces; do not pre-design.
 - **Policy snapshots on events.** Add only if regulatory drivers require policy-at-time-of-decision in the audit trail.
 - **Catch-up subscriptions across services.** Postgres LISTEN/NOTIFY or polling suffices at v0 scale. Revisit when service count grows.
-- **Detection authoring as a feature.** The investigation event stream and the reasoning-thread projection are designed to support a future detection-authoring tool — analyst marks parts of an investigation as the basis for a detection rule, the tool generates rule code, and the rule is pushed through the auth.md push-to-production flow (T3, see §2 Action Categorization). The authoring tool itself is not specified in any v0 thread; the data model accommodates it without further change. References to "detection authoring" in §1 (decision summary), §3 (event indexing), and §4.2 (projection consumers) are about supporting this future use case, not committing to build it in v0.
-- **Action dispatch / write-side adapter contract.** Persistence assumes the capability layer dispatches actions and returns `adapter_request_id` for correlation in `ActionDispatched` events. The capability spec covers the read side; the write side is deferred to a follow-on thread (capability.md §10). Until that thread lands, `ActionDispatched` events in v0 prototype carry fixture-stub adapter ids.
+- **Detection authoring as a feature.** The investigation event stream and the reasoning-thread projection are designed to support a future detection-authoring tool — analyst marks parts of an investigation as the basis for a detection rule, the tool generates rule code, and the rule is pushed through the 04-action-authorization.md push-to-production flow (T3, see §2 Action Categorization). The authoring tool itself is not specified in any v0 thread; the data model accommodates it without further change. References to "detection authoring" in §1 (decision summary), §3 (event indexing), and §4.2 (projection consumers) are about supporting this future use case, not committing to build it in v0.
+- **Action dispatch / write-side adapter contract.** Persistence assumes the capability layer dispatches actions and returns `adapter_request_id` for correlation in `ActionDispatched` events. The capability spec covers the read side; the write side is deferred to a follow-on thread (03-capability-layer.md §10). Until that thread lands, `ActionDispatched` events in v0 prototype carry fixture-stub adapter ids.
 
 ---
 
@@ -323,4 +323,4 @@ These are decisions or operational details intentionally left to the team rather
 - Concrete value of the schema-evolution **freeze window** per event type (proposed default: 90 days; team to confirm).
 - Default tenant transcript retention (operational/legal call, not a design call).
 - Choice of object store vs. Postgres side table for `ai_transcripts` (operational call; either works with the reference-and-hash pattern).
-- Initial set of OCSF classes ingested at v0 (depends on the capability layer; see capability.md §4 — not this spec's concern).
+- Initial set of OCSF classes ingested at v0 (depends on the capability layer; see 03-capability-layer.md §4 — not this spec's concern).

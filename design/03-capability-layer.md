@@ -30,7 +30,7 @@ gone.
 
 **The capability layer is pure I/O plus normalization.** It does not reason. It
 does not produce `x-interpretation` records (Interpretations live inside the
-investigation aggregate per persistence.md §2.1; the agent loop is their only
+investigation aggregate per 02-persistence.md §2.1; the agent loop is their only
 legal author). It does not make hypothesis judgments. Its outputs are typically
 `derivation_mode = DIRECT` because every observation it emits traces to a real
 tool call. The single exception is the `detection_finding` normalizer (§4.12),
@@ -751,7 +751,7 @@ The Indicator and Sighting are interpretation-layer artifacts but the
 capability layer **does not** emit a synthetic `x-interpretation` to wrap
 them. That would violate two invariants: (a) capability §1, "the layer is
 pure I/O plus normalization; does not reason; does not produce
-x-interpretation records," and (b) persistence.md §2.1 aggregate ownership
+x-interpretation records," and (b) 02-persistence.md §2.1 aggregate ownership
 — Interpretations live inside the investigation aggregate, and capability
 has no legal write path into it.
 
@@ -776,7 +776,7 @@ Instead:
   imported, not produced by reasoning in our system. The
   `provenance.tool = vendor_name` and STIX `created_by_ref` to the vendor
   Identity together preserve the upstream attribution. (See
-  domain_model.md INVARIANTS for the system-produced-vs-imported
+  01-domain-model.md INVARIANTS for the system-produced-vs-imported
   distinction.)
 
 The agent loop is responsible for deciding how much weight to give
@@ -1052,7 +1052,7 @@ the global STIX 2.1 namespace `00abedb4-aa42-466c-9c01-fed23315a9b7` and
 not a project-wide custom-object namespace.
 
 Each tenant is assigned a fresh namespace UUIDv4 at tenant creation, stored
-in the tenant CRUD record (persistence.md §1), and immutable thereafter.
+in the tenant CRUD record (02-persistence.md §1), and immutable thereafter.
 Both standard SCOs (`ipv4-addr`, `domain-name`, `file`, etc.) and custom
 SCOs (`x-host`, `x-registry-key`, `x-scheduled-task`, `x-group`) use the
 same per-tenant namespace; there is no separate custom-object namespace.
@@ -1078,7 +1078,7 @@ undesirable (e.g., one-off opaque enrichment results); the resolver records
 which mode was used in provenance.
 
 The deviation from strict STIX 2.1 is documented as a deliberate trade —
-STIX is the *vocabulary* for the interpretation layer (domain_model.md
+STIX is the *vocabulary* for the interpretation layer (01-domain-model.md
 ARCHITECTURAL COMMITMENTS), not the *wire format*. STIX-conformant ids
 remain available if the system ever needs to publish to a STIX-conformant
 external consumer; that conversion happens at the export boundary, not in
@@ -1273,7 +1273,7 @@ QuerySpec when it's confident the query is deterministic and side-effect-free.
 
 Cache is a runtime performance optimization, not part of the persisted state.
 Replay (walking the investigation event stream to reconstruct state — see
-persistence.md §2.1) bypasses both caches by design. Replayed reads always
+02-persistence.md §2.1) bypasses both caches by design. Replayed reads always
 hit the immutable `OcsfEvent` rows and the persisted `ObservedData` graph
 directly; cache state at original-write time is irrelevant to replay
 correctness.
@@ -1452,8 +1452,8 @@ re-litigated.
 thread.** This spec covers the read side: 22 query verbs, the binding /
 resolver / normalizer pipeline, and the `CapabilityResult` envelope. The
 write side — the agent-facing `request_action` tool, write-side adapter
-operations, the `adapter_request_id` correlation contract that auth.md §6.1
-and persistence.md §3 `ActionDispatched` reference, and the action fixtures
+operations, the `adapter_request_id` correlation contract that 04-action-authorization.md §6.1
+and 02-persistence.md §3 `ActionDispatched` reference, and the action fixtures
 that mirror §9 read fixtures — is referenced by the auth and persistence
 specs but not designed here. It is the next thread to spawn before code,
 not a v0-time omission to paper over. Until it lands, action dispatch in

@@ -4,17 +4,17 @@ INVESTIGATION DOMAIN MODEL - SPEC FOR FAN-IN
 PROJECT CONTEXT
 ---------------
 "Cursor for SOC analysts" - AI-native investigation environment.
-Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend for collaboration views, transport-neutral capability layer for tool federation (adapters: MCP, native vendor APIs, custom integrations; see capability.md §5.4).
+Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend for collaboration views, transport-neutral capability layer for tool federation (adapters: MCP, native vendor APIs, custom integrations; see 03-capability-layer.md §5.4).
 Personas v0: threat hunters and IR responders (hypothesis-driven, code-comfortable, latency-sensitive). Not T1/T2 triage.
 Workflows v0: investigation (entity-rooted) and hunting (hypothesis-rooted) - same loop, different entry points.
 Philosophy: skeleton not closed product; AI absorbs the fragmentation tax so every analyst operates with T3-level context.
-v0 prototype: all adapters served by OCSF fixtures (see capability.md §9), not real tenants.
+v0 prototype: all adapters served by OCSF fixtures (see 03-capability-layer.md §9), not real tenants.
 
 
 THREAD SCOPE
 ------------
 This thread defines the domain model only - what an investigation IS as a primitive.
-Out of scope (separate threads): persistence, query model, API surface, ingestion pipeline, action authorization, component architecture, capability layer (now covered by capability.md), UI projections.
+Out of scope (separate threads): persistence, query model, API surface, ingestion pipeline, action authorization, component architecture, capability layer (now covered by 03-capability-layer.md), UI projections.
 
 
 DECISIONS RULED OUT (do not re-litigate)
@@ -36,13 +36,13 @@ STIX 2.1 is the vocabulary for the interpretation layer. OCSF is the vocabulary 
 
 Identity follows STIX deterministic UUIDv5 rules, computed within a per-tenant namespace UUID (see below). The same entity (e.g., 8.8.8.8) produces the same ID across producers and investigations within a tenant. Cross-investigation entity identity is preserved by default within a tenant. Aliasing between entities is an explicit edge, never a destructive merge.
 
-Three deliberate deviations from strict STIX 2.1 apply to `process`, `email-addr`, and `user-account` identity computation — required for cross-tool stitching to work in real enterprise environments where every authentication system, mail platform, and EDR is case-insensitive in practice. See capability.md §7.2 for the per-type rules and rationale.
+Three deliberate deviations from strict STIX 2.1 apply to `process`, `email-addr`, and `user-account` identity computation — required for cross-tool stitching to work in real enterprise environments where every authentication system, mail platform, and EDR is case-insensitive in practice. See 03-capability-layer.md §7.2 for the per-type rules and rationale.
 
 The system is multi-tenant. A tenant is a complete partition of the data: its own STIX object store, its own event stream, its own user / RBAC scope, its own adapter configuration, its own investigations, and its own namespace UUID for identity computation. Same value (e.g., `8.8.8.8`) in two different tenants produces two different STIX ids — cross-tenant identity collision is impossible by construction, not just by access control. STIX patterns (used by Indicator SDOs) operate on field values rather than ids, so explicit cross-tenant indicator sharing remains possible if and when a federated indicator pool is introduced (deferred; not v0). The tenant namespace UUID is assigned at tenant creation (a fresh UUIDv4) and immutable thereafter; changing it would re-id every node in the tenant. STIX is the *vocabulary* for the interpretation layer here, not the *wire format* — the per-tenant-namespace deviation is a deliberate trade in service of multi-tenant isolation, and STIX-conformant ids can be reconstructed at export boundaries if external federation is ever needed.
 
 An investigation is a STIX Grouping plus four extensions: Seed, Lifecycle, ReasoningThread, ConclusionSlot.
 
-The genuinely invented primitives are Interpretation (records reasoning acts: who, when, from-what, to-what, why) and x-action (state-changing operations against the world; see auth.md). Hypotheses and predictions are not separate primitives — they are outputs of Interpretations and live as STIX-shaped nodes inside the Grouping.
+The genuinely invented primitives are Interpretation (records reasoning acts: who, when, from-what, to-what, why) and x-action (state-changing operations against the world; see 04-action-authorization.md). Hypotheses and predictions are not separate primitives — they are outputs of Interpretations and live as STIX-shaped nodes inside the Grouping.
 
 Bottom-layer primitives are node, edge, payload. No constraints enforced at the core. Conventions validated at consumer boundaries (ingress, API egress, AI tool calls, persistence write paths).
 
@@ -56,17 +56,17 @@ OcsfEvent (immutable):
   time            timestamp, when event occurred in the world
   recorded_at     timestamp, when ingested
   source_tool     string, source adapter identifier (e.g., "crowdstrike_falcon",
-                  "splunk_es", "fixture:<scenario>"); see capability.md §5.4
+                  "splunk_es", "fixture:<scenario>"); see 03-capability-layer.md §5.4
   payload         object, full original OCSF payload, untouched
 
-v0 set of OCSF classes ingested: out of scope; depends on the capability layer (capability.md §4).
+v0 set of OCSF classes ingested: out of scope; depends on the capability layer (03-capability-layer.md §4).
 
 
 INTERPRETATION LAYER
 --------------------
 All objects follow STIX 2.1 conventions. Identity is "<type>--<uuidv5>". Common fields (created, modified, created_by_ref) follow STIX semantics throughout.
 
-Entity (STIX SCO). v0 types: ipv4-addr, ipv6-addr, domain-name, url, file, directory, network-traffic, email-addr, email-message, user-account, process, x-host, x-registry-key, x-scheduled-task, x-group. Canonical identifiers normalized on construction. The four `x-` types are custom SCOs covering Windows registry keys, scheduled tasks (and equivalents — cron, launchd, systemd), directory groups (AD / Entra / Okta), and host entities, which STIX 2.1 does not cover natively. Identity rules (including the three deviations noted above) are in capability.md §7.2.
+Entity (STIX SCO). v0 types: ipv4-addr, ipv6-addr, domain-name, url, file, directory, network-traffic, email-addr, email-message, user-account, process, x-host, x-registry-key, x-scheduled-task, x-group. Canonical identifiers normalized on construction. The four `x-` types are custom SCOs covering Windows registry keys, scheduled tasks (and equivalents — cron, launchd, systemd), directory groups (AD / Entra / Okta), and host entities, which STIX 2.1 does not cover natively. Identity rules (including the three deviations noted above) are in 03-capability-layer.md §7.2.
 
 ObservedData (STIX SDO):
   id                  observed-data--<uuid>
@@ -102,7 +102,7 @@ Grouping (substrate):
   context         "investigation" or "hunt"
   object_refs     list of STIX object ids (members). Mutable: members are
                   added and (soft-)removed over an investigation's life via
-                  MemberAdded / MemberRemoved events (persistence.md §3).
+                  MemberAdded / MemberRemoved events (02-persistence.md §3).
                   Soft removal preserves history — the change lives in the
                   event stream, not as a destructive edit to object_refs.
   created, modified, created_by_ref (STIX standard)
@@ -124,10 +124,10 @@ Extension 2 - Lifecycle. Status state machine:
                 referenced from reasoning thread.
                 Each transition emits an Interpretation of type "lifecycle";
                 the lifecycle event and the Interpretation are written in
-                the same aggregate transaction (persistence.md §3) with a
+                the same aggregate transaction (02-persistence.md §3) with a
                 shared correlation_id.
                 CONCLUDED accepts new Interpretations only when they are
-                action-* lifecycle entries for reversal actions (see auth.md
+                action-* lifecycle entries for reversal actions (see 04-action-authorization.md
                 §9.1 — un-isolating a host weeks after closing the case
                 without reopening). conclusion_ref stays set; the reasoning
                 thread continues to grow with the reversal trace; the
@@ -166,7 +166,7 @@ Reference types used below and on x-action:
   output_refs             list<StixId> — STIX nodes produced
   rationale               string (why this mapping was made; bounded ~500 chars
                           — terse by design. Full transcript / tool-call detail
-                          lives in side stores per persistence.md §6 Layer B
+                          lives in side stores per 02-persistence.md §6 Layer B
                           and is referenced from the Interpretation, not embedded.)
   confidence              optional HIGH | MEDIUM | LOW
 
@@ -178,7 +178,7 @@ Actor model (canonical across the system):
   actor.kind              derived: HUMAN if delegate is null, else AI_DELEGATED
 
 AI is always a delegate, never a standalone principal. Every Interpretation
-(and every persisted event — see persistence.md §7) records a human principal,
+(and every persisted event — see 02-persistence.md §7) records a human principal,
 even when the reasoning was performed by an AI agent or imported from an
 external system. The principal is who is *responsible* for the act; the
 delegate is who/what *performed* it. Authorization derives from principal
@@ -186,7 +186,7 @@ permissions; the delegate may be restricted further but never broader.
 
 Scope. The canonical ActorRef shape applies only to **invented primitives**
 (x-interpretation, x-action) and to the **persistence event envelope** (see
-persistence.md §7). STIX SDOs / SROs / SCOs (ObservedData, Sighting,
+02-persistence.md §7). STIX SDOs / SROs / SCOs (ObservedData, Sighting,
 Indicator, Report, Note, Opinion, Relationship, x-hypothesis, x-prediction,
 all SCOs) use the STIX-standard `created_by_ref` → Identity ref convention
 as defined by STIX 2.1. The responsibility chain for any STIX-shaped node
@@ -208,7 +208,7 @@ Interpretation types (canonical enum, referenced by all components):
                     Underlying telemetry queries are T0; this captures the analytical
                     move so the thread shows the pivot intent, not just the data.
   lifecycle         investigation state transition (DRAFT/ACTIVE/PAUSED/CONCLUDED/ARCHIVED)
-  action-request    x-action proposed (see auth.md §3.2 for full action lifecycle)
+  action-request    x-action proposed (see 04-action-authorization.md §3.2 for full action lifecycle)
   action-approval   x-action approved (manual, auto-policy, or two-party primary)
   action-rejection  x-action denied
   action-expiry     x-action timed out unapproved (system-emitted)
@@ -224,7 +224,7 @@ Interpretation lifecycle and correction:
 - Append-only by default. An Interpretation, once recorded, is the immutable
   record of one reasoning act.
 - Supersession (correction) is supported via the InterpretationSuperseded
-  event (persistence.md §3): the new Interpretation becomes the current view
+  event (02-persistence.md §3): the new Interpretation becomes the current view
   in the thread, and the superseded one remains visible. There is no
   destructive deletion.
 
@@ -265,10 +265,10 @@ x-action (state-changing operation against the world). Canonical schema:
                       SUCCEEDED | FAILED | REJECTED | EXPIRED | REVERSED
                       (PENDING_SECONDARY only used when authorization mode
                       is TWO_PARTY: action sits in this state between primary
-                      and secondary approval. See auth.md §3.2.)
+                      and secondary approval. See 04-action-authorization.md §3.2.)
   targets             list<TargetSpec> (TargetSpec = {entity_ref: StixId,
                       resolved_identifier: string, asset_criticality?: string};
-                      full TargetSpec definition in auth.md §3.1)
+                      full TargetSpec definition in 04-action-authorization.md §3.1)
   parameters          object (action-specific arguments; shape determined
                       per action_type by the capability adapter contract)
   requested_by_actor  ActorRef (the actor who originated the request; see
@@ -278,7 +278,7 @@ x-action (state-changing operation against the world). Canonical schema:
                       the producing Interpretation's rationale)
   evidence_refs       list<EvidenceRef> — must equal the producing
                       Interpretation's input_refs. Same-aggregate
-                      transaction guarantees this (persistence.md §3
+                      transaction guarantees this (02-persistence.md §3
                       ActionRequested), so no separate write-time check.
   investigation_ref   grouping--<uuid>
   reversal_of_ref     optional x-action id (if this action reverses another)
@@ -287,12 +287,12 @@ x-action (state-changing operation against the world). Canonical schema:
                       this time; system emits ActionExpired event)
   assignee_ref        optional Analyst id (set when an analyst opens the
                       review panel and claims the action; first analyst to
-                      approve/reject wins — see auth.md §5.4)
+                      approve/reject wins — see 04-action-authorization.md §5.4)
   pending_approvers   optional set<Analyst id> (analysts notified and
                       eligible to approve; for TWO_PARTY, the secondary
                       pool minus the primary approver)
-  authorization       Authorization sub-record (see auth.md §3.3)
-  execution           Execution sub-record (see auth.md §6.1)
+  authorization       Authorization sub-record (see 04-action-authorization.md §3.3)
+  execution           Execution sub-record (see 04-action-authorization.md §6.1)
   created, modified, created_by_ref (STIX standard)
 
   Notes:
@@ -301,7 +301,7 @@ x-action (state-changing operation against the world). Canonical schema:
   - The producing reasoning is captured by an Interpretation of type
     "action-request"; subsequent state changes produce action-approval,
     action-rejection, action-expiry, action-dispatch, action-result, or
-    action-reversal Interpretations. See auth.md §3.2 for the full state
+    action-reversal Interpretations. See 04-action-authorization.md §3.2 for the full state
     machine and §3.3 / §6 for the authorization and execution sub-records.
 
 
@@ -320,7 +320,7 @@ reverses          x-action      -> x-action        a reversing action negates a
                                                    previously-SUCCEEDED action.
                                                    Also expressible via x-action.
                                                    reversal_of_ref; the edge form
-                                                   supports graph queries (auth.md §7)
+                                                   supports graph queries (04-action-authorization.md §7)
 
 Standard STIX relationship types (indicates, uses, targets, communicates-with, resolves-to, located-at, etc.) are also valid where applicable.
 
@@ -335,7 +335,7 @@ PROVENANCE (uniform on ObservedData, Sighting, Interpretation, Relationship)
   coverage            optional COMPLETE | PARTIAL | UNAVAILABLE_TENANT |
                       UNAVAILABLE_TRANSIENT | FAILED — coverage classification
                       from the capability call that produced this artifact
-                      (see capability.md §6 for definitions). Load-bearing for
+                      (see 03-capability-layer.md §6 for definitions). Load-bearing for
                       evidence-of-absence reasoning: empty result with
                       coverage=COMPLETE means we looked and found nothing;
                       empty result with any non-COMPLETE means we did not
@@ -352,13 +352,13 @@ INVARIANTS
 - OcsfEvent is immutable after write.
 - Every node and event belongs to exactly one tenant.
 - Identity computation uses the owning tenant's namespace UUID; the namespace is immutable for the lifetime of the tenant.
-- Entity identity is deterministic UUIDv5 within a tenant **when the identity tuple is complete** — same value, same tool inputs, same tenant always produces the same id, stable across investigations. When the identity tuple is incomplete or unavailable (e.g., a `process` SCO without a known `created_time`, or opaque ObservedData with no canonical content — see capability.md §7.1 ObservedData rule and §7.2 process deviation), the SCO carries a random UUIDv4 and is **not stitchable** across tools. Cross-tenant identity is independent by construction regardless.
+- Entity identity is deterministic UUIDv5 within a tenant **when the identity tuple is complete** — same value, same tool inputs, same tenant always produces the same id, stable across investigations. When the identity tuple is incomplete or unavailable (e.g., a `process` SCO without a known `created_time`, or opaque ObservedData with no canonical content — see 03-capability-layer.md §7.1 ObservedData rule and §7.2 process deviation), the SCO carries a random UUIDv4 and is **not stitchable** across tools. Cross-tenant identity is independent by construction regardless.
 - Aliasing is non-destructive and is always within a tenant; cross-tenant aliasing is not expressible.
 - Investigation seed is immutable after creation.
 - Investigation cannot be CONCLUDED without conclusion_ref populated.
 - Every status change on x-hypothesis produces a corresponding Interpretation in the reasoning thread.
 - Every node in an investigation's object_refs has a member-of edge to that Grouping.
-- Every interpretation-layer node **produced within this system** has a produced-by edge to the Interpretation that created it. Imported nodes (e.g., vendor-emitted Indicators / Sightings ingested via the capability layer's `detection_finding` normalizer — see capability.md §4.12) carry no produced-by edge; their upstream attribution lives in `provenance.tool` and STIX-standard `created_by_ref` to a per-tenant vendor Identity SDO. The agent loop creates a system Interpretation only when an investigation engages with the imported node.
+- Every interpretation-layer node **produced within this system** has a produced-by edge to the Interpretation that created it. Imported nodes (e.g., vendor-emitted Indicators / Sightings ingested via the capability layer's `detection_finding` normalizer — see 03-capability-layer.md §4.12) carry no produced-by edge; their upstream attribution lives in `provenance.tool` and STIX-standard `created_by_ref` to a per-tenant vendor Identity SDO. The agent loop creates a system Interpretation only when an investigation engages with the imported node.
 
 
 ADOPTED VS INVENTED
@@ -373,10 +373,10 @@ Adopted from event-sourcing patterns: reasoning thread as append-only ordered lo
 
 Invented:
 - The x-interpretation primitive (records a reasoning act)
-- The x-action primitive (state-changing operations; lifecycle and authorization in auth.md)
+- The x-action primitive (state-changing operations; lifecycle and authorization in 04-action-authorization.md)
 - Custom STIX SDOs: x-hypothesis, x-prediction
 - Custom STIX SCOs: x-host, x-registry-key, x-scheduled-task, x-group
-  (entity types not covered by STIX 2.1 native; identity rules in capability.md §7.2)
+  (entity types not covered by STIX 2.1 native; identity rules in 03-capability-layer.md §7.2)
 - Custom STIX relationship types: x-supports, x-refutes, reverses
 - The investigation extension structure (Seed, Lifecycle, ReasoningThread, ConclusionSlot) on top of Grouping
 
@@ -390,11 +390,11 @@ These are not domain-model gaps. The model accommodates either choice.
 CLOSED (resolved by other specs):
 - STIX promotion from OCSF is eager. Every tool response is normalized at
   ingest into ObservedData and SCOs, with the raw OcsfEvent retained as
-  ground truth and re-normalizable on demand. See capability.md §4.13.
+  ground truth and re-normalizable on demand. See 03-capability-layer.md §4.13.
 - The reasoning thread is materialized as a projection (investigation_thread)
   rebuilt from the event stream; the canonical ordering lives in the events'
   sequence_no, not in a list field on the Grouping. The Grouping's
-  ReasoningThread extension is the logical view. See persistence.md §4.2.
+  ReasoningThread extension is the logical view. See 02-persistence.md §4.2.
 
 
 END OF SPEC

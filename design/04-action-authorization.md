@@ -101,7 +101,7 @@ I introduce one new custom STIX object, `x-action`, rather than overloading `x-i
 
 So: `x-action` is a sibling primitive, **produced by** an Interpretation (the analyst or AI's reasoning that this action should happen), and its lifecycle transitions each emit further Interpretations.
 
-The canonical `x-action` schema lives in **domain_model.md → CUSTOM STIX OBJECTS** (single source of truth: fields, status enum, evidence_refs as `list<EvidenceRef>`, actor model, etc.). This spec defines only the auth-specific pieces — the `Authorization` sub-record (§3.3), the `Execution` sub-record (§6.1), and the `TargetSpec` shape carried inside `x-action.targets`:
+The canonical `x-action` schema lives in **01-domain-model.md → CUSTOM STIX OBJECTS** (single source of truth: fields, status enum, evidence_refs as `list<EvidenceRef>`, actor model, etc.). This spec defines only the auth-specific pieces — the `Authorization` sub-record (§3.3), the `Execution` sub-record (§6.1), and the `TargetSpec` shape carried inside `x-action.targets`:
 
 ```
 TargetSpec:
@@ -113,7 +113,7 @@ TargetSpec:
 
 Every `x-action` has a `produced-by` edge to an Interpretation of type `action-request` (a value in the canonical `interpretation_type` enum — this *is* a kind of reasoning, even though the action itself is not). This piggybacks on the existing produced-by mechanism in the domain model and keeps the reasoning thread intact.
 
-The `x-action` lifecycle is **event-sourced as part of the investigation aggregate** (persistence.md §1, §2.1, §3). The `status` field above is a projection — the canonical state machine lives in seven action lifecycle events: `ActionRequested`, `ActionApproved`, `ActionRejected`, `ActionExpired`, `ActionDispatched`, `ActionResulted`, `ActionReversed`. Same-aggregate placement means the `x-action` and its producing Interpretation are recorded in one transaction (a shared `correlation_id` ties them); no cross-aggregate consistency story is needed.
+The `x-action` lifecycle is **event-sourced as part of the investigation aggregate** (02-persistence.md §1, §2.1, §3). The `status` field above is a projection — the canonical state machine lives in seven action lifecycle events: `ActionRequested`, `ActionApproved`, `ActionRejected`, `ActionExpired`, `ActionDispatched`, `ActionResulted`, `ActionReversed`. Same-aggregate placement means the `x-action` and its producing Interpretation are recorded in one transaction (a shared `correlation_id` ties them); no cross-aggregate consistency story is needed.
 
 ### 3.2 Lifecycle and emitted Interpretations
 
@@ -140,7 +140,7 @@ SUCCEEDED          -> REVERSED            recorded on the *reversing* x-action v
                                           and emits an "action-reversal" Interpretation.
 ```
 
-The seven `action-*` types — `action-request`, `action-approval`, `action-rejection`, `action-expiry`, `action-dispatch`, `action-result`, `action-reversal` — live in the canonical `interpretation_type` enum (domain_model.md INTERPRETATION → Interpretation types) alongside the reasoning types.
+The seven `action-*` types — `action-request`, `action-approval`, `action-rejection`, `action-expiry`, `action-dispatch`, `action-result`, `action-reversal` — live in the canonical `interpretation_type` enum (01-domain-model.md INTERPRETATION → Interpretation types) alongside the reasoning types.
 
 ### 3.3 Authorization sub-record
 
@@ -150,7 +150,7 @@ Authorization:
   stage                  SOLO | PRIMARY | SECONDARY
                          (SOLO for MANUAL and AUTO_POLICY; PRIMARY then
                          SECONDARY for TWO_PARTY. Mirrors the
-                         persistence.md §3 ActionApproved.authorization.stage
+                         02-persistence.md §3 ActionApproved.authorization.stage
                          payload field; surfaced explicitly here so
                          consumers don't derive it from the presence of
                          secondary_*.)
@@ -167,13 +167,13 @@ Authorization:
 
 For `AUTO_POLICY`, `primary_approver_ref` points at the *human who authored or last signed off on the policy*, not at "the system." This preserves the principle that every action traces to a named human.
 
-**Actor / approver invariant.** When a lifecycle Interpretation is recorded for an action (`action-approval`, `action-rejection`, etc.), the event envelope's `actor.principal` (see persistence.md §7) MUST equal the relevant approver field on the `Authorization` record:
+**Actor / approver invariant.** When a lifecycle Interpretation is recorded for an action (`action-approval`, `action-rejection`, etc.), the event envelope's `actor.principal` (see 02-persistence.md §7) MUST equal the relevant approver field on the `Authorization` record:
 
 - `MANUAL`: `actor.principal == primary_approver_ref` (the analyst who clicked).
 - `AUTO_POLICY`: `actor.principal == primary_approver_ref` (the policy's signed-off-by analyst). The AI agent that originated the request is recorded as `actor.delegate`.
 - `TWO_PARTY`: on the primary approval Interpretation, `actor.principal == primary_approver_ref`; on the secondary approval Interpretation, `actor.principal == secondary_approver_ref`.
 
-This is the load-bearing tie between the authorization model here and the actor model in domain_model.md. There is no path by which an AI agent or "the system" appears as a principal — every recorded action is owned by a named human.
+This is the load-bearing tie between the authorization model here and the actor model in 01-domain-model.md. There is no path by which an AI agent or "the system" appears as a principal — every recorded action is owned by a named human.
 
 ---
 
@@ -224,7 +224,7 @@ ctx.action.target_count          int
 ctx.action.parameters            object
 ctx.action.requested_by.kind     "HUMAN" | "AI_DELEGATED" — matches the
                                  canonical actor.kind enum in
-                                 domain_model.md INTERPRETATION → Actor model
+                                 01-domain-model.md INTERPRETATION → Actor model
 ctx.action.requested_by.id       string (Analyst id; the principal — never
                                  the AI delegate, even when kind is
                                  AI_DELEGATED)
@@ -368,7 +368,7 @@ The AI agent emits an action request by calling a single tool, `request_action`,
 
 The AI does *not* know whether a policy auto-approved; from its perspective the call returns an action id and (if policy auto-approved) a synchronous result, otherwise pending status. This keeps AI prompts simple and means you can change policy without re-prompting the AI.
 
-Importantly, the AI can never construct an `Authorization` record or set `status` directly — those fields are write-protected. **Enforcement lives in the investigation aggregate's command handler** (the single write path for action and interpretation events; see persistence.md §2.1 and §4 for the aggregate boundary): commands whose envelope `actor.kind == AI_DELEGATED` are validated against an allowlist of fields, and `Authorization` and `status` are excluded from that list. The guard sits at the same layer as the optimistic-concurrency check, not in application code, so it cannot be bypassed by alternate code paths.
+Importantly, the AI can never construct an `Authorization` record or set `status` directly — those fields are write-protected. **Enforcement lives in the investigation aggregate's command handler** (the single write path for action and interpretation events; see 02-persistence.md §2.1 and §4 for the aggregate boundary): commands whose envelope `actor.kind == AI_DELEGATED` are validated against an allowlist of fields, and `Authorization` and `status` are excluded from that list. The guard sits at the same layer as the optimistic-concurrency check, not in application code, so it cannot be bypassed by alternate code paths.
 
 ---
 
@@ -381,7 +381,7 @@ Execution:
   dispatched_at          timestamp
   adapter                string (which capability adapter handled the call,
                          e.g., "crowdstrike_falcon", "defender_xdr_mcp",
-                         "fixture:<scenario>"; see capability.md §5.4)
+                         "fixture:<scenario>"; see 03-capability-layer.md §5.4)
   adapter_request_id     string (correlation id from the adapter)
   attempts               list<Attempt>
   final_outcome          SUCCEEDED | FAILED | PARTIAL | TIMEOUT
@@ -461,7 +461,7 @@ Asset criticality (`prod-critical`, `domain-controller`, `pii-bearing`, etc.) is
 
 - We assume an `asset_criticality` field exists on `TargetSpec`, populated by an asset-classification service.
 - Policy can reference it.
-- For v0 prototype, asset criticality comes from a static fixture file alongside the OCSF fixture scenarios (see capability.md §9). The real integration is a downstream thread.
+- For v0 prototype, asset criticality comes from a static fixture file alongside the OCSF fixture scenarios (see 03-capability-layer.md §9). The real integration is a downstream thread.
 
 I'd flag this as an explicit dependency for the fan-in: there's a "Asset Classification & Criticality" thread that needs to exist, even if not v0.
 
@@ -500,7 +500,7 @@ Putting it together, an action produces this graph:
 Properties this graph has:
 
 - Every state transition is an Interpretation → preserves the domain model's "every reasoning act is in the thread" invariant.
-- The action's evidence is reachable in two ways: directly via `x-action.evidence_refs`, and indirectly via the producing Interpretation's `input_refs`. The two are the same set, written in the same aggregate transaction (persistence.md §3): the `ActionRequested` event payload carries `evidence_refs` and shares a `correlation_id` with the producing `InterpretationRecorded` event. There is no cross-aggregate constraint to enforce.
+- The action's evidence is reachable in two ways: directly via `x-action.evidence_refs`, and indirectly via the producing Interpretation's `input_refs`. The two are the same set, written in the same aggregate transaction (02-persistence.md §3): the `ActionRequested` event payload carries `evidence_refs` and shares a `correlation_id` with the producing `InterpretationRecorded` event. There is no cross-aggregate constraint to enforce.
 - `member-of` edges from the `x-action` and all its associated Interpretations to the Grouping put the entire action history inside the investigation.
 - Querying "what actions were taken in this investigation" is a single edge traversal: `Grouping --member-of-- x-action`.
 - Querying "what evidence justified this action" walks `x-action.evidence_refs` directly; querying "what reasoning led to this action" walks `produced-by` to the Interpretation and then `input_refs` from there.
@@ -517,7 +517,7 @@ Properties this graph has:
 
 **Explicitly out, must not be assumed in this spec:**
 
-- The mechanics of how the capability layer's adapters execute the action (capability.md)
+- The mechanics of how the capability layer's adapters execute the action (03-capability-layer.md)
 - Persistence and consistency (how the lifecycle transitions are stored atomically — persistence thread)
 - UI rendering specifics (the panel design above is conceptual)
 - Asset classification population
@@ -528,7 +528,7 @@ Properties this graph has:
 - The `x-action` custom STIX object is a new domain primitive, sibling to `x-hypothesis` and `x-prediction`. It needs to land in the domain model section listing custom STIX objects.
 - A new edge type, `reverses`, between two `x-action`s — though this is also expressible via the `reversal_of_ref` field, the edge form is useful for graph queries.
 - An assumed dependency on an "Asset Classification" thread for `asset_criticality`.
-- An assumed dependency on the capability layer for the actual tool dispatch and the contract for `adapter_request_id` correlation. The capability spec covers the read side; the write-side / action-dispatch contract is explicitly deferred to a follow-on thread (capability.md §10). Until that thread lands, action dispatch in v0 prototype runs against fixture stubs only.
+- An assumed dependency on the capability layer for the actual tool dispatch and the contract for `adapter_request_id` correlation. The capability spec covers the read side; the write-side / action-dispatch contract is explicitly deferred to a follow-on thread (03-capability-layer.md §10). Until that thread lands, action dispatch in v0 prototype runs against fixture stubs only.
 
 ---
 
