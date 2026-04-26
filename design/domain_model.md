@@ -127,7 +127,12 @@ Records a single reasoning act.
   id                      x-interpretation--<uuid>
   actor                   ActorRef (canonical shape; see "Actor model" below)
   timestamp               timestamp
-  interpretation_type     extraction | sighting | hypothesis | prediction | refutation | conclusion | lifecycle
+  interpretation_type     extraction | sighting | hypothesis | support | refutation |
+                          inconclusive | prediction | conclusion | pivot | lifecycle |
+                          action-request | action-approval | action-rejection |
+                          action-expiry | action-dispatch | action-result |
+                          action-reversal | other
+                          (canonical enum — see "Interpretation types" below)
   input_refs              list of node ids (STIX or OcsfEvent) reasoned over
   output_refs             list of STIX node ids produced
   rationale               string (why this mapping was made)
@@ -145,14 +150,32 @@ external system. The principal is who is *responsible* for the act; the
 delegate is who/what *performed* it. Authorization derives from principal
 permissions; the delegate may be restricted further but never broader.
 
-Interpretation types:
-  extraction      entity lifted from OcsfEvent
-  sighting        Sighting created from ObservedData
-  hypothesis      x-hypothesis proposed
-  prediction      x-prediction proposed
-  refutation      hypothesis status changed to REFUTED
-  conclusion      finding promoted, investigation concluded
-  lifecycle       investigation state transition
+Interpretation types (canonical enum, referenced by all components):
+  extraction        entity lifted from OcsfEvent
+  sighting          Sighting created from ObservedData
+  hypothesis        x-hypothesis proposed (creation; includes AI-PROPOSED → OPEN
+                    acknowledgment and non-status field updates)
+  support           x-hypothesis status changed to SUPPORTED
+  refutation        x-hypothesis status changed to REFUTED
+  inconclusive      x-hypothesis status changed to INCONCLUSIVE or ABANDONED
+                    (rationale carries the distinction)
+  prediction        x-prediction proposed
+  conclusion        investigation concluded; final Report referenced from ConclusionSlot
+  pivot             reasoning departed from one entity to pursue a related lead.
+                    Underlying telemetry queries are T0; this captures the analytical
+                    move so the thread shows the pivot intent, not just the data.
+  lifecycle         investigation state transition (DRAFT/ACTIVE/PAUSED/CONCLUDED/ARCHIVED)
+  action-request    x-action proposed (see auth.md §3.2 for full action lifecycle)
+  action-approval   x-action approved (manual, auto-policy, or two-party primary)
+  action-rejection  x-action denied
+  action-expiry     x-action timed out unapproved (system-emitted)
+  action-dispatch   x-action sent to its capability adapter (system-emitted)
+  action-result     x-action terminal outcome — SUCCEEDED, FAILED, PARTIAL, TIMEOUT
+                    (system-emitted)
+  action-reversal   previously-SUCCEEDED x-action was reversed by a new x-action
+  other             escape hatch — reasoning that doesn't fit any typed value above.
+                    rationale MUST be populated. Periodic review of "other"
+                    Interpretations drives new typed values when patterns emerge.
 
 
 CUSTOM STIX OBJECTS

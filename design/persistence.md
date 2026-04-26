@@ -196,9 +196,9 @@ The reasoning persistence problem decomposes into three layers. The split is the
 
 The Interpretation event payload contains:
 - `interpretation_id`
-- `interpretation_type` — hypothesis | prediction | finding | lifecycle | pivot | dismissal | other
-- `from_refs` — STIX or OCSF ids the reasoning departed from
-- `to_refs` — STIX ids the reasoning produced
+- `interpretation_type` — string drawn from the canonical enum (see domain_model.md INTERPRETATION → Interpretation types; 18 values at v0)
+- `input_refs` — STIX or OCSF ids the reasoning departed from (matches `INTERPRETATION.input_refs` in the domain model)
+- `output_refs` — STIX ids the reasoning produced (matches `INTERPRETATION.output_refs` in the domain model)
 - `rationale` — bounded natural-language string (proposed cap ~500 chars). The "why," terse by design.
 - `confidence` — HIGH | MEDIUM | LOW (optional)
 - `tool_call_refs` — list of `{call_id, content_hash}` references into the tool-call store

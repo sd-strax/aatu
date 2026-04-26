@@ -147,9 +147,7 @@ SUCCEEDED  -> REVERSED              recorded on the *reversing* x-action via rev
                                     and emits an "action-reversal" Interpretation.
 ```
 
-This adds these values to the domain model's `interpretation_type` enum: `action-request`, `action-approval`, `action-rejection`, `action-expiry`, `action-dispatch`, `action-result`, `action-reversal`.
-
-I'd flag back to the Topic 1 fan-in that this enum extension is the one place this thread reaches into the domain model. It's additive and doesn't disturb existing semantics, but the assembly should accept it explicitly rather than absorbing it silently.
+The seven `action-*` types — `action-request`, `action-approval`, `action-rejection`, `action-expiry`, `action-dispatch`, `action-result`, `action-reversal` — live in the canonical `interpretation_type` enum (domain_model.md INTERPRETATION → Interpretation types) alongside the reasoning types.
 
 ### 3.3 Authorization sub-record
 
