@@ -1017,20 +1017,54 @@ investigation).
 
 ### 7.1 Rule
 
-Identity follows STIX 2.1 deterministic UUIDv5 rules. The format is
-`<type>--<uuidv5>`. The UUIDv5 is computed over a canonical-form JSON of the
-SCO's identity-contributing fields, using the STIX 2.1 namespace UUID
-`00abedb4-aa42-466c-9c01-fed23315a9b7` for standard SCOs. For custom objects
-(`x-host`), a project-specific namespace UUID is used:
-`c4d8e9f1-1234-5678-9abc-def012345678` (this is fixed for the lifetime of the
-system; changing it would re-id every host).
+Identity follows STIX 2.1 deterministic UUIDv5 rules with one structural
+deviation: identity is **tenant-scoped**. The format is `<type>--<uuidv5>`.
+The UUIDv5 is computed over a canonical-form JSON of the SCO's
+identity-contributing fields, using a **per-tenant namespace UUID** — not
+the global STIX 2.1 namespace `00abedb4-aa42-466c-9c01-fed23315a9b7` and
+not a project-wide custom-object namespace.
+
+Each tenant is assigned a fresh namespace UUIDv4 at tenant creation, stored
+in the tenant CRUD record (persistence.md §1), and immutable thereafter.
+Both standard SCOs (`ipv4-addr`, `domain-name`, `file`, etc.) and custom
+SCOs (`x-host`, `x-registry-key`, `x-scheduled-task`, `x-group`) use the
+same per-tenant namespace; there is no separate custom-object namespace.
+
+This makes same-value-different-tenant collision impossible: `8.8.8.8` in
+tenant A and `8.8.8.8` in tenant B produce different `ipv4-addr--<uuid>`
+values. The `IdentityResolver` (§7.4) takes a tenant id as input, looks up
+the namespace UUID, and computes the id; it cannot compute a cross-tenant
+or "global" id. Cross-tenant indicator sharing, when introduced, will be a
+deliberate publish-to-pool action with its own (separate) namespace UUID;
+deferred from v0.
+
+**ObservedData id rule.** ObservedData ids are deterministic UUIDv5 within
+the tenant namespace, computed from
+`(class_uid, time_truncated_to_second, source_tool, content_hash(payload))`.
+Two adapters observing the same OCSF event in the same tenant produce the
+same ObservedData id, supporting cross-investigation deduplication within
+that tenant. Re-normalization with a newer normalizer version produces a
+*new* ObservedData with a different id (the version is part of the
+provenance; the new id reflects the new interpretation). Random UUIDv4
+ObservedData is also permitted for cases where deterministic identity is
+undesirable (e.g., one-off opaque enrichment results); the resolver records
+which mode was used in provenance.
+
+The deviation from strict STIX 2.1 is documented as a deliberate trade —
+STIX is the *vocabulary* for the interpretation layer (domain_model.md
+ARCHITECTURAL COMMITMENTS), not the *wire format*. STIX-conformant ids
+remain available if the system ever needs to publish to a STIX-conformant
+external consumer; that conversion happens at the export boundary, not in
+the storage layer.
 
 ### 7.2 Per-type identity-contributing fields
 
 These follow STIX 2.1 spec for native SCOs and are documented here for the
 custom and composite cases. Three of them — `process`, `email-addr`, and
 `user-account` — involve deliberate deviations from strict spec, called out
-explicitly below.
+explicitly below. All identity tuples below describe what enters the
+canonical-form JSON; the JSON is then hashed against the per-tenant
+namespace UUID per §7.1.
 
 **Standard cases (no deviation):**
 
@@ -1130,9 +1164,14 @@ implicit identity merge.
 
 ### 7.3 Cross-tool stitching: practical implications
 
-Two CrowdStrike hosts with the same hostname but different `device_id`s will
-stitch into one `x-host` if the CMDB asset id isn't available — which may be
-wrong. This is a known limitation. The mitigation is the `aliases` edge from
+All cross-tool stitching is scoped to a single tenant by construction (§7.1):
+the same `8.8.8.8` from tenant A's CrowdStrike and tenant A's Splunk produce
+the same `ipv4-addr` SCO; the same `8.8.8.8` from tenant B's CrowdStrike
+produces a *different* SCO. Stitching cannot leak across tenants.
+
+Within a tenant, two CrowdStrike hosts with the same hostname but different
+`device_id`s will stitch into one `x-host` if the CMDB asset id isn't
+available — which may be wrong. This is a known limitation. The mitigation is the `aliases` edge from
 the domain model: when the resolver detects a likely false stitch (e.g., two
 `x-host` SCOs that resolve to the same id but have different `device_id`s in
 their backing OcsfEvents), it emits a `Note` flagging the conflict for analyst
@@ -1152,9 +1191,12 @@ later analyst judgment.
 Identity is computed inside the normalizer, in a dedicated `IdentityResolver`
 component. Adapters never compute STIX ids. This is a hard rule: it ensures
 that two adapters can produce conflicting raw fields and the normalizer is the
-single arbiter of how those become identity. The `IdentityResolver` is pure,
-deterministic, and stateless; it can be unit-tested exhaustively against
-fixtures.
+single arbiter of how those become identity. The `IdentityResolver` takes a
+tenant id as input, looks up the tenant's namespace UUID (cached), and
+computes the deterministic id; it cannot produce a global / cross-tenant id.
+The resolver is pure (given the same tenant + inputs, always produces the
+same id), deterministic, and stateless; it can be unit-tested exhaustively
+against fixtures.
 
 ---
 

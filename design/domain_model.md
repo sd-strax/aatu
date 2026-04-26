@@ -34,9 +34,11 @@ Two-layer graph. Telemetry layer holds raw OCSF events as emitted by tools, stor
 
 STIX 2.1 is the vocabulary for the interpretation layer. OCSF is the vocabulary for telemetry payloads.
 
-Identity follows STIX deterministic UUIDv5 rules. The same entity (e.g., 8.8.8.8) produces the same ID across producers and investigations. Cross-investigation entity identity is preserved by default. Aliasing between entities is an explicit edge, never a destructive merge.
+Identity follows STIX deterministic UUIDv5 rules, computed within a per-tenant namespace UUID (see below). The same entity (e.g., 8.8.8.8) produces the same ID across producers and investigations within a tenant. Cross-investigation entity identity is preserved by default within a tenant. Aliasing between entities is an explicit edge, never a destructive merge.
 
 Three deliberate deviations from strict STIX 2.1 apply to `process`, `email-addr`, and `user-account` identity computation — required for cross-tool stitching to work in real enterprise environments where every authentication system, mail platform, and EDR is case-insensitive in practice. See capability.md §7.2 for the per-type rules and rationale.
+
+The system is multi-tenant. A tenant is a complete partition of the data: its own STIX object store, its own event stream, its own user / RBAC scope, its own adapter configuration, its own investigations, and its own namespace UUID for identity computation. Same value (e.g., `8.8.8.8`) in two different tenants produces two different STIX ids — cross-tenant identity collision is impossible by construction, not just by access control. STIX patterns (used by Indicator SDOs) operate on field values rather than ids, so explicit cross-tenant indicator sharing remains possible if and when a federated indicator pool is introduced (deferred; not v0). The tenant namespace UUID is assigned at tenant creation (a fresh UUIDv4) and immutable thereafter; changing it would re-id every node in the tenant. STIX is the *vocabulary* for the interpretation layer here, not the *wire format* — the per-tenant-namespace deviation is a deliberate trade in service of multi-tenant isolation, and STIX-conformant ids can be reconstructed at export boundaries if external federation is ever needed.
 
 An investigation is a STIX Grouping plus four extensions: Seed, Lifecycle, ReasoningThread, ConclusionSlot.
 
@@ -277,8 +279,10 @@ PROVENANCE (uniform on ObservedData, Sighting, Interpretation, Relationship)
 INVARIANTS
 ----------
 - OcsfEvent is immutable after write.
-- Entity identity is deterministic and stable across investigations.
-- Aliasing is non-destructive.
+- Every node and event belongs to exactly one tenant.
+- Identity computation uses the owning tenant's namespace UUID; the namespace is immutable for the lifetime of the tenant.
+- Entity identity is deterministic and stable across investigations within a tenant; cross-tenant identity is independent by construction.
+- Aliasing is non-destructive and is always within a tenant; cross-tenant aliasing is not expressible.
 - Investigation seed is immutable after creation.
 - Investigation cannot be CONCLUDED without conclusion_ref populated.
 - Every status change on x-hypothesis produces a corresponding Interpretation in the reasoning thread.
@@ -310,7 +314,7 @@ OPEN QUESTIONS DELIBERATELY LEFT TO IMPLEMENTATION
 --------------------------------------------------
 These are not domain-model gaps. The model accommodates either choice.
 - Whether labels on x-hypothesis bind to a controlled vocabulary (e.g., MITRE ATT&CK technique IDs) or remain freeform
-- Partitioning strategy for cross-investigation entity references at scale
+- Sharding / partitioning strategy for per-tenant data at scale (constrained by the tenant model: per-tenant scope by construction; the remaining question is operational tuning within a tenant, not global federation)
 
 CLOSED (resolved by other specs):
 - STIX promotion from OCSF is eager. Every tool response is normalized at

@@ -36,6 +36,8 @@ This spec defines how investigation state is persisted. It assumes the investiga
 
 ## 2. Persistence model
 
+**All persistence is per-tenant.** Every layer below — the investigation aggregate event stream, STIX object store, OCSF telemetry, AI tool-call and transcript side stores — is logically partitioned by tenant. v0 ships as a single Postgres instance with `tenant_id` on every row; physical sharding (separate databases per tenant, or table partitioning) is an operational concern deferred until tenant volume warrants it. Identity computation uses a per-tenant namespace UUID assigned at tenant creation (see domain_model.md ARCHITECTURAL COMMITMENTS and capability.md §7.1), so cross-tenant id collision is impossible by construction — the partitioning is correct-by-default rather than enforced solely by row-level filters.
+
 ### 2.1 Investigation aggregate (event-sourced)
 
 The Investigation aggregate is the unit of event sourcing. Boundary: one Grouping plus its four extensions (Seed, Lifecycle, ReasoningThread, ConclusionSlot), its membership, its Interpretations, and its x-actions (the REQUESTED → APPROVED → EXECUTING → terminal lifecycle for any state-changing action taken from this investigation; see auth.md §3 for the action model and §3.2 for the lifecycle).
