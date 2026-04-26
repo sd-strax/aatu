@@ -183,15 +183,23 @@ A policy is a versioned object:
 
 ```
 policy:
-  id                     policy/<slug>/<semver>
-  action_match           list of action_type globs (e.g., "host.isolate")
-  predicate              CEL expression returning bool
-  effect                 AUTO_APPROVE | REQUIRE_TWO_PARTY | DENY
-  authored_by            Analyst id
-  signed_off_by          list of Analyst ids (config-change governance)
-  effective_from         timestamp
-  effective_until        optional timestamp
-  content_hash           sha256 of canonical form
+  id                       policy/<slug>/<semver>
+  action_match             list of action_type globs (e.g., "host.isolate")
+  predicate                CEL expression returning bool
+  effect                   AUTO_APPROVE | REQUIRE_TWO_PARTY | DENY
+  shadow                   bool, default false (see §4.4 — when true, the
+                           policy is evaluated and its decision recorded as
+                           would_have_fired in PolicyEvaluated events, but
+                           authorization falls through to the manual flow)
+  secondary_approver_pool  optional list of Analyst ids (only meaningful when
+                           effect == REQUIRE_TWO_PARTY; defines who can act as
+                           the secondary approver. Defaults to the on-call
+                           rotation when unspecified.)
+  authored_by              Analyst id
+  signed_off_by            list of Analyst ids (config-change governance)
+  effective_from           timestamp
+  effective_until          optional timestamp
+  content_hash             sha256 of canonical form
 ```
 
 Policies are stored in a versioned repo (git is fine for v0; the path doesn't matter for this thread) and loaded into the backend at startup and on signal. Any change requires a signed config commit. The Java backend evaluates policies in priority order: any matching `DENY` wins; else any matching `REQUIRE_TWO_PARTY`; else any matching `AUTO_APPROVE`; else fall through to the default tier flow.

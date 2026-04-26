@@ -28,7 +28,7 @@ This spec defines how investigation state is persisted. It assumes the investiga
 |---|---|---|
 | Investigation aggregate | Event-sourced | Replay, defensibility, AI reasoning audit, multi-analyst handoff, detection authoring all bite here and only here |
 | x-action lifecycle | Event-sourced (inside the investigation aggregate) | Has a real state machine (REQUESTED → APPROVED → EXECUTING → terminal); same-aggregate placement makes the action ↔ producing-Interpretation write atomic and removes any cross-aggregate consistency story |
-| STIX object layer (entities, ObservedData, Sightings, Indicators, Reports, Notes, Opinions, Relationships) | CRUD + thin change-history table | No state-machine invariants; mostly accretive; ES gives no leverage |
+| STIX object layer (entities, ObservedData, Sightings, Indicators, Reports, Notes, Opinions, Relationships, x-hypothesis, x-prediction, vendor Identity SDOs) | CRUD + thin change-history table | No state-machine invariants; mostly accretive; ES gives no leverage. x-hypothesis status transitions are recorded as Interpretations in the investigation aggregate, not as separate events here. |
 | OCSF telemetry | Append-only insert | Already immutable by construction; not an aggregate |
 | AI tool calls | Append-only side store, content-hashed | Inherently event-shaped; not an aggregate; needs integrity guarantees |
 | AI prompt/response transcripts | Append-only side store, content-hashed, retention-bounded | Bytes are cheap when stored where they belong; referenced not embedded |
@@ -133,6 +133,7 @@ Action lifecycle (see auth.md §3 for the action model and §3.2 for the state m
 - `ActionDispatched` — payload: action_id, adapter, adapter_request_id, dispatched_at, dispatch_interpretation_id. System-emitted when the dispatcher picks up an APPROVED action.
 - `ActionResulted` — payload: action_id, final_outcome (SUCCEEDED | FAILED | PARTIAL | TIMEOUT), per_target_results, attempts, raw_response_ref?, result_interpretation_id. System-emitted; `per_target_results` is what makes PARTIAL outcomes auditable.
 - `ActionReversed` — payload: original_action_id, reversing_action_id, reversal_interpretation_id. The reversing action is itself a new x-action (with its own `ActionRequested` etc.); this event records that the original's status moves to REVERSED on the reversing action's success.
+- `PolicyEvaluated` — payload: action_id, evaluations (list of `{policy_ref, policy_version (content_hash), would_have_fired: bool, effect (AUTO_APPROVE | REQUIRE_TWO_PARTY | DENY), shadow: bool}`), matched_policy_ref (the policy whose effect actually drove authorization, or null if all matching policies were shadow and the action fell through to the manual flow). Recorded once per action-request, in the same aggregate transaction as `ActionRequested`. Captures both firing and shadow-mode policies — the shadow audit (auth.md §4.4) reads `would_have_fired = true AND shadow = true` from this event stream.
 
 Total: ~18 event types at v0. Named after analyst verbs. No derived-fact events. No fork events (deferred to v1+ — taxonomy stays clean enough that forking can be added without schema migration).
 

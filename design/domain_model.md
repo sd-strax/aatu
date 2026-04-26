@@ -285,6 +285,12 @@ x-action (state-changing operation against the world). Canonical schema:
   reversed_by_ref     optional x-action id (set when this is reversed)
   expires_at          timestamp (REQUESTED state expires if not approved by
                       this time; system emits ActionExpired event)
+  assignee_ref        optional Analyst id (set when an analyst opens the
+                      review panel and claims the action; first analyst to
+                      approve/reject wins — see auth.md §5.4)
+  pending_approvers   optional set<Analyst id> (analysts notified and
+                      eligible to approve; for TWO_PARTY, the secondary
+                      pool minus the primary approver)
   authorization       Authorization sub-record (see auth.md §3.3)
   execution           Execution sub-record (see auth.md §6.1)
   created, modified, created_by_ref (STIX standard)
