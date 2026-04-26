@@ -84,7 +84,7 @@ Sighting (STIX SRO):
   first_seen, last_seen, count
   confidence            HIGH | MEDIUM | LOW
   description           string (rationale)
-  created_by_ref        ActorRef (canonical shape; see INTERPRETATION → Actor model)
+  created, modified, created_by_ref (STIX standard)
 
 Indicator, Report, Note, Opinion: adopted unchanged from STIX 2.1.
 
@@ -163,8 +163,10 @@ Records a single reasoning act.
   confidence              optional HIGH | MEDIUM | LOW
 
 Actor model (canonical across the system):
-  actor.principal         Analyst { id, display_name } — always a human
-  actor.delegate          optional AiAgent { agent_id, model_version }
+  actor.principal         { user_id, display_name } — always a human
+  actor.delegate          optional { agent_id, agent_kind, model } — the AI agent
+                          if any. agent_kind distinguishes our own agents from
+                          vendor agents and other delegates.
   actor.kind              derived: HUMAN if delegate is null, else AI_DELEGATED
 
 AI is always a delegate, never a standalone principal. Every Interpretation
@@ -173,6 +175,15 @@ even when the reasoning was performed by an AI agent or imported from an
 external system. The principal is who is *responsible* for the act; the
 delegate is who/what *performed* it. Authorization derives from principal
 permissions; the delegate may be restricted further but never broader.
+
+Scope. The canonical ActorRef shape applies only to **invented primitives**
+(x-interpretation, x-action) and to the **persistence event envelope** (see
+persistence.md §7). STIX SDOs / SROs / SCOs (ObservedData, Sighting,
+Indicator, Report, Note, Opinion, Relationship, x-hypothesis, x-prediction,
+all SCOs) use the STIX-standard `created_by_ref` → Identity ref convention
+as defined by STIX 2.1. The responsibility chain for any STIX-shaped node
+runs through the Interpretation that produced it, not through that node's
+own `created_by_ref`.
 
 Interpretation types (canonical enum, referenced by all components):
   extraction        entity lifted from OcsfEvent
