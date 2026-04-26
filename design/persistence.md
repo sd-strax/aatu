@@ -122,7 +122,7 @@ Reasoning thread:
 - `InterpretationSuperseded` — payload: superseded_id, superseding_id, reason. No deletion; the thread shows both.
 
 Evidence linkage:
-- `EvidenceAttached` — payload: evidence_ref (`EvidenceRef` per domain_model.md INTERPRETATION → Reference types — `StixId | OcsfEventId`), interpretation_ref, role ("supports" | "refutes" | "context"), weight (STRONG | MODERATE | WEAK; required when role is "supports" or "refutes"; null when role is "context"). Role and weight match the `x-supports` / `x-refutes` edge vocabulary in domain_model.md EDGE TYPES.
+- `EvidenceAttached` — payload: evidence_ref (`EvidenceRef` per domain_model.md INTERPRETATION → Reference types — `StixId | OcsfEventId`), interpretation_ref, role ("supports" | "refutes"), weight (STRONG | MODERATE | WEAK). Role and weight map directly to the `x-supports` / `x-refutes` edge vocabulary in domain_model.md EDGE TYPES. Non-evidentiary references — context, related-but-not-supporting, etc. — belong in the producing Interpretation's `input_refs`, not in this event.
 - `EvidenceDetached` — payload: evidence_ref, reason
 
 Action lifecycle (see auth.md §3 for the action model and §3.2 for the state machine):
@@ -239,7 +239,7 @@ The Interpretation event payload contains:
 - `tool_call_refs` — list of `{call_id, content_hash}` references into the tool-call store
 - `transcript_ref` — `{transcript_id, turn_id, content_hash}` if AI-authored; null if human-authored
 
-This is small per-Interpretation, structured, and high-value. Defensibility queries against `from_refs` / `to_refs` / structured tool-call references are fast and don't require parsing prose.
+This is small per-Interpretation, structured, and high-value. Defensibility queries against `input_refs` / `output_refs` / structured tool-call references are fast and don't require parsing prose.
 
 ### Layer B — Persisted in side stores, referenced from the event
 

@@ -147,10 +147,18 @@ The seven `action-*` types — `action-request`, `action-approval`, `action-reje
 ```
 Authorization:
   mode                   MANUAL | AUTO_POLICY | TWO_PARTY
+  stage                  SOLO | PRIMARY | SECONDARY
+                         (SOLO for MANUAL and AUTO_POLICY; PRIMARY then
+                         SECONDARY for TWO_PARTY. Mirrors the
+                         persistence.md §3 ActionApproved.authorization.stage
+                         payload field; surfaced explicitly here so
+                         consumers don't derive it from the presence of
+                         secondary_*.)
   primary_approver_ref   Analyst id (the one who clicked confirm or whose
                          policy fired); null for REJECTED actions
   primary_approved_at    timestamp
-  secondary_approver_ref optional Analyst id (for TWO_PARTY)
+  secondary_approver_ref optional Analyst id (for TWO_PARTY, set when
+                         stage advances to SECONDARY)
   secondary_approved_at  optional timestamp
   policy_ref             optional string (policy id that auto-approved)
   policy_version         optional string (content hash of policy at time of fire)
@@ -208,12 +216,21 @@ Policies are stored in a versioned repo (git is fine for v0; the path doesn't ma
 
 ```
 ctx.action.type                  string
+ctx.action.tier                  "T2" | "T3" — final tier after the §1 escalator
+                                 has been applied (so a T2 action targeting
+                                 >threshold entities arrives here as "T3")
 ctx.action.targets               list<TargetSpec>
 ctx.action.target_count          int
 ctx.action.parameters            object
-ctx.action.requested_by.kind     "analyst" | "ai"
-ctx.action.requested_by.id       string
-ctx.action.requested_by.model    optional string (for ai)
+ctx.action.requested_by.kind     "HUMAN" | "AI_DELEGATED" — matches the
+                                 canonical actor.kind enum in
+                                 domain_model.md INTERPRETATION → Actor model
+ctx.action.requested_by.id       string (Analyst id; the principal — never
+                                 the AI delegate, even when kind is
+                                 AI_DELEGATED)
+ctx.action.delegate.agent_id     optional string (the AI delegate's agent id
+                                 when kind is AI_DELEGATED)
+ctx.action.delegate.model        optional string (the AI delegate's model)
 
 ctx.investigation.id             string
 ctx.investigation.context        "investigation" | "hunt"
@@ -259,17 +276,18 @@ predicate: |
   !ctx.targets.any_in("domain-controller")
 ```
 
-**Example 2: AI agent can never auto-approve a T3, ever.**
+**Example 2: AI-delegated requests can never auto-approve a T3, ever.**
 
 ```yaml
 id: policy/ai-no-tier3/1.0.0
 action_match: ["*"]
 effect: DENY
 predicate: |
-  ctx.action.requested_by.kind == "ai" &&
-  ctx.action.tier == "T3" &&
-  ctx.action.authorization_mode == "AUTO_POLICY"
+  ctx.action.requested_by.kind == "AI_DELEGATED" &&
+  ctx.action.tier == "T3"
 ```
+
+(`authorization_mode` is a *decision output* of policy evaluation, not a predicate input — so it doesn't appear in the predicate. The DENY here means: an AI-delegated T3 request is never auto-approved by *any* policy. The action falls through to the manual flow, where a human must explicitly approve.)
 
 This is a baseline policy that ships with the system and cannot be deleted, only superseded by a higher-priority policy with explicit override governance. Worth being heavy-handed about: "AI cannot push to prod even if a policy says so" is the kind of invariant you want enforced at multiple layers.
 
@@ -283,16 +301,17 @@ predicate: |
   ctx.targets.any_in("domain-controller")
 ```
 
-**Example 4: forbid auto-approval if any evidence is from an AI-inferred Sighting.**
+**Example 4: forbid auto-approval if any evidence is INFERRED.**
 
 ```yaml
 id: policy/no-auto-on-inferred-evidence/1.0.0
 action_match: ["host.isolate", "email.purge", "user.disable"]
 effect: DENY
 predicate: |
-  ctx.action.authorization_mode == "AUTO_POLICY" &&
   !ctx.evidence.all_direct
 ```
+
+(Same `authorization_mode` note as Example 2: it's a decision output, not a predicate input. A DENY policy fires regardless of mode and prevents any AUTO_APPROVE policy from matching, so the practical effect is "no auto-approval when evidence isn't all direct" — the manual flow always applies.)
 
 This encodes a defensible default: AI's evidence chains stay in advisory mode unless a human is in the loop.
 
