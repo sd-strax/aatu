@@ -168,6 +168,14 @@ Authorization:
 
 For `AUTO_POLICY`, `primary_approver_ref` points at the *human who authored or last signed off on the policy*, not at "the system." This preserves the principle that every action traces to a named human.
 
+**Actor / approver invariant.** When a lifecycle Interpretation is recorded for an action (`action-approval`, `action-rejection`, etc.), the event envelope's `actor.principal` (see persistence.md §7) MUST equal the relevant approver field on the `Authorization` record:
+
+- `MANUAL`: `actor.principal == primary_approver_ref` (the analyst who clicked).
+- `AUTO_POLICY`: `actor.principal == primary_approver_ref` (the policy's signed-off-by analyst). The AI agent that originated the request is recorded as `actor.delegate`.
+- `TWO_PARTY`: on the primary approval Interpretation, `actor.principal == primary_approver_ref`; on the secondary approval Interpretation, `actor.principal == secondary_approver_ref`.
+
+This is the load-bearing tie between the authorization model here and the actor model in domain_model.md. There is no path by which an AI agent or "the system" appears as a principal — every recorded action is owned by a named human.
+
 ---
 
 ## 4. Auto-approval policy model
@@ -340,7 +348,9 @@ For T3 two-party: the primary's identity is captured at primary-approve time and
 
 The AI agent emits an action request by calling a single tool, `request_action`, with: `action_type`, `targets`, `parameters`, `evidence_refs`, `rationale`, and `investigation_ref`. The Java backend constructs the `x-action` (in `REQUESTED`), creates the producing `x-interpretation` of type `action-request`, runs policy evaluation, and either advances state (`AUTO_APPROVE`) or surfaces in the analyst's review queue.
 
-The AI does *not* know whether a policy auto-approved; from its perspective the call returns an action id and (if policy auto-approved) a synchronous result, otherwise pending status. This keeps AI prompts simple and means you can change policy without re-prompting the AI. Importantly, the AI can never construct an `Authorization` record or set `status` directly — those fields are write-protected from any AI-origin call.
+The AI does *not* know whether a policy auto-approved; from its perspective the call returns an action id and (if policy auto-approved) a synchronous result, otherwise pending status. This keeps AI prompts simple and means you can change policy without re-prompting the AI.
+
+Importantly, the AI can never construct an `Authorization` record or set `status` directly — those fields are write-protected. **Enforcement lives in the investigation aggregate's command handler** (the single write path for action and interpretation events; see persistence.md §2.1 and §4 for the aggregate boundary): commands whose envelope `actor.kind == AI_DELEGATED` are validated against an allowlist of fields, and `Authorization` and `status` are excluded from that list. The guard sits at the same layer as the optimistic-concurrency check, not in application code, so it cannot be bypassed by alternate code paths.
 
 ---
 

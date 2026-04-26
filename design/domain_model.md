@@ -124,13 +124,25 @@ INTERPRETATION (the only invented primitive)
 Records a single reasoning act.
 
   id                      x-interpretation--<uuid>
-  actor                   Analyst { id, display_name } or AiAgent { agent_id, model_version }
+  actor                   ActorRef (canonical shape; see "Actor model" below)
   timestamp               timestamp
   interpretation_type     extraction | sighting | hypothesis | prediction | refutation | conclusion | lifecycle
   input_refs              list of node ids (STIX or OcsfEvent) reasoned over
   output_refs             list of STIX node ids produced
   rationale               string (why this mapping was made)
   confidence              optional HIGH | MEDIUM | LOW
+
+Actor model (canonical across the system):
+  actor.principal         Analyst { id, display_name } — always a human
+  actor.delegate          optional AiAgent { agent_id, model_version }
+  actor.kind              derived: HUMAN if delegate is null, else AI_DELEGATED
+
+AI is always a delegate, never a standalone principal. Every Interpretation
+(and every persisted event — see persistence.md §7) records a human principal,
+even when the reasoning was performed by an AI agent or imported from an
+external system. The principal is who is *responsible* for the act; the
+delegate is who/what *performed* it. Authorization derives from principal
+permissions; the delegate may be restricted further but never broader.
 
 Interpretation types:
   extraction      entity lifted from OcsfEvent

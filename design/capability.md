@@ -743,12 +743,17 @@ Output:
 
 Because the detection_finding normalizer produces interpretation-layer
 artifacts (Indicator, Sighting), it emits a synthetic `x-interpretation`
-record of type `extraction` on behalf of the vendor, with `actor` set to
-an `AiAgent { agent_id: vendor_name, model_version: detection_rule_id }` if
-available. This keeps the domain model invariant that interpretation-layer
-nodes have a corresponding Interpretation, even when the reasoning was done
-upstream of our system. The agent loop is responsible for deciding how much
-weight to give vendor-emitted interpretations relative to its own.
+record of type `extraction` on behalf of the vendor. The synthetic
+Interpretation conforms to the canonical actor shape
+(domain_model.md INTERPRETATION → Actor model): `actor.principal` is set to
+a configured **ingestion-service-owner** Analyst (per-tenant config — the
+human who authorized this vendor as a telemetry source for the tenant), and
+`actor.delegate` is set to `AiAgent { agent_id: vendor_name, model_version:
+detection_rule_id }` when available. This keeps the domain model invariant
+that every interpretation-layer node has a corresponding Interpretation
+*with a human principal*, even when the reasoning was done upstream of our
+system. The agent loop is responsible for deciding how much weight to give
+vendor-emitted interpretations relative to its own.
 
 ### 4.13 Normalization framework
 
