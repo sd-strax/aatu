@@ -105,8 +105,10 @@ x-action:
   action_type            string (e.g., "host.isolate", "email.purge", "detection.deploy")
                          Controlled vocabulary, namespaced by category.
   tier                   T2 | T3
-  status                 REQUESTED | APPROVED | EXECUTING | SUCCEEDED |
-                         FAILED | REJECTED | EXPIRED | REVERSED
+  status                 REQUESTED | PENDING_SECONDARY | APPROVED | EXECUTING |
+                         SUCCEEDED | FAILED | REJECTED | EXPIRED | REVERSED
+                         (PENDING_SECONDARY is a real state, not a substate;
+                         used only when authorization.mode == TWO_PARTY)
   targets                list of TargetSpec (see below)
   parameters             object (action-specific arguments)
   requested_by_actor     ActorRef (canonical shape — actor.principal is the
@@ -141,14 +143,24 @@ The `x-action` lifecycle is **event-sourced as part of the investigation aggrega
 Each transition emits a new Interpretation linked to the `x-action`. The mapping:
 
 ```
-REQUESTED  -> APPROVED              interpretation_type = "action-approval"
-REQUESTED  -> REJECTED              interpretation_type = "action-rejection"
-REQUESTED  -> EXPIRED               interpretation_type = "action-expiry"      (system-emitted)
-APPROVED   -> EXECUTING             interpretation_type = "action-dispatch"    (system-emitted)
-EXECUTING  -> SUCCEEDED | FAILED    interpretation_type = "action-result"      (system-emitted)
-SUCCEEDED  -> REVERSED              recorded on the *reversing* x-action via reversal_of_ref;
-                                    reversed x-action is mutated to status REVERSED
-                                    and emits an "action-reversal" Interpretation.
+REQUESTED          -> APPROVED            interpretation_type = "action-approval"
+                                          (mode != TWO_PARTY: solo approval terminal)
+REQUESTED          -> PENDING_SECONDARY   interpretation_type = "action-approval"
+                                          (mode == TWO_PARTY: primary approval only;
+                                          waiting for secondary)
+REQUESTED          -> REJECTED            interpretation_type = "action-rejection"
+REQUESTED          -> EXPIRED             interpretation_type = "action-expiry"     (system-emitted)
+PENDING_SECONDARY  -> APPROVED            interpretation_type = "action-approval"
+                                          (secondary approval; both approver_refs
+                                          on the Authorization record now populated)
+PENDING_SECONDARY  -> REJECTED            interpretation_type = "action-rejection"
+                                          (secondary declines)
+PENDING_SECONDARY  -> EXPIRED             interpretation_type = "action-expiry"     (system-emitted)
+APPROVED           -> EXECUTING           interpretation_type = "action-dispatch"   (system-emitted)
+EXECUTING          -> SUCCEEDED | FAILED  interpretation_type = "action-result"     (system-emitted)
+SUCCEEDED          -> REVERSED            recorded on the *reversing* x-action via reversal_of_ref;
+                                          reversed x-action is mutated to status REVERSED
+                                          and emits an "action-reversal" Interpretation.
 ```
 
 The seven `action-*` types — `action-request`, `action-approval`, `action-rejection`, `action-expiry`, `action-dispatch`, `action-result`, `action-reversal` — live in the canonical `interpretation_type` enum (domain_model.md INTERPRETATION → Interpretation types) alongside the reasoning types.
@@ -325,7 +337,7 @@ The action sits in `REQUESTED` until approved/rejected/expired (default expiry: 
 
 Same panel as T2 plus a challenge field: the analyst must type the action verb and target count, e.g. `purge 47 emails`. The string must match exactly. The typed string is stored in `Authorization.challenge_response`.
 
-For policies that require `TWO_PARTY`: after primary approval the action moves to a `PENDING_SECONDARY` substate (still under `REQUESTED` for external purposes). A notification fires to the `secondary_approver_pool` defined on the policy — initially the on-call rotation, configurable. The secondary approver sees the same panel including the primary's approval. Both approvers must complete the typed challenge.
+For policies that require `TWO_PARTY`: after primary approval the action moves to status `PENDING_SECONDARY` (a real state in the enum — see §3.1 / §3.2). A notification fires to the `secondary_approver_pool` defined on the policy — initially the on-call rotation, configurable. The secondary approver sees the same panel including the primary's approval. Both approvers must complete the typed challenge. Only the secondary's approval transitions PENDING_SECONDARY → APPROVED; rejection or expiry from PENDING_SECONDARY are also valid terminal transitions per the §3.2 lifecycle table.
 
 ### 5.3 Async approvals (Slack / email / mobile)
 

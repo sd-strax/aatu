@@ -85,12 +85,12 @@ EventEnvelope
 
 ### v0 event types
 
-Lifecycle:
+Lifecycle (each event is recorded in the same aggregate transaction as its corresponding `InterpretationRecorded` of type "lifecycle"; shared `correlation_id` ties them):
 - `InvestigationCreated` — payload: seed (one of AlertSeed | EntitySeed | QuestionSeed), name, description, context ("investigation" | "hunt")
 - `InvestigationStatusChanged` — payload: from, to, reason, lifecycle_interpretation_ref
-- `InvestigationConcluded` — payload: report_ref, summary
+- `InvestigationConcluded` — payload: report_ref, summary. The Report itself is created in the STIX object store (CRUD layer) **in the same Postgres transaction** as this event; the Report row write, the event append, and the lifecycle Interpretation all succeed or abort together. Eliminates the dual-write failure mode that would otherwise leave a CONCLUDED investigation pointing at a non-existent Report.
 - `InvestigationReopened` — payload: reason. Clears conclusion_ref. Prior Report stays referenced from the thread.
-- `InvestigationArchived`
+- `InvestigationArchived` — terminal. After this event the aggregate accepts no further events of any kind.
 
 Membership (Grouping.object_refs):
 - `MemberAdded` — payload: stix_object_ref, rationale. **Only for external references** — bringing a STIX object that already exists in the store (an entity from another investigation, an ObservedData from a shared cache) into this investigation's scope. Nodes the aggregate creates internally (Interpretations, x-actions) are members implicitly via their creation event; no separate MemberAdded fires for them.
@@ -105,8 +105,8 @@ Evidence linkage:
 - `EvidenceDetached` — payload: evidence_ref, reason
 
 Action lifecycle (see auth.md §3 for the action model and §3.2 for the state machine):
-- `ActionRequested` — payload: action_id, action_type, tier, targets, parameters, evidence_refs, expires_at, requesting_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "action-request"); shared `correlation_id` ties them.
-- `ActionApproved` — payload: action_id, authorization { mode (MANUAL | AUTO_POLICY | TWO_PARTY), primary_approver_ref, primary_approved_at, secondary_approver_ref?, secondary_approved_at?, policy_ref?, policy_version?, challenge_response? }, approval_interpretation_id.
+- `ActionRequested` — payload: action_id, action_type, tier, targets, parameters, evidence_refs, expires_at, requesting_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "action-request"); shared `correlation_id` ties them. Permitted against a CONCLUDED investigation only when the request is a reversal action (see auth.md §9.1 and the domain_model.md Lifecycle invariants).
+- `ActionApproved` — payload: action_id, authorization { mode (MANUAL | AUTO_POLICY | TWO_PARTY), stage (SOLO | PRIMARY | SECONDARY — SOLO for MANUAL/AUTO_POLICY; PRIMARY then SECONDARY for TWO_PARTY), primary_approver_ref, primary_approved_at, secondary_approver_ref?, secondary_approved_at?, policy_ref?, policy_version?, challenge_response? }, approval_interpretation_id. Resulting x-action status: PENDING_SECONDARY when (mode=TWO_PARTY, stage=PRIMARY); APPROVED otherwise. Subsequent rejection or expiry from PENDING_SECONDARY uses the existing `ActionRejected` / `ActionExpired` events.
 - `ActionRejected` — payload: action_id, reason, rejection_interpretation_id.
 - `ActionExpired` — payload: action_id, expiry_interpretation_id. System-emitted on `expires_at`.
 - `ActionDispatched` — payload: action_id, adapter, adapter_request_id, dispatched_at, dispatch_interpretation_id. System-emitted when the dispatcher picks up an APPROVED action.

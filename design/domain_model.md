@@ -120,8 +120,21 @@ Extension 2 - Lifecycle. Status state machine:
                 CONCLUDED -> ACTIVE (reopen)
                 CONCLUDED -> ARCHIVED
   Invariants:   CONCLUDED requires conclusion_ref populated.
-                Reopen clears conclusion_ref; prior Report preserved and referenced from reasoning thread.
-                Each transition emits an Interpretation of type "lifecycle".
+                Reopen clears conclusion_ref; prior Report preserved and
+                referenced from reasoning thread.
+                Each transition emits an Interpretation of type "lifecycle";
+                the lifecycle event and the Interpretation are written in
+                the same aggregate transaction (persistence.md §3) with a
+                shared correlation_id.
+                CONCLUDED accepts new Interpretations only when they are
+                action-* lifecycle entries for reversal actions (see auth.md
+                §9.1 — un-isolating a host weeks after closing the case
+                without reopening). conclusion_ref stays set; the reasoning
+                thread continues to grow with the reversal trace; the
+                investigation does NOT auto-reopen. Any other Interpretation
+                against a CONCLUDED investigation requires an explicit
+                reopen (CONCLUDED -> ACTIVE).
+                ARCHIVED accepts no new events of any kind.
 
 Extension 3 - ReasoningThread. Ordered list of Interpretation node references. Empty thread is valid.
 
@@ -226,8 +239,11 @@ x-action (state-changing operation against the world):
   action_type         string (controlled vocabulary, e.g., "host.isolate",
                       "email.purge", "detection.deploy")
   tier                T2 | T3
-  status              REQUESTED | APPROVED | EXECUTING | SUCCEEDED |
-                      FAILED | REJECTED | EXPIRED | REVERSED
+  status              REQUESTED | PENDING_SECONDARY | APPROVED | EXECUTING |
+                      SUCCEEDED | FAILED | REJECTED | EXPIRED | REVERSED
+                      (PENDING_SECONDARY only used when authorization mode
+                      is TWO_PARTY: action sits in this state between primary
+                      and secondary approval. See auth.md §3.2.)
   targets             list of TargetSpec (entity_ref + resolved_identifier)
   evidence_refs       list of STIX ids that justified the action
   investigation_ref   grouping--<uuid>
