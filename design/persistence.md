@@ -2,7 +2,7 @@
 
 ## Project context
 
-"Cursor for SOC analysts" — AI-native investigation environment. Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend, MCP for tool federation. Personas v0: threat hunters and IR responders. Workflows v0: investigation (entity-rooted) and hunting (hypothesis-rooted). v0 prototype runs against mock MCP servers via fixtures.
+"Cursor for SOC analysts" — AI-native investigation environment. Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend, transport-neutral capability layer for tool federation (adapters: MCP, native vendor APIs, custom integrations; see capability.md §5.4). Personas v0: threat hunters and IR responders. Workflows v0: investigation (entity-rooted) and hunting (hypothesis-rooted). v0 prototype runs against OCSF fixtures via the fixture adapter, not real tenants.
 
 This spec defines how investigation state is persisted. It assumes the investigation domain model spec as authoritative input.
 
@@ -16,7 +16,7 @@ This spec defines how investigation state is persisted. It assumes the investiga
 
 - The domain model itself (separate thread, taken as given)
 - Action authorization mechanics (referenced where it touches event shape; full design separate)
-- MCP federation protocol
+- Capability layer (covered by capability.md)
 - Query model and API surface beyond what projections require
 - UI projections beyond their backing data shape
 
@@ -31,7 +31,7 @@ This spec defines how investigation state is persisted. It assumes the investiga
 | OCSF telemetry | Append-only insert | Already immutable by construction; not an aggregate |
 | AI tool calls | Append-only side store, content-hashed | Inherently event-shaped; not an aggregate; needs integrity guarantees |
 | AI prompt/response transcripts | Append-only side store, content-hashed, retention-bounded | Bytes are cheap when stored where they belong; referenced not embedded |
-| Users, tenants, MCP server config, RBAC | CRUD | Boring on purpose |
+| Users, tenants, adapter config, RBAC | CRUD | Boring on purpose |
 
 ## 2. Persistence model
 
@@ -287,4 +287,4 @@ These are decisions or operational details intentionally left to the team rather
 - Concrete cap on the `rationale` field in Interpretation events (proposed: 500 chars; tune empirically).
 - Default tenant transcript retention (operational/legal call, not a design call).
 - Choice of object store vs. Postgres side table for `ai_transcripts` (operational call; either works with the reference-and-hash pattern).
-- Initial set of OCSF classes ingested at v0 (depends on MCP federation thread; not this spec's concern).
+- Initial set of OCSF classes ingested at v0 (depends on the capability layer; see capability.md §4 — not this spec's concern).

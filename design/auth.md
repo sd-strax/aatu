@@ -8,7 +8,7 @@ State-changing actions in a SOC live on a knife edge: too much friction and the 
 
 1. **The AI proposes; a human (or a pre-declared policy speaking for humans) disposes.** The AI agent never directly executes anything beyond READ and ANNOTATE. Tier 3+ execution requires either an explicit human act or a pre-registered policy that a human authored.
 2. **Every action is the output of an Interpretation.** Authorization is not a side-channel — it lives in the reasoning thread, with `input_refs` pointing at the evidence that justified the action.
-3. **Blast radius, not action verb, drives the tier.** "Isolate one host" and "isolate 500 hosts" are not the same action even though they hit the same MCP tool.
+3. **Blast radius, not action verb, drives the tier.** "Isolate one host" and "isolate 500 hosts" are not the same action even though they hit the same downstream tool.
 
 ---
 
@@ -126,7 +126,7 @@ x-action:
 TargetSpec:
   entity_ref             STIX SCO id (the thing being acted on)
   resolved_identifier    string (e.g., hostname, mailbox, account UPN —
-                         what the MCP tool actually receives)
+                         what the adapter actually sends to the downstream tool)
   asset_criticality      optional string (see §10)
 ```
 
@@ -361,12 +361,14 @@ Importantly, the AI can never construct an `Authorization` record or set `status
 ```
 Execution:
   dispatched_at          timestamp
-  mcp_tool               string (which MCP server was called)
-  mcp_request_id         string (correlation id)
+  adapter                string (which capability adapter handled the call,
+                         e.g., "crowdstrike_falcon", "defender_xdr_mcp",
+                         "fixture:<scenario>"; see capability.md §5.4)
+  adapter_request_id     string (correlation id from the adapter)
   attempts               list<Attempt>
   final_outcome          SUCCEEDED | FAILED | PARTIAL | TIMEOUT
   per_target_results     map<target_index, OK | FAIL | UNKNOWN>
-  raw_response_ref       optional pointer to stored MCP response
+  raw_response_ref       optional pointer to stored adapter response
 
 Attempt:
   attempt_no             int
@@ -379,10 +381,10 @@ Attempt:
 
 ### 6.2 The categories
 
-- **Approved, dispatch failed (network, MCP unreachable):** action stays `APPROVED`, the dispatcher retries with exponential backoff (default: 3 attempts, 2s/8s/30s). Each attempt is a row in `Execution.attempts`. After max retries: status moves to `FAILED`, `final_outcome=FAILED`, and an `action-result` Interpretation is emitted with `confidence=LOW` because the system genuinely doesn't know whether the action took effect on the target.
-- **Approved, dispatched, MCP returns error:** if `RETRYABLE_ERROR` (rate limit, transient 5xx), retry. If `FATAL_ERROR` (auth, malformed request, target not found): no retry, status `FAILED`.
+- **Approved, dispatch failed (network, adapter unreachable):** action stays `APPROVED`, the dispatcher retries with exponential backoff (default: 3 attempts, 2s/8s/30s). Each attempt is a row in `Execution.attempts`. After max retries: status moves to `FAILED`, `final_outcome=FAILED`, and an `action-result` Interpretation is emitted with `confidence=LOW` because the system genuinely doesn't know whether the action took effect on the target.
+- **Approved, dispatched, adapter returns error:** if `RETRYABLE_ERROR` (rate limit, transient 5xx), retry. If `FATAL_ERROR` (auth, malformed request, target not found): no retry, status `FAILED`.
 - **Approved, dispatched, partial success across targets:** status `SUCCEEDED` but `final_outcome=PARTIAL`. Per-target results recorded. The action is *not* re-dispatched for the failed targets automatically — partial-failure recovery requires a new action request, because re-dispatching silently violates the principle that every action is auditable on its own.
-- **Timeout:** the MCP call exceeded the action-type timeout. Status moves to `FAILED` with `final_outcome=TIMEOUT`. The system explicitly does *not* infer success from timeout. The audit record makes this state visible to the analyst, who decides whether to re-request.
+- **Timeout:** the adapter call exceeded the action-type timeout. Status moves to `FAILED` with `final_outcome=TIMEOUT`. The system explicitly does *not* infer success from timeout. The audit record makes this state visible to the analyst, who decides whether to re-request.
 - **Approval expired before dispatch (rare; should mostly happen for stale T2 prompts):** status `EXPIRED`. New request required.
 
 The key invariant: **the audit record never lies about uncertainty.** If the system doesn't know whether the host was actually isolated, the record says so. SOC teams need to make recovery decisions on accurate state, and "I think we isolated it" is worse than "we don't know."
@@ -427,7 +429,7 @@ I considered modeling "the host is currently isolated" as durable state on the e
 
 ### 8.1 Target resolution
 
-Every `TargetSpec` has both an `entity_ref` (STIX id, stable across investigations) and a `resolved_identifier` (what the MCP tool actually consumes — hostname, UPN, mailbox SMTP, etc.). The resolution happens at request time and is *frozen* into the `x-action`. This matters because:
+Every `TargetSpec` has both an `entity_ref` (STIX id, stable across investigations) and a `resolved_identifier` (what the adapter actually sends to the downstream tool — hostname, UPN, mailbox SMTP, etc.). The resolution happens at request time and is *frozen* into the `x-action`. This matters because:
 
 - The same STIX entity can resolve differently in different environments (a hostname can change FQDN).
 - An attacker watching telemetry shouldn't be able to manipulate resolution between request and execution.
@@ -441,7 +443,7 @@ Asset criticality (`prod-critical`, `domain-controller`, `pii-bearing`, etc.) is
 
 - We assume an `asset_criticality` field exists on `TargetSpec`, populated by an asset-classification service.
 - Policy can reference it.
-- For v0 prototype, asset criticality comes from a static fixture file alongside the mock MCP fixtures. The real integration is a downstream thread.
+- For v0 prototype, asset criticality comes from a static fixture file alongside the OCSF fixture scenarios (see capability.md §9). The real integration is a downstream thread.
 
 I'd flag this as an explicit dependency for the fan-in: there's a "Asset Classification & Criticality" thread that needs to exist, even if not v0.
 
@@ -497,7 +499,7 @@ Properties this graph has:
 
 **Explicitly out, must not be assumed in this spec:**
 
-- The mechanics of how MCP tools execute the action (capability layer thread)
+- The mechanics of how the capability layer's adapters execute the action (capability.md)
 - Persistence and consistency (how the lifecycle transitions are stored atomically — persistence thread)
 - UI rendering specifics (the panel design above is conceptual)
 - Asset classification population
@@ -508,7 +510,7 @@ Properties this graph has:
 - The `x-action` custom STIX object is a new domain primitive, sibling to `x-hypothesis` and `x-prediction`. It needs to land in the domain model section listing custom STIX objects.
 - A new edge type, `reverses`, between two `x-action`s — though this is also expressible via the `reversal_of_ref` field, the edge form is useful for graph queries.
 - An assumed dependency on an "Asset Classification" thread for `asset_criticality`.
-- An assumed dependency on the "Capability layer / MCP federation" thread for the actual tool dispatch and the contract for `mcp_request_id` correlation.
+- An assumed dependency on the capability layer (capability.md) for the actual tool dispatch and the contract for `adapter_request_id` correlation.
 
 ---
 
@@ -521,7 +523,7 @@ To make the spec concrete, the path of one T2 action:
 3. AI agent calls `request_action(action_type="host.isolate", targets=[{entity_ref: ipv4-addr--..., resolved_identifier: "WIN-A14"}], evidence_refs=[sighting-1, h-1], rationale="Hypothesis SUPPORTED with STRONG-weight direct evidence; isolation prevents lateral movement.", investigation_ref=grouping-1)`.
 4. Backend creates `x-interpretation` of type `action-request` and `x-action` in `REQUESTED`. Both get `member-of` edges to the Grouping.
 5. Policy engine evaluates. The "auto-isolate on Cobalt Strike" policy from §4.3 fires: status moves to `APPROVED` with `Authorization.mode=AUTO_POLICY`, `policy_ref=policy/host-isolate-cobalt-strike/1.2.0`, `primary_approver_ref=<the analyst who signed off on this policy>`. An `action-approval` Interpretation is emitted.
-6. Dispatcher picks up `APPROVED`, calls the EDR MCP tool. Status `EXECUTING`, `action-dispatch` Interpretation emitted.
+6. Dispatcher picks up `APPROVED`, calls the EDR via its capability adapter. Status `EXECUTING`, `action-dispatch` Interpretation emitted.
 7. EDR returns success. Status `SUCCEEDED`, `action-result` Interpretation emitted with `confidence=HIGH` (tool confirmed).
 8. Three days later, after investigation conclusion, the analyst un-isolates the host: a new `x-action` of type `host.unisolate` with `reversal_of_ref` pointing at the original. Goes through normal T2 flow (one click confirm). On success, original `x-action.status` becomes `REVERSED`.
 

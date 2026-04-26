@@ -4,17 +4,17 @@ INVESTIGATION DOMAIN MODEL - SPEC FOR FAN-IN
 PROJECT CONTEXT
 ---------------
 "Cursor for SOC analysts" - AI-native investigation environment.
-Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend for collaboration views, MCP for tool federation.
+Substrate: VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend for collaboration views, transport-neutral capability layer for tool federation (adapters: MCP, native vendor APIs, custom integrations; see capability.md §5.4).
 Personas v0: threat hunters and IR responders (hypothesis-driven, code-comfortable, latency-sensitive). Not T1/T2 triage.
 Workflows v0: investigation (entity-rooted) and hunting (hypothesis-rooted) - same loop, different entry points.
 Philosophy: skeleton not closed product; AI absorbs the fragmentation tax so every analyst operates with T3-level context.
-v0 prototype: mock MCP servers via fixtures, not real tenants.
+v0 prototype: all adapters served by OCSF fixtures (see capability.md §9), not real tenants.
 
 
 THREAD SCOPE
 ------------
 This thread defines the domain model only - what an investigation IS as a primitive.
-Out of scope (separate threads): persistence, query model, API surface, ingestion pipeline, action authorization, component architecture, MCP federation protocol, UI projections.
+Out of scope (separate threads): persistence, query model, API surface, ingestion pipeline, action authorization, component architecture, capability layer (now covered by capability.md), UI projections.
 
 
 DECISIONS RULED OUT (do not re-litigate)
@@ -51,10 +51,11 @@ OcsfEvent (immutable):
   class_name      string, OCSF class name
   time            timestamp, when event occurred in the world
   recorded_at     timestamp, when ingested
-  source_tool     string, MCP tool name
+  source_tool     string, source adapter identifier (e.g., "crowdstrike_falcon",
+                  "splunk_es", "fixture:<scenario>"); see capability.md §5.4
   payload         object, full original OCSF payload, untouched
 
-v0 set of OCSF classes ingested: out of scope; depends on MCP federation thread.
+v0 set of OCSF classes ingested: out of scope; depends on the capability layer (capability.md §4).
 
 
 INTERPRETATION LAYER
