@@ -109,7 +109,9 @@ x-action:
                          FAILED | REJECTED | EXPIRED | REVERSED
   targets                list of TargetSpec (see below)
   parameters             object (action-specific arguments)
-  requested_by_ref       Analyst or AiAgent
+  requested_by_actor     ActorRef (canonical shape — actor.principal is the
+                         human, actor.delegate is the AI agent if any.
+                         See domain_model.md INTERPRETATION → Actor model.)
   requested_at           timestamp
   rationale              string (why this action — populated from the producing Interpretation)
   evidence_refs          list of STIX ids — Sightings, x-hypotheses, ObservedData,
@@ -130,7 +132,9 @@ TargetSpec:
   asset_criticality      optional string (see §10)
 ```
 
-Every `x-action` has a `produced-by` edge to an Interpretation of type `action-request` (a new value added to the `interpretation_type` enum — this *is* a kind of reasoning, even though the action itself is not). This piggybacks on the existing produced-by mechanism in the domain model and keeps the reasoning thread intact.
+Every `x-action` has a `produced-by` edge to an Interpretation of type `action-request` (a value in the canonical `interpretation_type` enum — this *is* a kind of reasoning, even though the action itself is not). This piggybacks on the existing produced-by mechanism in the domain model and keeps the reasoning thread intact.
+
+The `x-action` lifecycle is **event-sourced as part of the investigation aggregate** (persistence.md §1, §2.1, §3). The `status` field above is a projection — the canonical state machine lives in seven action lifecycle events: `ActionRequested`, `ActionApproved`, `ActionRejected`, `ActionExpired`, `ActionDispatched`, `ActionResulted`, `ActionReversed`. Same-aggregate placement means the `x-action` and its producing Interpretation are recorded in one transaction (a shared `correlation_id` ties them); no cross-aggregate consistency story is needed.
 
 ### 3.2 Lifecycle and emitted Interpretations
 
@@ -480,7 +484,7 @@ Putting it together, an action produces this graph:
 Properties this graph has:
 
 - Every state transition is an Interpretation → preserves the domain model's "every reasoning act is in the thread" invariant.
-- The action's evidence is reachable in two ways: directly via `x-action.evidence_refs`, and indirectly via the producing Interpretation's `input_refs`. The two must be the same set; the backend enforces this on write.
+- The action's evidence is reachable in two ways: directly via `x-action.evidence_refs`, and indirectly via the producing Interpretation's `input_refs`. The two are the same set, written in the same aggregate transaction (persistence.md §3): the `ActionRequested` event payload carries `evidence_refs` and shares a `correlation_id` with the producing `InterpretationRecorded` event. There is no cross-aggregate constraint to enforce.
 - `member-of` edges from the `x-action` and all its associated Interpretations to the Grouping put the entire action history inside the investigation.
 - Querying "what actions were taken in this investigation" is a single edge traversal: `Grouping --member-of-- x-action`.
 - Querying "what evidence justified this action" walks `x-action.evidence_refs` directly; querying "what reasoning led to this action" walks `produced-by` to the Interpretation and then `input_refs` from there.

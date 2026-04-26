@@ -82,7 +82,7 @@ Sighting (STIX SRO):
   first_seen, last_seen, count
   confidence            HIGH | MEDIUM | LOW
   description           string (rationale)
-  created_by_ref        analyst or AI agent
+  created_by_ref        ActorRef (canonical shape; see INTERPRETATION → Actor model)
 
 Indicator, Report, Note, Opinion: adopted unchanged from STIX 2.1.
 

@@ -27,6 +27,7 @@ This spec defines how investigation state is persisted. It assumes the investiga
 | Layer | Strategy | Reasoning |
 |---|---|---|
 | Investigation aggregate | Event-sourced | Replay, defensibility, AI reasoning audit, multi-analyst handoff, detection authoring all bite here and only here |
+| x-action lifecycle | Event-sourced (inside the investigation aggregate) | Has a real state machine (REQUESTED → APPROVED → EXECUTING → terminal); same-aggregate placement makes the action ↔ producing-Interpretation write atomic and removes any cross-aggregate consistency story |
 | STIX object layer (entities, ObservedData, Sightings, Indicators, Reports, Notes, Opinions, Relationships) | CRUD + thin change-history table | No state-machine invariants; mostly accretive; ES gives no leverage |
 | OCSF telemetry | Append-only insert | Already immutable by construction; not an aggregate |
 | AI tool calls | Append-only side store, content-hashed | Inherently event-shaped; not an aggregate; needs integrity guarantees |
@@ -37,7 +38,7 @@ This spec defines how investigation state is persisted. It assumes the investiga
 
 ### 2.1 Investigation aggregate (event-sourced)
 
-The Investigation aggregate is the unit of event sourcing. Boundary: one Grouping plus its four extensions (Seed, Lifecycle, ReasoningThread, ConclusionSlot) plus its membership and Interpretations.
+The Investigation aggregate is the unit of event sourcing. Boundary: one Grouping plus its four extensions (Seed, Lifecycle, ReasoningThread, ConclusionSlot), its membership, its Interpretations, and its x-actions (the REQUESTED → APPROVED → EXECUTING → terminal lifecycle for any state-changing action taken from this investigation; see auth.md §3 for the action model and §3.2 for the lifecycle).
 
 Things outside the boundary that the aggregate references but does not own: STIX entities, ObservedData, Sightings, OCSF events, AI tool calls, transcripts. The aggregate references them by id; their existence and lifecycle are managed elsewhere.
 
@@ -90,7 +91,7 @@ Lifecycle:
 - `InvestigationArchived`
 
 Membership (Grouping.object_refs):
-- `MemberAdded` — payload: stix_object_ref, rationale
+- `MemberAdded` — payload: stix_object_ref, rationale. **Only for external references** — bringing a STIX object that already exists in the store (an entity from another investigation, an ObservedData from a shared cache) into this investigation's scope. Nodes the aggregate creates internally (Interpretations, x-actions) are members implicitly via their creation event; no separate MemberAdded fires for them.
 - `MemberRemoved` — payload: stix_object_ref, reason. Soft removal — historical membership is preserved by the event itself.
 
 Reasoning thread:
@@ -98,15 +99,25 @@ Reasoning thread:
 - `InterpretationSuperseded` — payload: superseded_id, superseding_id, reason. No deletion; the thread shows both.
 
 Evidence linkage:
-- `EvidenceAttached` — payload: evidence_ref (OcsfEvent id, or STIX ObservedData / Sighting id), interpretation_ref, role ("supports" | "contradicts" | "context")
+- `EvidenceAttached` — payload: evidence_ref (OcsfEvent id, or STIX ObservedData / Sighting id), interpretation_ref, role ("supports" | "refutes" | "context"), weight (STRONG | MODERATE | WEAK; required when role is "supports" or "refutes"; null when role is "context"). Role and weight match the `x-supports` / `x-refutes` edge vocabulary in domain_model.md EDGE TYPES.
 - `EvidenceDetached` — payload: evidence_ref, reason
 
-Total: ~11 event types at v0. Named after analyst verbs. No derived-fact events. No fork events (deferred to v1+ — taxonomy stays clean enough that forking can be added without schema migration).
+Action lifecycle (see auth.md §3 for the action model and §3.2 for the state machine):
+- `ActionRequested` — payload: action_id, action_type, tier, targets, parameters, evidence_refs, expires_at, requesting_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "action-request"); shared `correlation_id` ties them.
+- `ActionApproved` — payload: action_id, authorization { mode (MANUAL | AUTO_POLICY | TWO_PARTY), primary_approver_ref, primary_approved_at, secondary_approver_ref?, secondary_approved_at?, policy_ref?, policy_version?, challenge_response? }, approval_interpretation_id.
+- `ActionRejected` — payload: action_id, reason, rejection_interpretation_id.
+- `ActionExpired` — payload: action_id, expiry_interpretation_id. System-emitted on `expires_at`.
+- `ActionDispatched` — payload: action_id, adapter, adapter_request_id, dispatched_at, dispatch_interpretation_id. System-emitted when the dispatcher picks up an APPROVED action.
+- `ActionResulted` — payload: action_id, final_outcome (SUCCEEDED | FAILED | PARTIAL | TIMEOUT), per_target_results, attempts, raw_response_ref?, result_interpretation_id. System-emitted; `per_target_results` is what makes PARTIAL outcomes auditable.
+- `ActionReversed` — payload: original_action_id, reversing_action_id, reversal_interpretation_id. The reversing action is itself a new x-action (with its own `ActionRequested` etc.); this event records that the original's status moves to REVERSED on the reversing action's success.
+
+Total: ~18 event types at v0. Named after analyst verbs. No derived-fact events. No fork events (deferred to v1+ — taxonomy stays clean enough that forking can be added without schema migration).
 
 ### Why these and not others
 
 - No event for "EntityPromotedFromObservation" or "HypothesisContradicted" — both derivable from `InterpretationRecorded`. Don't make derived facts first-class.
-- No event for STIX object creation. Entities, Sightings, etc. are created in the STIX object store independently. The investigation references them via `MemberAdded` / `EvidenceAttached`. This keeps entities reusable across investigations without forcing replay of every investigation that ever touched them.
+- No event for STIX object creation. Entities, Sightings, etc. are created in the STIX object store independently. The investigation references them via `MemberAdded` / `EvidenceAttached`. This keeps entities reusable across investigations without forcing replay of every investigation that ever touched them. (x-actions are an exception — they are aggregate-internal and created by `ActionRequested` events, not in the external store.)
+- No separate `MemberAdded` event for aggregate-internal nodes (Interpretations, x-actions). Membership is implicit at creation time; a separate event would be bookkeeping that doubles event volume during action lifecycles for no information gain.
 - No `InvestigationForked` event at v0. Forking-as-branching has not shown enough demand. Replay-as-reading (walking the event stream in order) is a v0 feature; replay-as-re-execution and forking are v1+.
 
 ---
