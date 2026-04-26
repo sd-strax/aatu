@@ -339,7 +339,7 @@ INVARIANTS
 - Investigation cannot be CONCLUDED without conclusion_ref populated.
 - Every status change on x-hypothesis produces a corresponding Interpretation in the reasoning thread.
 - Every node in an investigation's object_refs has a member-of edge to that Grouping.
-- Every interpretation-layer node produced by reasoning has a produced-by edge to the Interpretation that created it.
+- Every interpretation-layer node **produced within this system** has a produced-by edge to the Interpretation that created it. Imported nodes (e.g., vendor-emitted Indicators / Sightings ingested via the capability layer's `detection_finding` normalizer — see capability.md §4.12) carry no produced-by edge; their upstream attribution lives in `provenance.tool` and STIX-standard `created_by_ref` to a per-tenant vendor Identity SDO. The agent loop creates a system Interpretation only when an investigation engages with the imported node.
 
 
 ADOPTED VS INVENTED

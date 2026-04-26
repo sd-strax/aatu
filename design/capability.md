@@ -29,10 +29,16 @@ crosses the adapter boundary into the capability layer, transport details are
 gone.
 
 **The capability layer is pure I/O plus normalization.** It does not reason. It
-does not produce `x-interpretation` records. It does not make hypothesis
-judgments. Its outputs are always `derivation_mode = DIRECT` because every
-observation it emits traces to a real tool call. Inferences are upstream, in the
-agent loop.
+does not produce `x-interpretation` records (Interpretations live inside the
+investigation aggregate per persistence.md §2.1; the agent loop is their only
+legal author). It does not make hypothesis judgments. Its outputs are typically
+`derivation_mode = DIRECT` because every observation it emits traces to a real
+tool call. The single exception is the `detection_finding` normalizer (§4.12),
+which emits Indicators and Sightings with `derivation_mode = INFERRED` and
+`provenance.tool = vendor_name` because vendor detections are themselves
+inferences — just made upstream of our system. Even there, the capability
+layer never wraps the imported nodes in an Interpretation; the agent loop does
+that when an investigation engages with them.
 
 **Identity is computed once, at the normalizer boundary.** Cross-tool stitching
 depends on every producer arriving at the same UUIDv5 for the same entity. The
@@ -741,19 +747,40 @@ Output:
   that capability-layer outputs are `DIRECT` — the vendor's claim is, by
   definition, an inference, just not one made by our agent loop.
 
-Because the detection_finding normalizer produces interpretation-layer
-artifacts (Indicator, Sighting), it emits a synthetic `x-interpretation`
-record of type `extraction` on behalf of the vendor. The synthetic
-Interpretation conforms to the canonical actor shape
-(domain_model.md INTERPRETATION → Actor model): `actor.principal` is set to
-a configured **ingestion-service-owner** Analyst (per-tenant config — the
-human who authorized this vendor as a telemetry source for the tenant), and
-`actor.delegate` is set to `AiAgent { agent_id: vendor_name, model_version:
-detection_rule_id }` when available. This keeps the domain model invariant
-that every interpretation-layer node has a corresponding Interpretation
-*with a human principal*, even when the reasoning was done upstream of our
-system. The agent loop is responsible for deciding how much weight to give
-vendor-emitted interpretations relative to its own.
+The Indicator and Sighting are interpretation-layer artifacts but the
+capability layer **does not** emit a synthetic `x-interpretation` to wrap
+them. That would violate two invariants: (a) capability §1, "the layer is
+pure I/O plus normalization; does not reason; does not produce
+x-interpretation records," and (b) persistence.md §2.1 aggregate ownership
+— Interpretations live inside the investigation aggregate, and capability
+has no legal write path into it.
+
+Instead:
+
+- The Indicator and Sighting are written to the per-tenant STIX object
+  store with `derivation_mode = INFERRED`, `provenance.tool = vendor_name`,
+  and STIX-standard `created_by_ref` pointing at a per-tenant **vendor
+  Identity SDO**. The vendor Identity is itself a deterministic UUIDv5
+  within the tenant namespace (computed from the vendor name), auto-created
+  on first ingest. No per-tenant "ingestion service owner" config is
+  needed — the upstream attribution lives in `created_by_ref` and
+  `provenance.tool`.
+- The agent loop (or analyst) wraps these in an Interpretation of type
+  `extraction` *when an investigation engages with them* — i.e., when the
+  Indicator / Sighting is brought into the investigation's scope via
+  `MemberAdded` or referenced as evidence. The Interpretation's
+  `actor.principal` is the engaging analyst (or the system principal for
+  fully-automated paths); `actor.delegate` is the AI agent if AI-driven.
+- Vendor Indicators and Sightings sitting in the store **without** a
+  produced-by edge to any of our Interpretations are valid — they are
+  imported, not produced by reasoning in our system. The
+  `provenance.tool = vendor_name` and STIX `created_by_ref` to the vendor
+  Identity together preserve the upstream attribution. (See
+  domain_model.md INVARIANTS for the system-produced-vs-imported
+  distinction.)
+
+The agent loop is responsible for deciding how much weight to give
+vendor-emitted Indicators relative to its own reasoning.
 
 ### 4.13 Normalization framework
 
