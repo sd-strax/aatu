@@ -101,34 +101,9 @@ I introduce one new custom STIX object, `x-action`, rather than overloading `x-i
 
 So: `x-action` is a sibling primitive, **produced by** an Interpretation (the analyst or AI's reasoning that this action should happen), and its lifecycle transitions each emit further Interpretations.
 
-```
-x-action:
-  id                     x-action--<uuid>
-  action_type            string (e.g., "host.isolate", "email.purge", "detection.deploy")
-                         Controlled vocabulary, namespaced by category.
-  tier                   T2 | T3
-  status                 REQUESTED | PENDING_SECONDARY | APPROVED | EXECUTING |
-                         SUCCEEDED | FAILED | REJECTED | EXPIRED | REVERSED
-                         (PENDING_SECONDARY is a real state, not a substate;
-                         used only when authorization.mode == TWO_PARTY)
-  targets                list of TargetSpec (see below)
-  parameters             object (action-specific arguments)
-  requested_by_actor     ActorRef (canonical shape — actor.principal is the
-                         human, actor.delegate is the AI agent if any.
-                         See domain_model.md INTERPRETATION → Actor model.)
-  requested_at           timestamp
-  rationale              string (why this action — populated from the producing Interpretation)
-  evidence_refs          list of STIX ids — Sightings, x-hypotheses, ObservedData,
-                         OcsfEvents that justify the action.
-                         Mirrors input_refs of the producing Interpretation.
-  investigation_ref      grouping--<uuid> — the investigation context
-  authorization          Authorization (see §3.3)
-  execution              Execution (see §6)
-  reversal_of_ref        optional x-action id (if this action reverses another)
-  reversed_by_ref        optional x-action id (set when this is reversed)
-  expires_at             timestamp (request expires unapproved after this)
-  created, modified, created_by_ref          STIX standard
+The canonical `x-action` schema lives in **domain_model.md → CUSTOM STIX OBJECTS** (single source of truth: fields, status enum, evidence_refs as `list<EvidenceRef>`, actor model, etc.). This spec defines only the auth-specific pieces — the `Authorization` sub-record (§3.3), the `Execution` sub-record (§6.1), and the `TargetSpec` shape carried inside `x-action.targets`:
 
+```
 TargetSpec:
   entity_ref             STIX SCO id (the thing being acted on)
   resolved_identifier    string (e.g., hostname, mailbox, account UPN —

@@ -101,7 +101,7 @@ Reasoning thread:
 - `InterpretationSuperseded` — payload: superseded_id, superseding_id, reason. No deletion; the thread shows both.
 
 Evidence linkage:
-- `EvidenceAttached` — payload: evidence_ref (OcsfEvent id, or STIX ObservedData / Sighting id), interpretation_ref, role ("supports" | "refutes" | "context"), weight (STRONG | MODERATE | WEAK; required when role is "supports" or "refutes"; null when role is "context"). Role and weight match the `x-supports` / `x-refutes` edge vocabulary in domain_model.md EDGE TYPES.
+- `EvidenceAttached` — payload: evidence_ref (`EvidenceRef` per domain_model.md INTERPRETATION → Reference types — `StixId | OcsfEventId`), interpretation_ref, role ("supports" | "refutes" | "context"), weight (STRONG | MODERATE | WEAK; required when role is "supports" or "refutes"; null when role is "context"). Role and weight match the `x-supports` / `x-refutes` edge vocabulary in domain_model.md EDGE TYPES.
 - `EvidenceDetached` — payload: evidence_ref, reason
 
 Action lifecycle (see auth.md §3 for the action model and §3.2 for the state machine):

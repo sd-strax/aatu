@@ -145,6 +145,14 @@ INTERPRETATION (records a reasoning act)
 ----------------------------------------
 Records a single reasoning act.
 
+Reference types used below and on x-action:
+  EvidenceRef = StixId | OcsfEventId
+                (typed union — a reference to either a STIX object or a raw
+                OcsfEvent. Interpretation.input_refs and x-action.evidence_refs
+                are both list<EvidenceRef>. Output references are always StixId
+                — Interpretations produce STIX-shaped nodes only, never
+                OcsfEvents.)
+
   id                      x-interpretation--<uuid>
   actor                   ActorRef (canonical shape; see "Actor model" below)
   timestamp               timestamp
@@ -154,8 +162,8 @@ Records a single reasoning act.
                           action-expiry | action-dispatch | action-result |
                           action-reversal | other
                           (canonical enum — see "Interpretation types" below)
-  input_refs              list of node ids (STIX or OcsfEvent) reasoned over
-  output_refs             list of STIX node ids produced
+  input_refs              list<EvidenceRef> — node ids reasoned over
+  output_refs             list<StixId> — STIX nodes produced
   rationale               string (why this mapping was made; bounded ~500 chars
                           — terse by design. Full transcript / tool-call detail
                           lives in side stores per persistence.md §6 Layer B
@@ -248,7 +256,7 @@ x-prediction (testable consequence of a hypothesis):
   test_result_refs    list of ObservedData or Sighting ids
   created, modified, created_by_ref (STIX standard)
 
-x-action (state-changing operation against the world):
+x-action (state-changing operation against the world). Canonical schema:
   id                  x-action--<uuid>
   action_type         string (controlled vocabulary, e.g., "host.isolate",
                       "email.purge", "detection.deploy")
@@ -258,11 +266,25 @@ x-action (state-changing operation against the world):
                       (PENDING_SECONDARY only used when authorization mode
                       is TWO_PARTY: action sits in this state between primary
                       and secondary approval. See auth.md §3.2.)
-  targets             list of TargetSpec (entity_ref + resolved_identifier)
-  evidence_refs       list of STIX ids that justified the action
+  targets             list<TargetSpec> (TargetSpec = {entity_ref: StixId,
+                      resolved_identifier: string, asset_criticality?: string};
+                      full TargetSpec definition in auth.md §3.1)
+  parameters          object (action-specific arguments; shape determined
+                      per action_type by the capability adapter contract)
+  requested_by_actor  ActorRef (the actor who originated the request; see
+                      Actor model above)
+  requested_at        timestamp
+  rationale           string (why this action — bounded ~500 chars; mirrors
+                      the producing Interpretation's rationale)
+  evidence_refs       list<EvidenceRef> — must equal the producing
+                      Interpretation's input_refs. Same-aggregate
+                      transaction guarantees this (persistence.md §3
+                      ActionRequested), so no separate write-time check.
   investigation_ref   grouping--<uuid>
   reversal_of_ref     optional x-action id (if this action reverses another)
   reversed_by_ref     optional x-action id (set when this is reversed)
+  expires_at          timestamp (REQUESTED state expires if not approved by
+                      this time; system emits ActionExpired event)
   authorization       Authorization sub-record (see auth.md §3.3)
   execution           Execution sub-record (see auth.md §6.1)
   created, modified, created_by_ref (STIX standard)
