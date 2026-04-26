@@ -333,7 +333,7 @@ INVARIANTS
 - OcsfEvent is immutable after write.
 - Every node and event belongs to exactly one tenant.
 - Identity computation uses the owning tenant's namespace UUID; the namespace is immutable for the lifetime of the tenant.
-- Entity identity is deterministic and stable across investigations within a tenant; cross-tenant identity is independent by construction.
+- Entity identity is deterministic UUIDv5 within a tenant **when the identity tuple is complete** — same value, same tool inputs, same tenant always produces the same id, stable across investigations. When the identity tuple is incomplete or unavailable (e.g., a `process` SCO without a known `created_time`, or opaque ObservedData with no canonical content — see capability.md §7.1 ObservedData rule and §7.2 process deviation), the SCO carries a random UUIDv4 and is **not stitchable** across tools. Cross-tenant identity is independent by construction regardless.
 - Aliasing is non-destructive and is always within a tenant; cross-tenant aliasing is not expressible.
 - Investigation seed is immutable after creation.
 - Investigation cannot be CONCLUDED without conclusion_ref populated.
