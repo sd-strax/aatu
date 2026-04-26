@@ -1448,6 +1448,17 @@ vendor detections genuinely are inferences, just not ours — but it warrants
 review if the boundary between observation and interpretation needs to be
 re-litigated.
 
+**Action dispatch / write-side adapter contract is deferred to a v0+1
+thread.** This spec covers the read side: 22 query verbs, the binding /
+resolver / normalizer pipeline, and the `CapabilityResult` envelope. The
+write side — the agent-facing `request_action` tool, write-side adapter
+operations, the `adapter_request_id` correlation contract that auth.md §6.1
+and persistence.md §3 `ActionDispatched` reference, and the action fixtures
+that mirror §9 read fixtures — is referenced by the auth and persistence
+specs but not designed here. It is the next thread to spawn before code,
+not a v0-time omission to paper over. Until it lands, action dispatch in
+v0 prototype runs against fixture stubs only.
+
 ---
 
 *End of spec.*

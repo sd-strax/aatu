@@ -312,6 +312,7 @@ This is a *write-time check*, not a stored property. The event captures what was
 - **Policy snapshots on events.** Add only if regulatory drivers require policy-at-time-of-decision in the audit trail.
 - **Catch-up subscriptions across services.** Postgres LISTEN/NOTIFY or polling suffices at v0 scale. Revisit when service count grows.
 - **Detection authoring as a feature.** The investigation event stream and the reasoning-thread projection are designed to support a future detection-authoring tool — analyst marks parts of an investigation as the basis for a detection rule, the tool generates rule code, and the rule is pushed through the auth.md push-to-production flow (T3, see §2 Action Categorization). The authoring tool itself is not specified in any v0 thread; the data model accommodates it without further change. References to "detection authoring" in §1 (decision summary), §3 (event indexing), and §4.2 (projection consumers) are about supporting this future use case, not committing to build it in v0.
+- **Action dispatch / write-side adapter contract.** Persistence assumes the capability layer dispatches actions and returns `adapter_request_id` for correlation in `ActionDispatched` events. The capability spec covers the read side; the write side is deferred to a follow-on thread (capability.md §10). Until that thread lands, `ActionDispatched` events in v0 prototype carry fixture-stub adapter ids.
 
 ---
 

@@ -528,7 +528,7 @@ Properties this graph has:
 - The `x-action` custom STIX object is a new domain primitive, sibling to `x-hypothesis` and `x-prediction`. It needs to land in the domain model section listing custom STIX objects.
 - A new edge type, `reverses`, between two `x-action`s — though this is also expressible via the `reversal_of_ref` field, the edge form is useful for graph queries.
 - An assumed dependency on an "Asset Classification" thread for `asset_criticality`.
-- An assumed dependency on the capability layer (capability.md) for the actual tool dispatch and the contract for `adapter_request_id` correlation.
+- An assumed dependency on the capability layer for the actual tool dispatch and the contract for `adapter_request_id` correlation. The capability spec covers the read side; the write-side / action-dispatch contract is explicitly deferred to a follow-on thread (capability.md §10). Until that thread lands, action dispatch in v0 prototype runs against fixture stubs only.
 
 ---
 
