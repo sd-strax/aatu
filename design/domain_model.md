@@ -326,6 +326,19 @@ PROVENANCE (uniform on ObservedData, Sighting, Interpretation, Relationship)
   query_run_at        optional timestamp
   raw_record_ref      optional OcsfEvent id
   derivation_mode     DIRECT (from a tool) | INFERRED (derived/reasoned)
+  coverage            optional COMPLETE | PARTIAL | UNAVAILABLE_TENANT |
+                      UNAVAILABLE_TRANSIENT | FAILED — coverage classification
+                      from the capability call that produced this artifact
+                      (see capability.md §6 for definitions). Load-bearing for
+                      evidence-of-absence reasoning: empty result with
+                      coverage=COMPLETE means we looked and found nothing;
+                      empty result with any non-COMPLETE means we did not
+                      look fully.
+  producer_version    optional string (version of the producer that emitted
+                      this artifact — normalizer version for capability-
+                      layer outputs, AI agent + model version for reasoning
+                      outputs, human user-agent for analyst-authored outputs.
+                      Used to scope re-normalization / re-reasoning).
 
 
 INVARIANTS

@@ -52,6 +52,27 @@ Each STIX object type has a current-state row and a thin `<type>_history` table.
 
 This is *not* event sourcing. There is no fold to derive current state — current state is the row. The history table exists for audit, not for replay.
 
+**Edges.** All interpretation-layer edges (member-of, produced-by, extracted-from, derived-from, sighted-in, x-supports, x-refutes, aliases, parent-of, reverses, plus standard STIX relationship types) live in a single `stix_edges` table:
+
+```sql
+CREATE TABLE stix_edges (
+  edge_id        UUID PRIMARY KEY,
+  tenant_id      UUID NOT NULL,
+  subject_id     TEXT NOT NULL,         -- STIX id (any type) or OcsfEvent id
+  predicate      TEXT NOT NULL,         -- edge type from domain_model.md EDGE TYPES
+  object_id      TEXT NOT NULL,         -- STIX id (any type) or OcsfEvent id
+  properties     JSONB,                 -- e.g., {weight: "STRONG"} for x-supports
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by     JSONB                  -- ActorRef envelope when relevant
+);
+CREATE INDEX ON stix_edges (tenant_id, subject_id, predicate);
+CREATE INDEX ON stix_edges (tenant_id, object_id, predicate);
+```
+
+Subject and object can be any id in the tenant, including OcsfEvent ids — this is the storage path for STIX↔OCSF edges (`extracted-from`, `derived-from`) that bridge the interpretation and telemetry layers.
+
+Edges to OcsfEvent are append-only by construction (OcsfEvents are immutable). Other edge types are CRUD, but in practice are mostly created and rarely deleted; supersession is preferred (e.g., add a new `aliases` edge with stronger evidence rather than delete the old one).
+
 ### 2.3 OCSF telemetry (append-only insert)
 
 OcsfEvent rows are inserted on ingestion and never modified. No projections, no aggregates. Indexed for retrieval by entity reference, time, source tool, and class.
