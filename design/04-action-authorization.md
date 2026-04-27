@@ -84,6 +84,41 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 | Reimage host | T3 | |
 | Permanent block list addition (no TTL) | T3 | |
 | Disable detection rule in production | T3 | Same blast radius as enabling one |
+| Open ticket / incident in SoR (Jira, ServiceNow, Linear) | T1 | Operational handoff; no external blast radius beyond the SoR |
+| Update existing ticket | T1 | |
+| Post to chat channel (Slack, Teams) | T1 | Org-internal communication |
+| Page on-call (PagerDuty, OpsGenie) | T2 | Disrupts a human; analyst should be sure |
+| Send templated email (notification, status update) | T2 | Reaches recipients; reversibility is sending a correction |
+| Publish IOC to internal TI feed (org-controlled, MISP private) | T2 | Org-internal distribution; reversal supported by feed admin |
+| Publish IOC to ISAC or external partner feed | T3 | Leaves the org boundary; usually irreversible |
+| Submit MITRE ATT&CK contribution | T3 | Public attribution; irreversible |
+| Deliver compliance / regulatory document | T3 | Sends to regulator/customer/partner; irreversible |
+
+### 2.1 D3FEND technique mapping
+
+Each action type carries an optional `d3fend_technique` mapping to a MITRE D3FEND technique ID. This is illustrative metadata — used for coverage projections, reporting, and the agent loop's surfacing of "for technique T1XXX, available D3FEND-mapped actions in your environment are X, Y, Z." It is *not* enforced at authorization time; not load-bearing for control flow. Tenants and adapter authors may extend the mapping with additional action types. The mapping ships as part of the signed action descriptor distribution (05-component-architecture.md §11.1).
+
+| Action type | D3FEND technique |
+|---|---|
+| `host.isolate` | D3-NTI (Network Traffic Isolation) |
+| `host.unisolate` | D3-NTI (reversal) |
+| `account.suspend` | D3-AL (Account Locking) |
+| `account.disable` | D3-AL |
+| `session.revoke` | D3-AL |
+| `credential.reset` | D3-CR (Credential Rotation) |
+| `process.kill` | D3-PT (Process Termination) |
+| `file.quarantine` | D3-FR (File Removal) |
+| `email.quarantine` | D3-MAR (Message Authenticity Removal) |
+| `email.purge` | D3-MAR |
+| `block.add` | D3-NI (Network Isolation) |
+| `detection.deploy` | D3-DA (Detection Authorship) |
+| `detection.retire` | D3-DA (reversal) |
+| `host.reimage` | D3-RIO (Restore Image / Operating System) |
+| `ioc.publish_to_misp` | D3-IDA (Indicator Distribution and Attribution) |
+| `ioc.publish_to_isac` | D3-IDA |
+| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique) |
+| `comm.post` | (not D3FEND-mapped — communication, not defensive technique) |
+| `document.deliver` | (not D3FEND-mapped — reporting, not defensive technique) |
 
 ---
 
@@ -103,7 +138,7 @@ So: `x-action` is a sibling primitive, **produced by** an Interpretation (the an
 
 The canonical `x-action` schema lives in **01-domain-model.md → CUSTOM STIX OBJECTS** (single source of truth: fields, status enum, evidence_refs as `list<EvidenceRef>`, actor model, etc.). This spec defines only the auth-specific pieces — the `Authorization` sub-record (§3.3), the `Execution` sub-record (§6.1), and the `TargetSpec` shape carried inside `x-action.targets`:
 
-```
+```text
 TargetSpec:
   entity_ref             STIX SCO id (the thing being acted on)
   resolved_identifier    string (e.g., hostname, mailbox, account UPN —
@@ -119,7 +154,7 @@ The `x-action` lifecycle is **event-sourced as part of the investigation aggrega
 
 Each transition emits a new Interpretation linked to the `x-action`. The mapping:
 
-```
+```text
 REQUESTED          -> APPROVED            interpretation_type = "action-approval"
                                           (mode != TWO_PARTY: solo approval terminal)
 REQUESTED          -> PENDING_SECONDARY   interpretation_type = "action-approval"
@@ -144,7 +179,7 @@ The seven `action-*` types — `action-request`, `action-approval`, `action-reje
 
 ### 3.3 Authorization sub-record
 
-```
+```text
 Authorization:
   mode                   MANUAL | AUTO_POLICY | TWO_PARTY
   stage                  SOLO | PRIMARY | SECONDARY
@@ -189,7 +224,7 @@ Policy-as-code, expressed in **CEL** (Common Expression Language), evaluated by 
 
 A policy is a versioned object:
 
-```
+```text
 policy:
   id                       policy/<slug>/<semver>
   action_match             list of action_type globs (e.g., "host.isolate")
@@ -214,7 +249,7 @@ Policies are stored in a versioned repo (git is fine for v0; the path doesn't ma
 
 ### 4.2 The CEL evaluation context
 
-```
+```text
 ctx.action.type                  string
 ctx.action.tier                  "T2" | "T3" — final tier after the §1 escalator
                                  has been applied (so a T2 action targeting
@@ -249,6 +284,24 @@ ctx.evidence.max_supporting_weight   "STRONG" | "MODERATE" | "WEAK" | "NONE"
 ctx.targets.criticality_classes  set<string> — union of asset classes across all targets
 ctx.targets.any_in(class)        function — true if any target is in that class
 ctx.targets.all_in(class)        function
+
+ctx.sop_guidance.applicable      bool — true if SOP retrieval surfaced
+                                 relevant guidance for this action's
+                                 investigation context (see
+                                 06-knowledge-service.md §5.1)
+ctx.sop_guidance.recommendation  optional string — extracted recommendation
+                                 if SOP guidance is structured (e.g.,
+                                 "isolate", "do-not-act",
+                                 "require-secondary"); null when SOPs are
+                                 narrative-only
+
+ctx.similarity.has_match         bool — true if recall_similar_investigations
+                                 returned ≥1 ranked result above a
+                                 configured score threshold
+ctx.similarity.top_match_outcome optional string — terminal state of the
+                                 closest past similar investigation:
+                                 "succeeded" | "failed" | "abandoned" |
+                                 "inconclusive"; null if no match
 
 ctx.time.utc                     timestamp
 ctx.time.business_hours          bool (org-configured)
@@ -376,7 +429,7 @@ Importantly, the AI can never construct an `Authorization` record or set `status
 
 ### 6.1 Execution record
 
-```
+```text
 Execution:
   dispatched_at          timestamp
   adapter                string (which capability adapter handled the call,
@@ -417,7 +470,7 @@ Retries are a property of the executor, not the user. The user-visible action li
 
 Reversibility is a property of the action type, declared in a static manifest:
 
-```
+```text
 host.isolate         reversible_by: host.unisolate
 session.revoke       reversible_by: null   (session naturally restores on re-login;
                                             no inverse action exists, but the original
@@ -471,7 +524,7 @@ I'd flag this as an explicit dependency for the fan-in: there's a "Asset Classif
 
 Putting it together, an action produces this graph:
 
-```
+```text
 [Sighting]    [x-hypothesis]     [Sighting]
      \             |                /
       \            |               /

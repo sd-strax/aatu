@@ -64,7 +64,7 @@ identifier (string) the layer will resolve. `TimeWindow` is
 per-verb defaults. Every verb returns, in addition to its declared outputs, a
 `CapabilityResult` envelope:
 
-```
+```text
 CapabilityResult {
   ocsf_event_refs:    list<OcsfEvent.id>      // every raw response written
   observed_data_refs: list<ObservedData.id>   // normalized observations
@@ -195,9 +195,34 @@ Returns the capabilities resolvable in the current tenant, including which are
 degraded or unavailable. Used by the agent loop on session start to right-size
 the tool set advertised to the LLM.
 
+### 2.9 External case lookup
+
+**`query_external_cases(filter: CaseFilter, window: TimeWindow, limit?: int = 50) -> list<ObservedData>`**
+Search the customer's case management system of record (TheHive,
+ServiceNow SOC, Jira SOC, Splunk ES Cases, custom) for cases matching the
+filter. `CaseFilter` supports text query, status, label, technique, and
+entity-mention filtering. Output normalized as `ObservedData` wrapping case
+references — each case becomes an entity-shaped observation with metadata:
+title, status, summary, key entities mentioned, link back to the SoR. Goes
+through the standard normalizer pipeline and lands in the telemetry layer
+with `provenance.tool = sor_name`.
+
+**`get_external_case_details(case_id: string) -> ObservedData`**
+Fetch full content for one case in the SoR, including comments,
+attachments metadata, and linked entity references. Used as a follow-up
+after `query_external_cases` returns hits worth deep-diving.
+
+These verbs are the read-side of the "have we seen this before in our
+SoR?" question; the internal-similarity counterpart lives in the knowledge
+service (06-knowledge-service.md §4). The two surfaces are deliberately
+separate — internal similarity over aatu's own concluded investigations is
+a sibling-of-LLM context retrieval, while external case lookup is a
+vendor-tool capability call producing telemetry like any other read-side
+adapter.
+
 ---
 
-A note on the count: 22 verbs hits the upper end of the 15-25 target. I
+A note on the count: 22 query verbs (plus the §2.9 external case lookup verbs) hits the upper end of the 15-25 target. I
 considered collapsing `get_failed_auth_burst` into `enumerate_logons` and
 `get_email_clicks` into `get_email_messages`. I kept them separate because they
 map to distinct analyst intents and benefit from server-side pre-filtering when
@@ -342,7 +367,7 @@ not an acceptable failure mode.
 
 Templates appear as `${...}` expressions in YAML scalar values. Three forms:
 
-```
+```text
 ${path.to.field}                 # required: missing field rejects the binding
 ${path.to.field?}                # optional: missing field omits the param
 ${path.to.field ?? "default"}    # default: missing field substitutes the literal
@@ -351,7 +376,7 @@ ${path.to.field ?? "default"}    # default: missing field substitutes the litera
 A path is a dotted reference walked against the binding's input context.
 Available path roots:
 
-```
+```text
 entity        # the input entity, or composite for multi-entity verbs
               #   - single-entity verbs: entity.<field>
               #   - composite verbs:     entity.<role>.<field>
@@ -374,7 +399,7 @@ templating layer doesn't flatten.
 
 Functions are applied with pipe syntax and chain left-to-right:
 
-```
+```text
 ${entity.host.hostname | upper}
 ${entity.user.account_login | lower | splunk_quote}
 ${window.from | iso8601}
@@ -383,7 +408,7 @@ ${entity.process.pid | int}
 
 **Built-in functions (always available):**
 
-```
+```text
 String:    upper, lower, trim
 Time:      iso8601, epoch_ms, epoch_s
 Type:      int, string, bool
@@ -729,7 +754,11 @@ Output:
 - STIX `Indicator` SCO with `pattern` (vendor-specific or a STIX pattern if
   the detection exposes one), `pattern_type`, `valid_from`, `confidence`
   mapped from `finding.confidence`, `name` from `finding.title`, and
-  `indicator_types` from `finding.types[]`.
+  `indicator_types` from `finding.types[]` — by convention, MITRE ATT&CK
+  technique IDs (e.g., `T1486`, `T1078.004`) where vendors emit them. This
+  is the canonical path for technique data into the interpretation layer;
+  hypotheses produced by the agent loop also carry technique IDs as labels
+  per 01-domain-model.md.
 - STIX `Sighting` SDO linking the indicator to the entities named in the
   detection. `Sighting.confidence` mirrors the detection's confidence.
 - If `evidence.*` is a nested OCSF event, it is recursively normalized
@@ -955,7 +984,7 @@ expectation than transient.
 
 The classification is computed by the resolver from per-binding outcomes:
 
-```
+```text
 all bindings succeeded             -> COMPLETE
 some succeeded, some failed         -> PARTIAL    (fan-out only)
 no bindings applicable to input     -> UNAVAILABLE_TENANT
@@ -1449,15 +1478,24 @@ review if the boundary between observation and interpretation needs to be
 re-litigated.
 
 **Action dispatch / write-side adapter contract is deferred to a v0+1
-thread.** This spec covers the read side: 22 query verbs, the binding /
-resolver / normalizer pipeline, and the `CapabilityResult` envelope. The
-write side — the agent-facing `request_action` tool, write-side adapter
-operations, the `adapter_request_id` correlation contract that 04-action-authorization.md §6.1
+thread.** This spec covers the read side: 22 query verbs (plus the §2.9
+external case lookup verbs), the binding / resolver / normalizer pipeline,
+and the `CapabilityResult` envelope. The write side — the agent-facing
+`request_action` tool, write-side adapter operations, the
+`adapter_request_id` correlation contract that 04-action-authorization.md §6.1
 and 02-persistence.md §3 `ActionDispatched` reference, and the action fixtures
 that mirror §9 read fixtures — is referenced by the auth and persistence
 specs but not designed here. It is the next thread to spawn before code,
-not a v0-time omission to paper over. Until it lands, action dispatch in
-v0 prototype runs against fixture stubs only.
+not a v0-time omission to paper over. The action-type taxonomy this
+contract serves is broader than containment-class actions: ticketing
+(`ticket.create`, `ticket.update`), TI publication (`ioc.publish_to_misp`,
+`ioc.publish_to_isac`, `ti.contribute_to_attack`), document delivery
+(`document.deliver`), comms (`comm.post`, `comm.page`), and IT-operations
+(`host.reimage`, `credential.reset`) all use the same contract — see
+07-post-conclusion-outputs.md §7 and §8 for the post-conclusion action
+categories and 04-action-authorization.md §2 for the consolidated
+categorization table. Until the contract lands, action dispatch in v0
+prototype runs against fixture stubs only.
 
 ---
 

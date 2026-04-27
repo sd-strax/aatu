@@ -87,7 +87,7 @@ See §6 for the layered approach (structured-in-event, transcripts-by-reference,
 
 All events share a common envelope:
 
-```
+```text
 EventEnvelope
   event_id          UUID v7 (time-ordered; primary key)
   aggregate_id      grouping--<uuid>
@@ -135,7 +135,10 @@ Action lifecycle (see 04-action-authorization.md §3 for the action model and §
 - `ActionReversed` — payload: original_action_id, reversing_action_id, reversal_interpretation_id. The reversing action is itself a new x-action (with its own `ActionRequested` etc.); this event records that the original's status moves to REVERSED on the reversing action's success.
 - `PolicyEvaluated` — payload: action_id, evaluations (list of `{policy_ref, policy_version (content_hash), would_have_fired: bool, effect (AUTO_APPROVE | REQUIRE_TWO_PARTY | DENY), shadow: bool}`), matched_policy_ref (the policy whose effect actually drove authorization, or null if all matching policies were shadow and the action fell through to the manual flow). Recorded once per action-request, in the same aggregate transaction as `ActionRequested`. Captures both firing and shadow-mode policies — the shadow audit (04-action-authorization.md §4.4) reads `would_have_fired = true AND shadow = true` from this event stream.
 
-Total: ~18 event types at v0. Named after analyst verbs. No derived-fact events. No fork events (deferred to v1+ — taxonomy stays clean enough that forking can be added without schema migration).
+Cross-investigation linkage (see 07-post-conclusion-outputs.md §5):
+- `InvestigationLinked` — payload: other_investigation_ref (`grouping--<uuid>`, must be in same tenant), relation (`see-also` | `follow-up-of` | `spawned-by` | `duplicate-of` | `supersedes`), rationale, linkage_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "linkage"); shared `correlation_id` ties them. The inverse linkage projects automatically from the other investigation's perspective in the linkage projection — only one event is appended.
+
+Total: ~19 event types at v0+. Named after analyst verbs. No derived-fact events. No fork events (deferred to v1+ — taxonomy stays clean enough that forking can be added without schema migration).
 
 ### Why these and not others
 
@@ -277,7 +280,7 @@ The reasoning-thread UI walks Interpretations and renders Layer A inline. "Show 
 
 Every event records a human principal. AI involvement is captured as a delegate, never as a standalone principal.
 
-```
+```text
 actor
   principal       { user_id, display_name }       -- always a human
   delegate?       { agent_id, agent_kind, model } -- optional; the AI agent if any
@@ -308,9 +311,9 @@ This is a *write-time check*, not a stored property. The event captures what was
 - **Forking-as-branching.** Designed-out at v0; taxonomy stays clean enough to add without breaking changes.
 - **Replay-as-re-execution.** Replay-as-reading works at v0 (walk the event stream, render the thread). Re-running an investigation against new data or a different model is v1+ and will require additional design — particularly around determinism of AI calls and how forked-and-replayed investigations relate to their source.
 - **Snapshots.** Add when fold latency demands; not before.
-- **Cross-investigation linkage events.** Tag, "see-also," and similar relations between investigations. Add when product demand surfaces; do not pre-design.
+- **Cross-investigation linkage events.** Surfaced as `InvestigationLinked` events at v0+ (07-post-conclusion-outputs.md §5). Richer relations beyond the v0+ enum (`see-also` | `follow-up-of` | `spawned-by` | `duplicate-of` | `supersedes`) — campaign trees, cluster relations, attribution chains — may surface later as product demand drives.
 - **Policy snapshots on events.** Add only if regulatory drivers require policy-at-time-of-decision in the audit trail.
-- **Catch-up subscriptions across services.** Postgres LISTEN/NOTIFY or polling suffices at v0 scale. Revisit when service count grows.
+- **Cross-process event distribution.** Persistence guarantees atomic event-append + projection-update. Component-architecture-level distribution is now specified: post-commit `NOTIFY` per `(tenant_id, investigation_id, event_type)` for projection deltas to WebSocket-connected IDEs (05-component-architecture.md §4.3, §8.1); Temporal workflow signals for orchestration (05 §3.3, with the top-level `InvestigationLifecycleWorkflow` receiving signals on major investigation events at v1+). The two are complementary — projection deltas drive UI freshness; workflow signals drive durable orchestration.
 - **Detection authoring as a feature.** The investigation event stream and the reasoning-thread projection are designed to support a future detection-authoring tool — analyst marks parts of an investigation as the basis for a detection rule, the tool generates rule code, and the rule is pushed through the 04-action-authorization.md push-to-production flow (T3, see §2 Action Categorization). The authoring tool itself is not specified in any v0 thread; the data model accommodates it without further change. References to "detection authoring" in §1 (decision summary), §3 (event indexing), and §4.2 (projection consumers) are about supporting this future use case, not committing to build it in v0.
 - **Action dispatch / write-side adapter contract.** Persistence assumes the capability layer dispatches actions and returns `adapter_request_id` for correlation in `ActionDispatched` events. The capability spec covers the read side; the write side is deferred to a follow-on thread (03-capability-layer.md §10). Until that thread lands, `ActionDispatched` events in v0 prototype carry fixture-stub adapter ids.
 
