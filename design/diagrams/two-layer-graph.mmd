@@ -1,0 +1,137 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f4f4f5', 'primaryTextColor': '#0a0a0a', 'primaryBorderColor': '#52525b', 'lineColor': '#52525b', 'fontFamily': 'ui-sans-serif, system-ui, -apple-system, sans-serif'}}}%%
+flowchart TB
+
+    %% =========================================================
+    %% External world
+    %% =========================================================
+    subgraph EXT["External tools (per tenant)"]
+        direction LR
+        EDR["EDR<br/>(CrowdStrike, Defender)"]
+        SIEM["SIEM<br/>(Splunk, Sentinel)"]
+        IAM["IAM / Mail<br/>(Okta, M365)"]
+        OCSF_NATIVE["AWS Security Lake<br/>(native OCSF)"]
+    end
+
+    %% =========================================================
+    %% Capability layer
+    %% =========================================================
+    subgraph CAP["Capability layer — pure I/O + normalization (03-capability-layer.md)"]
+        direction LR
+        ADAPTERS["Adapters<br/>(MCP / native APIs / custom)"]
+        NORM["Normalizers<br/>vendor JSON → OCSF"]
+        DETFIND["detection_finding<br/>normalizer (§4.12)<br/><i>the one exception</i>"]
+        ADAPTERS --> NORM
+        ADAPTERS --> DETFIND
+    end
+
+    %% =========================================================
+    %% Telemetry layer
+    %% =========================================================
+    subgraph TEL["TELEMETRY LAYER — immutable, append-only"]
+        direction LR
+        OCSF1["OcsfEvent<br/>class_uid: 1007<br/>process_activity"]
+        OCSF2["OcsfEvent<br/>class_uid: 3002<br/>authentication"]
+        OCSF3["OcsfEvent<br/>class_uid: 4001<br/>network_activity"]
+    end
+
+    %% =========================================================
+    %% Interpretation layer
+    %% =========================================================
+    subgraph INT["INTERPRETATION LAYER — mutable, deterministic identity (UUIDv5)"]
+        direction TB
+
+        subgraph ENTITIES["Entities (STIX SCOs)"]
+            direction LR
+            E_IP["ipv4-addr<br/>8.8.8.8"]
+            E_HOST["x-host<br/>WIN-DC01"]
+            E_USER["user-account<br/>alice@corp"]
+            E_PROC["process<br/>powershell.exe"]
+        end
+
+        subgraph OBS["Observations"]
+            direction LR
+            OD["ObservedData"]
+            SIGHT["Sighting<br/>confidence: HIGH"]
+        end
+
+        subgraph JUDGE["Judgments"]
+            direction LR
+            HYP["x-hypothesis<br/>'lateral movement<br/>from DC01'"]
+            PRED["x-prediction"]
+            IND["Indicator"]
+            REP["Report<br/>(conclusion)"]
+        end
+
+        subgraph OPS["Operations"]
+            direction LR
+            ACT["x-action<br/>host.isolate<br/>tier: T2"]
+        end
+
+        subgraph REASON["Reasoning trail"]
+            direction LR
+            INTERP["x-interpretation<br/>(extraction, hypothesis,<br/>support, pivot, action-*,<br/>conclusion)"]
+        end
+
+        subgraph CONTAIN["Containers"]
+            direction LR
+            GRP["Grouping = INVESTIGATION<br/>+ Seed<br/>+ Lifecycle<br/>+ ReasoningThread<br/>+ ConclusionSlot"]
+        end
+    end
+
+    %% =========================================================
+    %% Flows
+    %% =========================================================
+    EDR --> ADAPTERS
+    SIEM --> ADAPTERS
+    IAM --> ADAPTERS
+    OCSF_NATIVE --> ADAPTERS
+
+    NORM --> OCSF1
+    NORM --> OCSF2
+    NORM --> OCSF3
+
+    DETFIND -.->|"bypass:<br/>vendor detection<br/>is already a judgment"| SIGHT
+    DETFIND -.-> IND
+
+    %% Cross-layer edges
+    OCSF1 -.->|extracted-from| E_PROC
+    OCSF2 -.->|extracted-from| E_USER
+    OCSF3 -.->|extracted-from| E_IP
+    OCSF1 -.->|derived-from| OD
+
+    %% Within interpretation layer
+    OD --> SIGHT
+    SIGHT -->|x-supports| HYP
+    HYP --> PRED
+    HYP -.->|leads to| ACT
+    HYP --> REP
+
+    %% Investigation membership
+    E_IP -.->|member-of| GRP
+    E_HOST -.->|member-of| GRP
+    HYP -.->|member-of| GRP
+    ACT -.->|member-of| GRP
+    SIGHT -.->|member-of| GRP
+
+    %% Reasoning trail produces everything
+    INTERP -.->|produced-by| HYP
+    INTERP -.->|produced-by| ACT
+    INTERP -.->|produced-by| SIGHT
+    GRP -->|ReasoningThread| INTERP
+
+    %% =========================================================
+    %% Styling
+    %% =========================================================
+    classDef telemetry fill:#fef3c7,stroke:#92400e,stroke-width:1px,color:#451a03
+    classDef interpretation fill:#dbeafe,stroke:#1e40af,stroke-width:1px,color:#172554
+    classDef capability fill:#e0e7ff,stroke:#3730a3,stroke-width:1px,color:#1e1b4b
+    classDef external fill:#f4f4f5,stroke:#52525b,stroke-width:1px,color:#18181b
+    classDef exception fill:#fee2e2,stroke:#991b1b,stroke-width:1.5px,color:#450a0a
+    classDef investigation fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#052e16
+
+    class OCSF1,OCSF2,OCSF3 telemetry
+    class E_IP,E_HOST,E_USER,E_PROC,OD,SIGHT,HYP,PRED,IND,REP,ACT,INTERP interpretation
+    class ADAPTERS,NORM capability
+    class EDR,SIEM,IAM,OCSF_NATIVE external
+    class DETFIND exception
+    class GRP investigation
