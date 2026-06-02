@@ -654,6 +654,8 @@ The paid distribution exists to satisfy two distinct buyers, each motivated by a
 
 Both modules are additive, both are independently licensable, and they share no dependencies that would force a customer to buy both. This is TR-26 hook 1 and TR-26 hook 2, satisfied by construction.
 
+There is **no third paid conversion hook into workflow-shaped/T1-volume work**, by design. The open-core commitment is to the judgment-shaped half of the SOC's work — novel investigations, hunts, response under uncertainty. The workflow-shaped half (alert triage, fixed-step enrichment, high-volume auto-containment) is SOAR's domain and remains so. The architecture would let aatu's reasoning loop run at T1 volume; the product won't, because forcing an LLM loop onto playbook-shaped work is bad economics (LLM tokens per FP-close) and worse reliability (a directed playbook is more deterministic than an LLM deciding to investigate a known-FP class). Coexistence with SOAR (TR-18) is not just about delegating writes — it's about respecting that workflow-shaped and judgment-shaped work want different primitives, and the two products serve different shapes of work, not different tiers of analyst.
+
 ---
 
 ## 14. Companion edits to upstream specs

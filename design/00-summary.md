@@ -8,6 +8,8 @@ A starting point for new UX and implementation conversations. Seven detailed spe
 
 "Cursor for SOC analysts" — an AI-native investigation environment that coexists with the customer's existing SIEM/SOAR rather than replacing them. The pitch: **capability-driven AI assembly conditioned on institutional tribal knowledge**, where state-changing actions dispatch through aatu's capability layer or delegate to existing SOAR playbooks (analyst's choice, same authorization gates), and every action is audit-traced from the byte of telemetry that justified it.
 
+**Where SOAR encodes workflow-shaped work, aatu supports judgment-shaped work.** The two coexist along this axis, not along analyst tiers. SOAR is the right primitive when the steps are knowable in advance (alert triage, fixed-step enrichment, high-volume auto-containment). aatu is the right primitive when they aren't (novel investigations, hunts, multi-source pivoting, response under uncertainty). The architecture *could* run aatu's reasoning loop at T1 alert-triage volume; the product *won't*, because workflow-shaped work is SOAR's job and forcing an LLM loop onto it is bad economics and worse reliability. Analyst title (T2, T3, hunter) doesn't pick the tool — the shape of the case in front of them does.
+
 Open-core: the engine, all connectors, and the reasoning loop are OSS. Two paid modules — **tenancy** (multi-tenant operation, MSSP consolidation) and **governance** (SSO/RBAC tooling, signoff queues, compliance audit) — are independently licensable and run self-hosted on customer infra or aatu-hosted.
 
 Personas: threat hunters and IR responders (not T1/T2 triage).
