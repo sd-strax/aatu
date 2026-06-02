@@ -423,6 +423,23 @@ The AI does *not* know whether a policy auto-approved; from its perspective the 
 
 Importantly, the AI can never construct an `Authorization` record or set `status` directly — those fields are write-protected. **Enforcement lives in the investigation aggregate's command handler** (the single write path for action and interpretation events; see 02-persistence.md §2.1 and §4 for the aggregate boundary): commands whose envelope `actor.kind == AI_DELEGATED` are validated against an allowlist of fields, and `Authorization` and `status` are excluded from that list. The guard sits at the same layer as the optimistic-concurrency check, not in application code, so it cannot be bypassed by alternate code paths.
 
+### 5.7 Approval gate ownership for SOAR-delegated actions
+
+When an action dispatches through a SOAR_PLAYBOOK binding, the downstream orchestrator (Tines, Torq, etc.) may have its own approval step inside the playbook — that's how the customer's pre-aatu workflow was designed. To avoid a hidden assumption, the binding declares who owns the gate.
+
+```text
+Binding (on a SOAR_PLAYBOOK adapter):
+  external_approval_substitutes_aatu   bool (default: false)
+```
+
+- **Default (`false`)** — aatu's authorization gate fires as it would for any action: policy evaluates, analyst approves (or auto-approves), only then does the SOAR playbook get invoked. Any approval step inside the playbook is the customer's choice; aatu doesn't know about it and doesn't try to coordinate with it. If the customer leaves a Slack-approval step in the playbook, the analyst will see two approval surfaces — that's the customer's call to remove the redundant gate.
+
+- **Opt-in (`true`)** — the customer explicitly delegates the gate. aatu skips its `ActionLifecycle` approval state, dispatches immediately on AI proposal, and the playbook's own approval flow becomes the source of truth. The `Authorization` sub-record records `mode: EXTERNAL_DELEGATED` and `primary_approver_ref` is populated from the SOAR's callback once the orchestrator confirms approval. The `audit_depth: EXTERNAL` on the Execution record makes the delegated gate visible to reviewers.
+
+Default-safe posture: most bindings double-gate naturally (aatu's gate + whatever the playbook does internally). Friction is recoverable; an unauthorized state-changing action isn't. The opt-out is per binding and requires `policy_signer` sign-off (governance-module concern in `gated` mode).
+
+The `mode: EXTERNAL_DELEGATED` value is a sixth `Authorization.mode` value alongside `MANUAL`, `AUTO_POLICY`, `TWO_PARTY` — it indicates the gate was held outside aatu and trades audit detail for delegation flexibility.
+
 ---
 
 ## 6. Failure modes
@@ -434,8 +451,19 @@ Execution:
   dispatched_at          timestamp
   adapter                string (which capability adapter handled the call,
                          e.g., "crowdstrike_falcon", "defender_xdr_mcp",
+                         "tines_playbook:isolate_host",
                          "fixture:<scenario>"; see 03-capability-layer.md §5.4)
   adapter_request_id     string (correlation id from the adapter)
+  dispatched_via         DIRECT | SOAR_PLAYBOOK (which AdapterClass route
+                         was taken; DIRECT = native vendor API call,
+                         SOAR_PLAYBOOK = delegated to an external playbook
+                         orchestrator. See 03 for the adapter-class enum.)
+  audit_depth            FULL | EXTERNAL (FULL = aatu observed every step
+                         of the outbound call chain; EXTERNAL = the
+                         downstream system's internal steps are opaque to
+                         aatu — reviewers needing the full chain pull
+                         from that system's own logs. Defaults: FULL for
+                         DIRECT, EXTERNAL for SOAR_PLAYBOOK.)
   attempts               list<Attempt>
   final_outcome          SUCCEEDED | FAILED | PARTIAL | TIMEOUT
   per_target_results     map<target_index, OK | FAIL | UNKNOWN>
@@ -449,6 +477,8 @@ Attempt:
   error_class            optional string
   error_detail           optional string
 ```
+
+**`audit_depth` and the SOAR boundary.** When an action dispatches through a SOAR_PLAYBOOK binding, aatu can record the call to the orchestrator (inputs, the playbook id, the final outcome the orchestrator returns) but not the orchestrator's internal steps. `audit_depth: EXTERNAL` marks the audit chain as truncated at the orchestrator boundary so compliance reviewers know they need to pull the SOAR's own logs to complete the chain. Direct vendor-API dispatch records `audit_depth: FULL` — aatu observed the whole call.
 
 ### 6.2 The categories
 
@@ -493,6 +523,16 @@ For action types with a `reversible_by`:
 ### Effect-based vs action-based reversal
 
 I considered modeling "the host is currently isolated" as durable state on the entity (an `x-isolation-state`) so reversal could target the *state* rather than the *action*. Rejected for v0: the system isn't the source of truth on entity state in the world (the EDR is). Reasoning over a mirrored state field invites drift. Tracking reversal at the action level is honest: "we took this action and have not yet taken its inverse." If the host was un-isolated out-of-band by the EDR admin, that's not our reversal but it's also not pretending to be.
+
+### Per-binding reversibility override
+
+SOAR_PLAYBOOK bindings (and in principle any binding) may further constrain reversibility. The action-type manifest declares the *baseline* reversibility classification (REVERSIBLE / BEST_EFFORT / IRREVERSIBLE — implicit in `reversible_by` being non-null or null). Each binding may declare an optional `reversibility_override` that can only *downgrade* the classification, never upgrade it.
+
+Why: a customer's Tines playbook may bundle effects the descriptor's inverse can't undo (e.g., a `host.isolate` playbook also archives the host's session log to S3 with no restore path). The bound action is effectively IRREVERSIBLE for that binding even though `host.isolate` is REVERSIBLE in general. The analyst sees the *effective* classification (descriptor ∩ binding override) at approval time, with a tooltip showing why if it differs from the descriptor.
+
+Upgrade is structurally rejected — claiming a binding makes an IRREVERSIBLE action reversible is unsafe and never permitted. The binding declaration goes through the same `policy_signer` sign-off as any other tenant-authored policy (governance-module concern when `governance_mode: gated`; in `lightweight` mode the parent role suffices).
+
+The `audit_depth` on the reversing action's `Execution` record is independent — a SOAR_PLAYBOOK reversal records `audit_depth: EXTERNAL` just like a SOAR_PLAYBOOK forward dispatch.
 
 ---
 

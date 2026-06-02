@@ -6,7 +6,9 @@ A starting point for new UX and implementation conversations. Seven detailed spe
 
 ## What aatu is
 
-"Cursor for SOC analysts" — an AI-native investigation environment with vertically-integrated remediation. The pitch: replace playbook-based SOAR with **capability-driven AI assembly conditioned on institutional tribal knowledge**, where every state-changing action is audit-traced from the byte of telemetry that justified it.
+"Cursor for SOC analysts" — an AI-native investigation environment that coexists with the customer's existing SIEM/SOAR rather than replacing them. The pitch: **capability-driven AI assembly conditioned on institutional tribal knowledge**, where state-changing actions dispatch through aatu's capability layer or delegate to existing SOAR playbooks (analyst's choice, same authorization gates), and every action is audit-traced from the byte of telemetry that justified it.
+
+Open-core: the engine, all connectors, and the reasoning loop are OSS. Two paid modules — **tenancy** (multi-tenant operation, MSSP consolidation) and **governance** (SSO/RBAC tooling, signoff queues, compliance audit) — are independently licensable and run self-hosted on customer infra or aatu-hosted.
 
 Personas: threat hunters and IR responders (not T1/T2 triage).
 Workflows: investigation (entity-rooted) and hunting (hypothesis-rooted) — same loop, different entry points.
@@ -33,26 +35,21 @@ Differentiator vs. existing SOAR: investigation-engine-with-judgment-applied, no
 
 ---
 
-## Two deployment shapes
+## Two distributions, one binary; operator orthogonal
 
-| | Solo localhost | Multi-tenant SaaS |
+| | OSS | Paid |
 |---|---|---|
-| Hosting | Analyst's laptop | aatu-operated cloud |
-| Tenants | Personal tenant of one | Many tenants, RLS by `tenant_id` |
-| Postgres | Bundled (embedded-postgres-go) | Managed |
-| Temporal | Bundled (dev mode, shared Pg) | Managed cluster, per-tenant namespaces |
-| Identity | aatu Keycloak (subscriber) | aatu Keycloak (org IdPs federated upstream) |
-| Vendor credentials | OS keychain | Vault, per-tenant paths |
-| Side stores (Layer B) | Local Pg side tables | S3, per-tenant prefixes |
-| Knowledge service | pgvector on bundled Pg | pgvector on managed Pg |
-| Multi-analyst | No | Yes (shared investigation) |
-| Async approval | Optional via configured `approver_emails` | First-class via approval-relay + email/Slack |
-| Vendor read calls | From laptop, per-analyst credentials | Configurable: laptop or cloud worker fleet |
-| Vendor write calls | Fixture-only at v0; real on laptop at v1 | Always cloud-side via Temporal workers |
+| Modules loaded | engine only | engine + tenancy and/or governance |
+| Tenants | single tenant (`tenant_id` defaults to 1) | multi-tenant if tenancy module is on |
+| Postgres | bundled (`embedded-postgres-go`) | managed typical; bundled still works |
+| Temporal | bundled (dev mode, shared Pg) | managed cluster typical |
+| Keycloak | bundled, single realm | bundled or managed; multi-realm if tenancy on |
+| Vendor credentials | `keychain://` (laptop) or `env://`/`vault://` (server) | `vault://` per tenant |
+| Knowledge service | pgvector on the chosen Pg | same |
+| Multi-analyst | yes, within the single tenant | yes, across tenants if tenancy on |
+| Operator | always customer | customer (self-hosted) OR aatu (aatu-hosted) — same Terraform |
 
-The "lift" from solo to SaaS preserves the analyst's tenant namespace UUID, replays events, and copies side stores. STIX ids stay stable across the lift. This is sub-path A. Sub-path B (joining an existing tenant) defaults to "personal scratch alongside" the new shared tenant.
-
-Per-tenant VM offering: explicitly skipped. Solo or SaaS; nothing in between.
+OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-install); server-hosted multi-user is the same binary with different config. Paid runs as either a customer-operated deployment or an aatu-operated deployment — the binary, the Terraform, and the dependency set are identical. Lift sub-path A consolidates N OSS instances into one paid multi-tenant instance, preserving namespace UUIDs so STIX ids stay stable. Sub-path B (joining an existing tenant) defaults to "personal scratch alongside" the new shared tenant.
 
 ---
 
@@ -63,15 +60,18 @@ Per-tenant VM offering: explicitly skipped. Solo or SaaS; nothing in between.
 | Stack | Go everywhere; one binary across both shapes |
 | Local Postgres | Bundled |
 | Local Temporal | Bundled (dev mode, sharing Pg) |
-| Identity | aatu-operated Keycloak; subscribers are native, orgs federate upstream |
+| Identity | Keycloak is the trust root in every deployment; customer IdPs federate upstream via SAML/OIDC |
 | Roles | Live in IdP, carried in JWT; aatu does not cache or mirror roles |
 | Token policy | No valid token, no operation (workflow-context exception for Temporal) |
 | LLM keys | BYOK; never seen by backend |
 | Agent loop | Client-side (VS Code extension); CLI is for domain ops at v0 |
 | Adapter packaging | Out-of-process JSON-RPC, MCP-compatible |
-| Multi-tenant locally | No; solo is single-tenant |
-| Multi-tenant SaaS | Yes, with shared investigation |
-| Skip per-tenant VM | Yes (deal-driven later if ever) |
+| Open-core line | Gate operation and governance; never gate investigative capability or connectors |
+| OSS distribution | Engine + all adapter classes + reasoning loop + single-realm Keycloak/Pg/Temporal; runs anywhere |
+| Paid distribution | OSS engine + tenancy and/or governance modules; self-hosted or aatu-hosted (operator-orthogonal) |
+| Multi-tenant | A paid tenancy-module switch; tenant primitive is core (`tenant_id` always exists, defaults to 1 in OSS) |
+| Governance mode | `lightweight` (write-it-use-it) or `gated` (draft → in-review → published → retired); deployment config, both in engine |
+| SOAR delegation | `AdapterClass = SOAR_PLAYBOOK` alongside MCP/NATIVE_API/CUSTOM/FIXTURE; analyst's choice per action |
 | AI as principal | Never; AI is always a delegate |
 | Domain vocabulary | STIX 2.1 (interpretation) + OCSF (telemetry) |
 | Domain identity | Deterministic UUIDv5 within per-tenant namespace |
@@ -238,7 +238,7 @@ These are deliberate non-priorities. Don't engage with them in v0–v2 conversat
 - Multi-analyst on the laptop (v3+ if ever)
 - MSP / hierarchical tenancy (v3+ on customer demand)
 - Cross-tenant indicator pool (v3+ on customer demand)
-- Per-tenant VM hosted offering (deferred indefinitely; only if a deal forces it)
+- Licensing infrastructure for paid modules (bolt-on later; v0–v1 ships honor-system config flag; signed offline-verifiable entitlement file is the future format — see 05 §13.4)
 - Mobile app (v3+)
 - Forking-as-branching investigations (data model accommodates it; no scheduled work)
 - Replay-as-re-execution (replay-as-reading works at v0; re-running is v1+ research)
@@ -253,8 +253,8 @@ These are deliberate non-priorities. Don't engage with them in v0–v2 conversat
 |---|---|---|---|
 | **v0** | Solo localhost only | Read fixtures + write fixture stubs; agent loop functional; SOPs functional with keyword retrieval | No real integrations. Knowledge service has SOP CRUD and basic retrieval, no embeddings. |
 | **v1** | Solo localhost | Real read integrations across EDR, SIEM, IdP, TI, comms, ticketing, MDM; write-side adapter contract lands; T2/T3 actions live | Cross-cutting concerns actively exercised. Knowledge service adds embeddings + post-conclusion summaries. |
-| **v2** | Solo localhost + multi-tenant SaaS | Both shapes. Shared investigation. Async approvals via aatu relay. Vault-based vendor credentials in SaaS. Federated org IdPs upstream | SaaS deployment goes live. Lift sub-path A becomes a customer-facing flow. SOC 2 / compliance work begins. |
-| **v3+** | (deferred) | MSP / hierarchical tenancy; cross-tenant indicator pool; detection authoring tooling | Each gated on real customer need. |
+| **v2** | OSS + paid distribution (self-hosted and aatu-hosted) | Paid tenancy and governance modules launch. Async approvals via relay. Vault-based vendor credentials. Customer IdPs federate upstream of Keycloak. | Paid distribution goes live in both operator modes. Lift sub-path A consolidates OSS instances into paid multi-tenant. SOC 2 / compliance work begins for aatu-hosted. |
+| **v3+** | (deferred) | MSP / hierarchical tenancy; cross-tenant indicator pool; detection authoring tooling; signed offline-verifiable entitlement licensing | Each gated on real customer need. |
 
 ---
 

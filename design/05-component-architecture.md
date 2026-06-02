@@ -35,18 +35,21 @@ This spec defines the component topology, deployment shapes, authentication, the
 | Concern | Decision | Reasoning |
 |---|---|---|
 | Backend language | Go everywhere | Single binary distribution, low cold-start, healthy MCP / cloud-native ecosystem; STIX/OCSF library landscape is workable in any language given the spec's deviations and the codegen-from-schema approach to OCSF |
-| Deployment shapes | Solo localhost + multi-tenant SaaS | Skip per-tenant VM tier — competes with SaaS for the same buyer with worse economics for both |
-| Local Postgres | Bundled (`embedded-postgres-go`) | Analyst UX; same Postgres also hosts Temporal persistence and the local pgvector for the knowledge service |
-| Local Temporal | Bundled (Temporal CLI dev server, Postgres-backed) | Eliminates handrolled task-queue plumbing for action expiry, dispatch retries, reversal sagas, re-normalization, archive bundling, and the post-conclusion workflow |
-| Agent loop | Client-side (extension/CLI) | BYOK LLM key never crosses to the backend; same loop code points at localhost or cloud backend identically |
-| LLM provider | BYOK | Per-analyst keys via OS keychain locally; per-analyst keys via aatu's vault in SaaS, never aatu-hosted inference at v0–v2 |
-| Adapter packaging | Out-of-process JSON-RPC, MCP-compatible | Polyglot adapter authoring; mature MCP ecosystem reuse; in-process Go plugins explicitly rejected |
-| Knowledge service | New service alongside capability layer | Hosts SOPs and concluded-investigation summaries; LLM-facing context retrieval, not telemetry production |
-| Identity provider | aatu-operated Keycloak | Authoritative for both modes; solo subscribers are native users, SaaS orgs federate their IdPs upstream |
+| Open-core line | Gate operation and governance; never investigative capability or connectors | OSS engine + all adapter classes must be standalone-usable; tenancy and governance are the paid additions; full rationale in §13 |
+| Distributions | OSS and paid; one Go binary | Module loading via separately-compilable packages (`oss/`, `paid/tenancy/`, `paid/governance/`); same binary across distributions |
+| Operator | Customer (OSS, paid self-hosted) or aatu (paid aatu-hosted); orthogonal to distribution | Same Terraform/Helm for paid regardless of operator |
+| Postgres | Bundled (`embedded-postgres-go`) in OSS; managed typical in paid; bundled still works in paid | Analyst UX in OSS; operational preference in paid |
+| Temporal | Bundled (Temporal CLI dev server, Postgres-backed) in OSS; managed cluster typical in paid | Eliminates handrolled task-queue plumbing for action expiry, dispatch retries, reversal sagas, re-normalization, archive bundling, post-conclusion workflow |
+| Agent loop | Client-side (extension/CLI) for interactive; server-side Temporal for async | BYOK LLM key never crosses to backend on interactive path; same loop code points at local or remote backend identically |
+| LLM provider | BYOK for interactive; tenant-scoped for async | Per-analyst keys via the credential-resolution scheme (§10.2); never aatu-hosted inference at v0–v2 |
+| Adapter packaging | Out-of-process JSON-RPC, MCP-compatible; classes are MCP / NATIVE_API / CUSTOM / FIXTURE / SOAR_PLAYBOOK | Polyglot adapter authoring; mature MCP ecosystem reuse; in-process Go plugins explicitly rejected; SOAR delegation is just another adapter class |
+| Knowledge service | New service alongside capability layer; `governance_mode: lightweight | gated` config | SOPs and concluded-investigation summaries; LLM-facing context retrieval; mode is a deployment config, both behaviors in OSS |
+| Identity provider | Keycloak is the trust root in every shape; customer IdPs federate upstream | OSS: bundled single-realm. Paid self-hosted: customer-operated Keycloak. Paid aatu-hosted: aatu-operated Keycloak. Backend JWT validation logic is uniform. |
 | Authorization roles | Live in IdP, carried in JWT | aatu does not cache or mirror roles; tenant admin role changes propagate on next token refresh |
 | Token policy | No valid token, no operation | No grace period for client-initiated commands; long-running Temporal workflows carry the initiating principal in workflow context |
-| Vendor credentials | Orthogonal to user identity | OS keychain locally; per-tenant vault paths in SaaS; never visible to user JWTs or the extension |
-| Action layer | Same adapter pattern as reads | Symmetric write-side; remediation, ticketing, comms, TI publication, IT operations all slot in as more action types and more adapters |
+| Vendor credentials | Orthogonal to user identity | Resolved via `keychain://`/`vault://`/`env://` (§10.2); never visible to user JWTs or the extension |
+| Action layer | Same adapter pattern as reads | Symmetric write-side; remediation, ticketing, comms, TI publication, IT operations all slot in as action types and adapters. SOAR_PLAYBOOK bindings delegate to existing playbooks; native bindings call vendors directly; analyst picks per action. |
+| Licensing | Bolt-on; honor-system at v0–v1; signed entitlement file later (air-gap compatible) | Don't boil the ocean before paying customers exist; preserve the module seam so a future license check has a single, isolated place to land |
 
 ---
 
@@ -72,11 +75,13 @@ These follow from the upstream specs and the decisions above. They are load-bear
 
 ---
 
-## 3. Solo localhost topology
+## 3. Runtime topology
+
+The aatu Go binary runs in two dependency configurations distinguished only by what Postgres / Temporal / Keycloak it points at. Solo laptop and self-hosted multi-user are both the same binary; paid runs add module-driven behavior on top. Per §13, the open-core line and the operator orthogonality govern *what* is loaded and *who* runs it; this section describes the *runtime* once.
 
 ### 3.1 Process model
 
-A single supervisor process brings up three managed components on the analyst's laptop:
+**Bundled-deps configuration** (OSS default; also valid for paid self-hosted at small scale):
 
 ```
 aatu start
@@ -84,161 +89,165 @@ aatu start
   │                        knowledge service, side stores, projections)
   ├── temporal            (dev mode; Postgres-backed; same Pg instance,
   │                        separate database)
+  ├── keycloak            (single realm bundled with the OSS install;
+  │                        multi-realm config activated by the tenancy
+  │                        module — see §4)
   └── aatu-backend        (Go: aggregate command handler, capability
-                           resolver, knowledge service, Temporal worker
-                           registered for action / archive / re-normalize
-                           / post-conclusion workflows, HTTP+WS server)
+                           resolver, knowledge service, Temporal worker,
+                           HTTP+WS server)
 ```
 
-`aatu start` runs the supervisor in the foreground or as a launchd / systemd / Windows service depending on platform. `aatu stop` performs an orderly shutdown. `aatu status` reports component health. The supervisor is responsible for cascading restarts (if Temporal exits, restart it; if Postgres exits, surface a fatal error — Postgres restarts mid-session corrupt the in-flight transactions in unpleasant ways, fail fast).
+`aatu start` runs the supervisor in the foreground or as a launchd / systemd / Windows service. `aatu stop` performs an orderly shutdown. `aatu status` reports component health. The supervisor cascades restarts (Temporal exit → restart; Postgres exit → fatal — mid-session restart corrupts in-flight transactions, fail fast).
+
+**Managed-deps configuration** (typical for paid distributions, either operator):
+
+Stateless aatu-backend workers behind a load balancer point at managed Postgres, managed Temporal, and a Keycloak deployment (either bundled-by-aatu or customer-operated HA — Keycloak remains the trust root regardless). State lives where it would in bundled mode; the difference is who operates the storage layer. Managed vs bundled is a connection-string concern, not a code-path one.
 
 ### 3.2 Postgres
 
-Bundled via the standard embedded-Postgres pattern (`fergusstrange/embedded-postgres` or equivalent). The supervisor downloads the appropriate Postgres binary on first run if not already present. Data lives under `~/.aatu/pg/`.
+Bundled via `fergusstrange/embedded-postgres` or equivalent; the supervisor downloads the binary on first run if not present, data lives under `~/.aatu/pg/`. Same schemas regardless of dependency configuration:
 
-Schemas / databases on the same instance:
 - `aatu_main` — investigation events, STIX object store, projections, side stores (`ai_tool_calls`, `ai_transcripts`)
 - `aatu_temporal` — Temporal persistence
 - `aatu_knowledge` — SOP repository, concluded-investigation summary index, pgvector embeddings (see 06)
 
-`pgvector` is required for the knowledge service. The bundled Postgres ships with the extension preinstalled; no analyst-facing setup. If a future deployment context demands an alternative (Postgres distributions without pgvector availability), the knowledge service's storage interface is abstracted enough to swap.
+`pgvector` is required for the knowledge service. The bundled Postgres ships with the extension preinstalled. Managed-deps deployments require pgvector on the chosen Postgres provider. If a future deployment context demands an alternative (Postgres distributions without pgvector availability), the knowledge service's storage interface is abstracted enough to swap.
+
+When the tenancy module is on (§4), `aatu_main` activates row-level-security policies keyed on `tenant_id`; the schema gains no new tables. Per-tenant namespace UUIDs (01-domain-model.md §3) remain the structural guarantee against cross-tenant id collision; RLS is defense-in-depth.
 
 ### 3.3 Temporal
 
-Bundled as the Temporal CLI dev server, configured to use `aatu_temporal` on the bundled Postgres. The aatu-backend process registers a Temporal worker on the same `aatu` task queue. The workflow inventory expands by stage:
+Bundled as the Temporal CLI dev server (single-binary, Postgres-backed) in OSS; managed Temporal clusters typical in larger deployments. The aatu-backend process registers a Temporal worker on the `aatu` task queue (per-tenant task queues when the tenancy module is on).
 
-**v0 workflows — durable mechanics with no agent reasoning:**
+**Workflow inventory.**
+
+v0 — durable mechanics with no agent reasoning:
 - `ActionLifecycle(action_id)` — sleeps until expiry or signal-on-approval; on approval, dispatches; handles the retry budget per 04 §6.1; emits the chain of `Action*` events
 - `ReversalSaga(reversing_action_id)` — runs the reversal action; on success, posts `ActionReversed` against the original
 - `RenormalizePass(class_uid, version_from, version_to)` — long-running batch, cancellable, checkpointed
 - `ArchiveInvestigation(grouping_id)` — bundle, sign, write to archive target
-- `PostConclusionPipeline(grouping_id)` — runs the IOC extraction, candidate-SOP generation, optional ticketing handoff (see 07)
+- `PostConclusionPipeline(grouping_id)` — IOC extraction, candidate-SOP generation, optional ticketing handoff (see 07)
 - `SummarizeForKnowledgeIndex(grouping_id)` — extracts the structured summary and embeddings written into the knowledge service (see 06)
 
-**v1 addition — top-level investigation orchestrator:**
-- `InvestigationLifecycleWorkflow(grouping_id)` — spawned at `InvestigationCreated`, lives until `InvestigationArchived`. Owns investigation-level orchestration state (active hypotheses summary, pending actions, scheduled hunts, lifecycle timers like "warn analyst if no activity for 7 days," "auto-archive if concluded for 90 days"). Receives signals on major events (interactive turn produced an Interpretation, action requested, conclusion requested). Spawns and supervises the v0 child workflows — `ActionLifecycle`, `ReversalSaga`, `PostConclusionPipeline` are reparented as children rather than independent root workflows. Survives extension restarts, laptop reboots, and — in SaaS — multi-analyst handoff. **The lifecycle workflow does not drive interactive analyst turns**; it tracks them as observed signals while the extension owns the interactive loop.
+v1 addition — top-level investigation orchestrator:
+- `InvestigationLifecycleWorkflow(grouping_id)` — spawned at `InvestigationCreated`, lives until `InvestigationArchived`. Owns investigation-level orchestration state (active hypotheses summary, pending actions, scheduled hunts, lifecycle timers like "warn analyst if no activity for 7 days," "auto-archive if concluded for 90 days"). Receives signals on major events. Spawns and supervises v0 child workflows — `ActionLifecycle`, `ReversalSaga`, `PostConclusionPipeline` reparent as children rather than independent roots. Survives extension restarts, host reboots, and (with tenancy module) multi-analyst handoff. **Does not drive interactive analyst turns**; tracks them as observed signals while the extension owns the interactive loop.
 
-**v2 additions — server-side agent loops for async work:**
-- `BackgroundHuntWorkflow(investigation_ref, hunt_spec)` — analyst kicks off "find all signs of lateral movement in the past 72 hours" and goes home. The workflow drives its own agent loop server-side using a tenant-scoped LLM credential (vault path in SaaS, OS keychain in solo) — separate from per-analyst BYOK keys. Dispatches tool calls through the same capability layer; records Interpretations against the parent investigation; notifies the analyst on completion via Slack / email / IDE notification.
-- `ScheduledInvestigationWorkflow(spec)` — cron-shaped periodic re-runs ("re-run this hunt every 6 hours and alert on new findings"); same agent-loop substrate as `BackgroundHuntWorkflow`.
+v2 additions — server-side agent loops for async work:
+- `BackgroundHuntWorkflow(investigation_ref, hunt_spec)` — analyst kicks off "find all signs of lateral movement in the past 72 hours" and goes home. The workflow drives its own agent loop server-side using tenant-scoped LLM credentials (resolved via the credential indirection scheme §10.2 — separate from per-analyst BYOK keys). Records Interpretations against the parent investigation; notifies the analyst on completion.
+- `ScheduledInvestigationWorkflow(spec)` — cron-shaped periodic re-runs; same agent-loop substrate.
 
-The Temporal worker pool runs in the same OS process as the aatu-backend; there is no separate worker binary. This keeps the local install at three managed processes (Postgres, Temporal server, aatu-backend) rather than four. v1 and v2 additions do not change the process count; they're additional registered workflows on the same worker.
+Tenant lifecycle workflows (tenancy-module only, see §4.3): `ProvisionTenant`, `SuspendTenant`, `DecommissionTenant`, `LiftSolo`.
+
+The Temporal worker pool runs in the same OS process as the aatu-backend; there is no separate worker binary. The OSS install stays at three managed processes (Postgres, Temporal server, aatu-backend) plus bundled Keycloak. v1/v2 additions do not change the process count.
 
 ### 3.4 Agent loop and capability adapters
 
 **Interactive vs async execution boundary.** The agent's reasoning runs in two places by design:
 
 - **Interactive synchronous turns** (analyst types, AI responds, tools dispatch in real time) run **client-side in the VS Code extension**. The extension holds the analyst's BYOK LLM key in the OS keychain; the LLM call goes from the extension directly to the provider; the backend never sees the LLM key in this path.
-- **Async / long-running agent work** (background hunts at v2+, scheduled re-runs at v2+, post-conclusion summary generation, candidate-SOP drafting) runs **server-side as a Temporal workflow**, using **tenant-scoped LLM credentials** (vault path in SaaS, OS keychain in solo) — a separate credential from per-analyst BYOK keys.
+- **Async / long-running agent work** (background hunts at v2+, scheduled re-runs at v2+, post-conclusion summary generation, candidate-SOP drafting) runs **server-side as a Temporal workflow**, using **tenant-scoped LLM credentials** resolved per §10.2 — a separate credential from per-analyst BYOK keys.
 
 Why two paths:
-- Interactive turns need sub-second token streaming and the lowest-latency dispatch possible. Temporal activity overhead is fine for minutes-to-hours work, less fine for back-and-forth turns.
-- Async work needs durability — the IDE may not be open, the laptop may be closed, the analyst may have handed off to a colleague. State has to live somewhere outside the extension process. Temporal is exactly that.
-- The credential separation is deliberate: per-analyst BYOK keys stay analyst-private and are never used by server-side workflows. Server-side workflows use tenant-configured credentials, which the tenant admin can scope, audit, and rotate independently.
+- Interactive turns need sub-second token streaming. Temporal activity overhead is fine for minutes-to-hours work, less fine for back-and-forth turns.
+- Async work needs durability — the IDE may not be open, the host may be down, the analyst may have handed off. State has to live outside the extension process. Temporal is exactly that.
+- Credential separation is deliberate: BYOK keys stay analyst-private and are never used by server-side workflows. Server workflows use tenant-configured credentials, which the tenant admin can scope, audit, and rotate independently.
 
-The two paths share the same capability layer, the same knowledge service, the same authorization gates, the same aggregate. They write Interpretations to the same reasoning thread. Audit is uniform: principal recorded on every Interpretation, delegate recorded as the AI agent (whether running client-side or server-side), provenance recorded on every output.
+Both paths share the same capability layer, knowledge service, authorization gates, and aggregate. They write Interpretations to the same reasoning thread. Audit is uniform: principal recorded on every Interpretation, delegate recorded as the AI agent (whether running client-side or server-side), provenance recorded on every output.
 
 **Interactive turn mechanics.** The VS Code extension (or CLI when it grows an agent surface, post-v0) holds the BYOK LLM key in the OS keychain. On session start it:
-1. Authenticates against aatu's Keycloak via PKCE OAuth flow, caches the token
-2. Calls `/capabilities` on the local backend to fetch the capability descriptor list, trimmed to verbs whose tenant config resolves to a healthy binding
+1. Authenticates against Keycloak via PKCE OAuth flow, caches the token
+2. Calls `/capabilities` on the backend to fetch the capability descriptor list, trimmed to verbs whose tenant config resolves to a healthy binding
 3. Calls `/knowledge/tools` to fetch the knowledge-service tool descriptors (SOP recall, similar-investigation recall)
 4. Constructs LLM tool definitions from the union; system prompt includes aatu's reasoning conventions and the implicit-retrieval results for the current investigation context
 
 When the LLM emits a tool call, the extension dispatches it to the backend at `/capability/<verb>` or `/knowledge/<op>` (HTTP POST, JWT in `Authorization` header), feeds the result back to the LLM, repeats. When the loop terminates, the extension posts the final Interpretation command together with the transcript bytes to `/interpretations`; the backend hashes the bytes, writes the side-store row, and appends the event in one Postgres transaction.
 
-Capability adapters run as out-of-process binaries spawned by the backend. The backend speaks JSON-RPC over stdio to each adapter; the contract is MCP-compatible by default but does not require an MCP server (any binary that accepts the contract works). First-party adapters ship as separate Go binaries in the same release; third-party can be any language.
+Capability adapters run as out-of-process binaries spawned by the backend. The backend speaks JSON-RPC over stdio to each adapter; the contract is MCP-compatible by default but does not require an MCP server. First-party adapters (including SOAR_PLAYBOOK adapters — see 03) ship as separate Go binaries in the same release; third-party can be any language.
 
 ### 3.5 Vendor credentials
 
-Stored in the OS keychain (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux). The adapter receives a `credentials_ref: keychain://<key>` path in its operation parameters, resolves the secret on demand from the keychain, and never persists the plaintext outside the per-call invocation. When the adapter exits, the secret leaves memory.
+Resolved through the uniform indirection scheme (§10.2): `keychain://`, `vault://`, `env://`, or `inline://`. The adapter receives a `credentials_ref` in its operation parameters and resolves the secret on demand; plaintext is never persisted outside the per-call invocation. Laptop installs default to `keychain://`; server installs default to `vault://` or `env://`. The resolution is uniform across distributions and operators — the only difference is which URI scheme the tenant config points at.
 
 ### 3.6 Network dependencies
 
-Solo localhost is local-first, not offline-only. Required network reachability:
-- **aatu Keycloak** — for initial auth and periodic token refresh. Bounded offline tolerance: access-token validity (default 1h) for absolute disconnect; refresh-token validity (default 30d) for reconnect-after-disconnect.
-- **aatu CDN** — for software updates, signed policy bundles, fixture corpus updates, MITRE corpus updates, adapter registry. Pull-on-startup with a fallback to last-cached.
-- **aatu approval relay + transactional email** — only when the solo subscriber has configured `approver_emails` and a TWO_PARTY policy fires. Otherwise unused.
-- **Vendor APIs** (in v1+) — direct from laptop to vendor for read-side capability calls; per-analyst credentials via OS keychain.
-- **LLM provider** (BYOK) — extension calls the analyst's chosen provider directly; never via aatu.
+aatu is local-first, not offline-only. Required network reachability:
+- **Keycloak (trust root)** — for initial auth and periodic token refresh. Issuer URL is per-deployment config. Bounded offline tolerance: access-token validity (default 1h) for absolute disconnect; refresh-token validity (default 30d) for reconnect-after-disconnect.
+- **Signed-bundle distribution surface (§11)** — software updates, signed policy bundles, fixture corpus, MITRE corpus, adapter registry. Pull-on-startup with a fallback to last-cached. Mirrorable for air-gapped customers (TR-1).
+- **Approval relay + transactional email** — only when `approver_emails` is configured and a TWO_PARTY policy fires, or (with tenancy module) multi-analyst async approval is in use.
+- **Vendor APIs** (v1+) — direct from the executing host to vendor for read-side capability calls; credentials per §3.5.
+- **LLM provider** (BYOK for interactive; tenant-scoped for async) — direct call from the executing host; not proxied through aatu.
 
-The aatu-backend process itself does not require outbound network for normal investigation work once the token is fresh and cached static surfaces are loaded. An analyst running a hunt against fixtures on a plane works fine until the access token expires.
+The aatu-backend process does not require outbound network for normal investigation work once the token is fresh and cached static surfaces are loaded. An analyst running a hunt against fixtures on a plane works fine until the access token expires.
 
 ### 3.7 Tenant model
 
-Solo mode has exactly one tenant: the subscriber's personal tenant. Namespace UUID generated at `aatu init` and persisted in `aatu_main.tenants`. Immutable thereafter. The principal recorded on every event is the aatu-IdP-issued user id, carried in the JWT.
+The tenant primitive is always present in the data model. In OSS, `tenant_id` defaults to 1 — a single tenant whose namespace UUID is generated at `aatu init` and persisted in `aatu_main.tenants`. Immutable thereafter. The principal recorded on every event is the Keycloak-issued user id, carried in the JWT.
 
-Multi-tenant on the laptop is explicitly out of scope at v0–v1. An MSP analyst working multiple customer tenants does so by lifting to SaaS or running multiple `aatu` installations under separate user profiles; no shared-instance multi-tenancy locally.
+When the paid tenancy module is on, the schema is unchanged; what activates is RLS enforcement, multi-realm or claim-routed Keycloak configuration, per-tenant vault paths, and the tenant lifecycle workflows. See §4.
 
 ---
 
-## 4. Multi-tenant SaaS topology
+## 4. Multi-tenant operation (tenancy module)
 
-### 4.1 Process model
+When the paid tenancy module is loaded (§13.2), the following capabilities activate on top of §3's runtime. With the module off, this section's behaviors are inert and the runtime collapses to the single OSS tenant.
 
-Stateless aatu-backend workers behind a load balancer, each running the same Go binary as the local install with deployment-mode = `saas`. Workers register the same Temporal worker on per-tenant task queues. State lives in:
+### 4.1 Tenant-aware data plane
 
-- **Managed Postgres** — `aatu_main` with row-level security policies keyed on `tenant_id`; per-tenant namespace UUIDs as defense-in-depth (cross-tenant id collision is structurally impossible regardless of RLS)
-- **Managed Temporal cluster** — per-tenant namespaces; workflow ids include `tenant_id` prefix for visibility filtering
-- **S3 (or equivalent object store)** — `ai_transcripts` and `ai_tool_calls` bytes, per-tenant prefixes, lifecycle policies for retention
-- **Knowledge service store** — managed Postgres + pgvector, per-tenant schemas or row-level isolation; same data shape as solo
-- **Vault** — vendor credentials per tenant, accessed by adapter workers; never visible to user JWTs or the extension
+- **Postgres RLS policies** activate on `aatu_main` keyed on `tenant_id`. Defense-in-depth on top of per-tenant namespace UUIDs (cross-tenant id collision is structurally impossible regardless of RLS).
+- **Temporal namespaces** become per-tenant; workflow ids include `tenant_id` prefix for visibility filtering.
+- **Side stores** (`ai_transcripts`, `ai_tool_calls`) gain per-tenant scoping — local Pg side tables in bundled-deps mode, S3 per-tenant prefixes in managed-deps mode.
+- **Vault** holds vendor credentials per tenant, accessed by adapter workers; never visible to user JWTs or the extension.
 
-### 4.2 Capability adapter deployment
+### 4.2 Capability adapter deployment with multi-tenancy
 
-Three configurations supported, selected per-tenant by config:
+The §6 read/write deployment shape gains a per-tenant config dimension:
 
-**Read-side: laptop.** The default. Per-analyst vendor credentials in OS keychain; adapter binaries spawned by a thin local helper process that the extension manages. The cloud backend never sees the analyst's vendor credentials. Same shape as solo.
+- **Read-side: analyst host.** Default. Per-analyst vendor credentials resolved locally; the backend never sees the credentials. Same shape as the OSS single-tenant case.
+- **Read-side: backend-side workers.** For tenants that require vendor credentials off analyst hosts (governance, IP allowlisting on vendor APIs, rate-limit pooling across analysts). Adapter binaries run as backend-side workers; analyst's extension calls the backend, which dispatches to the worker fleet. Vendor credentials live in vault, accessed only by the worker.
+- **Write-side: always backend-side at v0–v2.** Action dispatch runs as a Temporal workflow on the backend worker fleet. Vendor write credentials live in vault, accessed only during the workflow's execute step. The `adapter_request_id` correlated in `ActionDispatched` events (02-persistence.md §3) is the Temporal workflow id. The write-side adapter contract is its own deferred thread (03 §10).
 
-**Read-side: cloud.** For tenants that require vendor credentials off analyst laptops (governance, IP allowlisting on vendor APIs, rate-limit pooling across analysts). Adapter binaries run as cloud-side workers; analyst's extension calls the cloud backend, which dispatches to the worker fleet. Vendor credentials live in vault, accessed only by the worker.
+"Backend-side" means the same backend that runs the aggregate. In aatu-hosted paid this is aatu's cloud; in self-hosted paid this is the customer's cloud. Either way the binary is the same.
 
-**Write-side: always cloud-side at v0–v2.** Action dispatch runs as a Temporal workflow on the cloud worker fleet. Vendor write credentials live in vault, accessed only during the workflow's execute step. The `adapter_request_id` correlated in `ActionDispatched` events (02-persistence.md §3) is the Temporal workflow id. This is the deployment site that justifies the deferred write-side adapter contract (03 §10).
+### 4.3 Tenant lifecycle workflows
 
-### 4.3 Shared investigation
-
-When more than one analyst in a tenant subscribes to the same investigation, the cloud backend fans projection deltas out via WebSocket. Mechanism: aggregate writes commit in Postgres, post-commit hook fires `NOTIFY` keyed on `(tenant_id, investigation_id)`, a backend service `LISTEN`s and pushes deltas to all WS connections subscribed to that investigation.
-
-Concurrency model:
-- **Append-only paths** (recording an Interpretation, adding a Sighting, requesting an action) are collision-free by construction — each write is a new event, no contention.
-- **Status changes on shared nodes** (hypothesis status, member add/remove on the Grouping) use the aggregate's optimistic concurrency on `(aggregate_id, sequence_no)`. On conflict, the second writer's IDE pulls the latest projection, surfaces "X just changed this N seconds ago," and the analyst decides whether to retry, edit, or move on.
-- **Action review collisions** are handled by the `assignee_ref` field already in the spec (04 §5.4). First analyst to claim → first to approve/reject wins.
-- **Presence indicators** ("Sarah is currently viewing this investigation," "Bob is editing hypothesis-3") are ephemeral WebSocket signals, not aggregate events. Stored in a Redis-shaped in-memory store keyed on investigation_id + user_id, expiring on disconnect.
-
-### 4.4 Async approval surface
-
-TWO_PARTY actions and any AI-proposed T2/T3 that the requesting analyst hasn't picked up route through the approval relay surface:
-- Approver receives an email (via aatu's transactional email path) with a signed deep link
-- Click lands on aatu's web approval app, which authenticates against aatu's Keycloak and renders the same review panel the IDE shows
-- Approval signal is queued in the relay; backend polls or receives a push and processes the approval
-- The approver may or may not be a subscriber to that tenant — if they're not, the email-based flow uses one-time email-verified deep-link auth scoped to the specific action only (cannot read anything else, cannot perform any other action)
-
-This same mechanism powers solo `approver_emails` (when a solo subscriber configures peer review) and SaaS multi-analyst `secondary_approver_pool` (drawn from Keycloak users in the tenant's realm).
-
-### 4.5 Tenant lifecycle
-
-Provisioning, suspension, decommission, and migration are Temporal workflows running in aatu's operations namespace (separate from any customer tenant namespace):
+Run in the operations namespace (separate from any customer tenant namespace):
 
 - `ProvisionTenant(...)` — assign namespace UUID, create realm or claim mapping, allocate vault path, seed default policies, configure default adapters, create tenant_admin user
 - `SuspendTenant(tenant_id)` — read-only mode; no aggregate writes accepted
 - `DecommissionTenant(tenant_id)` — export → delete; final export bundle delivered to a customer-specified target
 - `LiftSolo(source_user_id, target_tenant_id, mode)` — handles the lift path (§9)
 
+### 4.4 Async approval surface
+
+TWO_PARTY actions and any AI-proposed T2/T3 the requesting analyst hasn't picked up route through the approval relay (§11):
+- Approver receives an email (via the transactional email path) with a signed deep link
+- Click lands on the web approval app, which authenticates against Keycloak and renders the same review panel the IDE shows
+- Approval signal is queued in the relay; backend polls or receives a push and processes the approval
+- Approvers may or may not be subscribers in that tenant — if they're not, the email-based flow uses one-time email-verified deep-link auth scoped to the specific action only
+
+This same mechanism powers OSS-mode `approver_emails` (when the single-tenant install configures peer review — relay can run alongside an OSS install if the customer chooses; the operational tooling around it is a governance-module concern) and tenancy-module-enabled multi-analyst `secondary_approver_pool` (drawn from Keycloak users in the tenant's realm).
+
 ---
 
 ## 5. Authentication and authorization
 
-### 5.1 aatu-operated Keycloak
+### 5.1 Keycloak as the trust root
 
-aatu (the company) operates a Keycloak deployment as the identity provider for both deployment shapes. This is real authenticated infrastructure, not a static distribution surface. Every backend command-handler RPC validates a JWT issued by this Keycloak.
+Keycloak is the identity provider in every deployment shape — OSS, paid self-hosted, paid aatu-hosted. Every backend command-handler RPC validates a JWT issued by Keycloak. The issuer URL is per-deployment config; JWT validation logic and claim extraction are uniform across shapes.
+
+**Who operates Keycloak.**
+- **OSS** — Keycloak is bundled in single-realm mode. The OSS install owns it; the customer can use the Keycloak admin console directly to manage users.
+- **Paid self-hosted** — customer-operated Keycloak (HA recommended; can be the bundled aatu image or the customer's existing Keycloak deployment).
+- **Paid aatu-hosted** — aatu-operated Keycloak (HA, multi-realm).
 
 **Realms and federation.**
-- **Solo subscribers** are native Keycloak users in a `subscribers` realm (or equivalent partition). Standard email/password + MFA, OIDC PKCE flow from the extension.
-- **SaaS org members** authenticate via federation. Each org tenant has either its own realm (stronger isolation) or its own group + tenant claim (operationally simpler at small scale) within a shared realm. Org IdPs (Okta, Entra, Google Workspace, Auth0, generic SAML/OIDC) federate upstream into aatu's Keycloak. Org users sign in through their corporate IdP; aatu's Keycloak mints the resulting JWT.
-
-The realm-vs-claim choice is an operational decision that does not affect the backend's authorization logic — JWT verification and claim extraction are uniform.
+- **OSS / single-tenant** — native Keycloak users in a single realm. Standard email/password + MFA, OIDC PKCE flow from the extension.
+- **Tenancy module on** — each tenant has either its own realm (stronger isolation) or its own group + tenant claim within a shared realm. The realm-vs-claim choice is operational and does not affect backend authorization logic.
+- **BYO IdP** — customer IdPs (Okta, Entra, Google Workspace, Auth0, generic SAML/OIDC) federate upstream into Keycloak. Users sign in through their corporate IdP; Keycloak mints the resulting JWT. The governance module ships federation setup helpers and role-mapping templates (§13.2); the raw Keycloak admin console supports BYO IdP without those helpers, just less ergonomically.
 
 **Tenant management.**
-- Solo subscriber's "tenant" is implicit and singular; the JWT's `tenant_id` claim equals the subscriber's personal tenant id, generated at sign-up.
-- SaaS tenant admins (a role within the tenant) manage their own users in their realm/group via aatu's tenant-admin web UI, which proxies to Keycloak's admin API. They do not have access to other tenants. aatu staff have admin access to tenant lifecycle (create/suspend/decommission) but not to tenant data.
+- OSS single-tenant: `tenant_id` claim defaults to 1; no inter-tenant boundary to manage.
+- Tenancy module on: tenant admins manage their own users in their realm/group via the governance module's tenant-admin UI (which proxies the Keycloak admin API) or via raw Keycloak admin console. They do not have access to other tenants. In aatu-hosted paid, aatu operations staff have admin access to tenant lifecycle (provision/suspend/decommission) but not to tenant data.
 
 ### 5.2 JWT structure
 
@@ -288,7 +297,9 @@ The roles below are the v0+ set used as Keycloak group memberships and rendered 
 | `tenant_admin` | Manage users and role assignments within the tenant; configure tenant settings (adapter bindings, `approver_emails`, etc.) |
 | `auditor` | Read-only access to investigations, action history, full audit chain; no writes |
 
-**Solo subscribers hold every role in their personal tenant by default.** Their JWT carries the union. RBAC Gate 1 always passes; the action-authorization Gate 2 (04's machinery) still applies, including the AI-delegate constraints that produce friction proportional to risk regardless of how many roles the principal holds.
+**OSS single-tenant installs collapse roles to the install owner by default.** The first user holds every role; their JWT carries the union; RBAC Gate 1 always passes. The action-authorization Gate 2 (04's machinery) still applies, including the AI-delegate constraints that produce friction proportional to risk regardless of how many roles the principal holds. An OSS multi-user install (a small team running OSS on shared infra) assigns roles via the bundled Keycloak admin console — functional but raw; the governance module ships the polished tenant-admin UI around the same operations.
+
+`policy_author` / `policy_signer` and `sop_author` / `sop_signer` are operationally meaningful only when `governance_mode: gated` (see 06 §X / 04 §X). In `lightweight` mode the split collapses — anyone with the parent role can edit and ship.
 
 ### 5.5 Two-axis evaluation
 
@@ -348,7 +359,7 @@ The verb catalog (03 §2) and the action-type manifest (04 §2) are extensible w
 2. Declaring a `CapabilityDescriptor` (verb) or `ActionDescriptor` (action type) in the adapter's manifest
 3. Adding bindings in tenant config
 
-The descriptor declares: name, input/output schemas, intent description (consumed by the LLM), default tier (action types only), reversibility mapping (action types only), and optional D3FEND technique (action types only; see §13 companion edits).
+The descriptor declares: name, input/output schemas, intent description (consumed by the LLM), default tier (action types only), reversibility mapping (action types only), and optional D3FEND technique (action types only; see §14 companion edits).
 
 `list_capabilities` (03 §2.8) and the analogous `list_action_types` walk the registered descriptors and trim by tenant configuration and adapter health, so the LLM only sees what's currently usable.
 
@@ -401,39 +412,41 @@ Per-investigation presence (which users are currently viewing, who's editing wha
 
 ## 9. The lift path
 
-The lift moves a solo subscriber's investigation work from their laptop into a SaaS-tenant aggregate. It is not a rewrite — it is a replay of the same events into a different deployment of the same backend. Identity continuity is the property that makes it clean.
+The lift moves an OSS instance's investigation work into a paid multi-tenant aggregate. It is not a rewrite — it is a replay of the same events into a different deployment of the same backend. Identity continuity (per-tenant namespace UUID) is the property that makes it clean. **This is the MSSP conversion mechanism**: an MSSP running N OSS instances (one per client) consolidates them onto a single paid multi-tenant deployment when the operational pain of N instances exceeds the cost of the tenancy module.
 
-### 9.1 Sub-path A — solo lifts to a fresh tenant of one (primary)
+### 9.1 Sub-path A — OSS lifts to a fresh tenant of one (primary)
 
-The default lift. The subscriber already has an aatu IdP identity; their personal tenant exists with namespace UUID `N_local`. The "lift" is a re-pointing of where their tenant's data lives.
+The default lift. The OSS install already has a Keycloak identity; its single tenant has namespace UUID `N_local`. The "lift" is a re-pointing of where that tenant's data lives.
 
 Steps:
-1. Provision a SaaS tenant with namespace UUID = `N_local`. The same UUID is preserved; every STIX id remains stable.
-2. Replay the local `investigation_events` stream into the cloud aggregate (`INSERT ... ON CONFLICT DO NOTHING` on `(aggregate_id, sequence_no)`).
+1. Provision a paid tenant with namespace UUID = `N_local`. The same UUID is preserved; every STIX id remains stable.
+2. Replay the local `investigation_events` stream into the paid aggregate (`INSERT ... ON CONFLICT DO NOTHING` on `(aggregate_id, sequence_no)`).
 3. Copy `stix_*` rows and `stix_edges` rows for this tenant.
-4. Upload Layer B side stores by content hash: `ai_tool_calls` and `ai_transcripts` rows transfer to S3, references on Interpretation events resolve through the new store.
+4. Upload Layer B side stores by content hash: `ai_tool_calls` and `ai_transcripts` rows transfer to the paid deployment's object store, references on Interpretation events resolve through the new store.
 5. Copy SOP repository rows and concluded-investigation summary index.
-6. Repoint the IDE config at the SaaS endpoint. The user's existing JWT is still valid; on next refresh, the `tenant_id` claim points at the SaaS tenant.
+6. Repoint the IDE config at the paid backend endpoint. The user's existing JWT is still valid; on next refresh, the `tenant_id` claim points at the paid tenant (which has the same UUID as the OSS tenant did).
 
-The solo subscriber's data is identical, just hosted differently. The principal recorded on every event is unchanged. No aliasing edges, no re-id, no migration drama.
+The user's data is identical, just hosted differently. The principal recorded on every event is unchanged. No aliasing edges, no re-id, no migration drama.
 
-### 9.2 Sub-path B — solo joins an existing tenant
+For an MSSP consolidating N OSS instances, Sub-path A runs N times — each client install lifts into its own tenant within the paid multi-tenant deployment. The MSSP's analysts gain a cross-tenant console (governance module) and switch tenants via the JWT's `tenant_memberships` claim.
 
-Harder, because the subscriber's local namespace `N_local` differs from the existing tenant's `N_tenant`. v0 default behavior:
+### 9.2 Sub-path B — joining an existing tenant
 
-**The local data parks as a personal-scratch read-only side.** The subscriber retains read access to their personal tenant alongside their new shared tenant; their JWT carries `tenant_memberships` for both. They write only into the new shared tenant going forward. Their local investigations do not pollute the shared tenant's namespace.
+Harder, because the OSS install's namespace `N_local` differs from the target tenant's `N_tenant`. v0 default behavior:
+
+**The local data parks as a personal-scratch read-only side.** The user retains read access to their OSS tenant alongside their new shared tenant; their JWT carries `tenant_memberships` for both. They write only into the new shared tenant going forward. Their OSS investigations do not pollute the shared tenant's namespace.
 
 Two heavier alternatives, available on request post-v0:
 - **Re-id** — walk every STIX node in the migrated investigations, recompute UUIDv5 under `N_tenant`, rewrite events accordingly. Heavy but produces a clean unified namespace.
 - **Alias-bridge** — migrate with original `N_local` ids and write `aliases` edges (01 EDGE TYPES) between `N_local` and `N_tenant` entities where they refer to the same real-world thing. Cheaper than re-id, but the alias graph is queried on every cross-tenant pivot.
 
-Sub-path B's UX matters more than its implementation; getting it wrong means analysts won't lift, they'll restart. v0 doesn't ship Sub-path B at all. v2 ships the personal-scratch default.
+Sub-path B's UX matters more than its implementation; getting it wrong means users won't lift, they'll restart. v0 doesn't ship Sub-path B at all. v2 ships the personal-scratch default.
 
-### 9.3 What stays on the laptop after a lift
+### 9.3 What stays on the OSS install after a lift
 
-By default, all data migrates to SaaS and the local install becomes a thin client. A privacy-paranoid subscriber may opt to:
-- **Leave Layer B side stores on the laptop.** References on Interpretation events resolve to a "local-only stub" with the content hash preserved. Tamper-evidence still works; the bytes never leave the laptop.
-- **Run the read-side capability layer locally even after lifting.** Vendor reads remain laptop-side; only the aggregate, side stores (excluding Layer B if opted out), and write-side dispatch live in SaaS.
+By default, all data migrates to the paid deployment and the OSS install becomes a thin client. A privacy-paranoid user may opt to:
+- **Leave Layer B side stores on the OSS install.** References on Interpretation events resolve to a "local-only stub" with the content hash preserved. Tamper-evidence still works; the bytes never leave the OSS install's host.
+- **Run the read-side capability layer on the OSS install even after lifting.** Vendor reads remain OSS-side; only the aggregate, side stores (excluding Layer B if opted out), and write-side dispatch live in the paid deployment.
 
 Both opt-outs are tenant-config flags applied during the lift workflow.
 
@@ -478,34 +491,32 @@ A separate, opt-in product-telemetry intake (§11.5) collects anonymized usage s
 
 ### 10.6 Backup and restore
 
-**Solo.** The bundled Postgres is the single source of truth; standard `pg_dump` produces a complete backup. `aatu backup` and `aatu restore` are CLI subcommands that wrap `pg_dump` / `pg_restore` with the correct schemas and verify the namespace UUID matches before restoring (preventing accidental cross-install restoration).
+**Bundled-deps configuration.** The bundled Postgres is the single source of truth; standard `pg_dump` produces a complete backup. `aatu backup` and `aatu restore` are CLI subcommands that wrap `pg_dump` / `pg_restore` with the correct schemas and verify the namespace UUID matches before restoring (preventing accidental cross-install restoration).
 
-**SaaS.** Standard managed-Postgres backup policies plus per-tenant export bundles via the `DecommissionTenant` workflow and any `aatu investigation export` command issued by a tenant admin.
+**Managed-deps configuration.** Standard managed-Postgres backup policies. Tenancy-module deployments additionally produce per-tenant export bundles via the `DecommissionTenant` workflow and any `aatu investigation export` command issued by a tenant admin.
 
 ---
 
-## 11. aatu-operated surface
+## 11. Production-operated surface
 
-The total set of services and static resources aatu (the company) operates centrally.
+The set of services and static resources the paid distribution depends on. In aatu-hosted paid these are aatu-operated; in self-hosted paid the customer operates them, typically from the same Terraform that provisions the rest of the deployment. OSS installs depend on a minimal subset (the signed-bundle distribution surface is mirrorable for air-gap; the relay and email surfaces are only needed if `approver_emails` is configured).
 
 ### 11.1 Static surface (CDN)
 
 Signed bundles, distributed via standard CDN, customer installations verify signatures on load:
 
-- **Software releases** — Go binaries for solo (Mac, Windows, Linux); cloud-worker images for SaaS internal use
+- **Software releases** — Go binaries (Mac, Windows, Linux) for both OSS and paid distributions; container images for backend-side adapter workers
 - **Signed policy bundles** — baseline policies that ship with every install (e.g., the non-removable "AI cannot auto-approve T3" policy from 04 §4.3 Example 2). Customers can layer additional policies on top in tenant config.
 - **Fixture corpus** — OCSF scenarios for v0/v1 development and demos (03 §9)
 - **Adapter / MCP server registry** — signed manifests for first-party and partner adapters (§6.3)
-- **MITRE corpus** — ATT&CK and D3FEND data, refreshed on aatu's schedule, verifiable by signature (~5MB)
+- **MITRE corpus** — ATT&CK and D3FEND data, refreshed on the operator's schedule, verifiable by signature (~5MB)
 - **Documentation, schemas, OpenAPI specs**
 
-Static surface is operationally cheap: standard CDN with signing, no authenticated state, no per-customer logic.
+Static surface is operationally cheap: standard CDN with signing, no authenticated state, no per-customer logic. For air-gapped customers, the surface is mirrorable — aatu publishes signed bundles to a customer-pulled mirror on a schedule.
 
 ### 11.2 Keycloak (authenticated)
 
-aatu-operated identity provider. Required for both deployment shapes. Realms organize subscribers and SaaS tenants; federated upstream IdPs handle org members. Standard Keycloak admin/operator deployment with HA replication and managed Postgres.
-
-This is the only customer-data-adjacent service required for solo mode (and even then, customer investigation data never reaches it — only auth identity and roles).
+Identity provider, deployed per §5.1. In aatu-hosted paid: HA replication + managed Postgres operated by aatu. In self-hosted paid: same software, customer-operated (or aatu-bundled image deployed by customer). In OSS: single-realm bundled. Customer investigation data never reaches Keycloak — only auth identity and roles.
 
 ### 11.3 Approval relay (authenticated)
 
@@ -515,22 +526,22 @@ A small stateless service that:
 - Renders the approval review panel (the same Next.js component as the SaaS web review)
 - Queues approval signals for backend consumption (poll-based; backends fetch `/relay/pending?tenant=...` periodically)
 
-Roughly 200 lines of Go plus the Next.js review panel. Used for solo-mode `approver_emails` and SaaS multi-analyst async approvals.
+Roughly 200 lines of Go plus the Next.js review panel. Used for OSS `approver_emails` (when configured) and tenancy-module multi-analyst async approvals.
 
 ### 11.4 Transactional email
 
-Either an aatu-operated wrapper around a third-party (SES, SendGrid, Postmark) or direct integration. Used for approval emails, invitation emails, security alerts. No customer investigation data in email bodies — only references, action descriptions, and deep links.
+A wrapper around a third-party provider (SES, SendGrid, Postmark) or direct integration. Used for approval emails, invitation emails, security alerts. No customer investigation data in email bodies — only references, action descriptions, and deep links. In aatu-hosted paid: aatu's provider account. In self-hosted paid: customer's provider account.
 
 ### 11.5 Optional intake endpoints
 
-- **Telemetry** — anonymized product usage signals when the subscriber consents. Single endpoint, single Postgres, runs on aatu's infrastructure. Not on customer infrastructure. Default off in solo; configurable in SaaS per tenant.
-- **Licensing / entitlement** — if the product is commercial, an endpoint that issues short-lived signed entitlement claims. Cached on the customer side.
+- **Telemetry** — anonymized product usage signals when the subscriber consents. Single endpoint, single Postgres. In aatu-hosted paid: runs on aatu's infrastructure, default off. In self-hosted paid: not applicable (customer's deployment doesn't phone home). In OSS: default off.
+- **Licensing / entitlement** — bolt-on; not implemented at v0–v1 (see §13.4). When implemented, an endpoint issuing offline-verifiable signed entitlement files (air-gap compatible per TR-1).
 
 ### 11.6 Web surfaces
 
-- **Customer portal** — account management, subscription, tenant admin tasks (for tenant_admins; user/role management within their realm)
-- **Web review panel** — the Next.js component that renders the action review for SaaS multi-analyst review and async approval clicks
-- **Marketing site, docs site** — standard static + serverless
+- **Tenant-admin portal** (governance module) — user/role management within the tenant's realm; proxies the Keycloak admin API. Replaces raw Keycloak admin console UX for paid customers.
+- **Web review panel** — the Next.js component that renders the action review for multi-analyst review and async approval clicks
+- **Marketing site, docs site** — standard static + serverless (aatu only; not part of the paid distribution)
 
 ---
 
@@ -559,7 +570,93 @@ Standard cloud-native deployment: stateless aatu-backend workers behind a load b
 
 ---
 
-## 13. Companion edits to upstream specs
+## 13. Open-core packaging
+
+aatu ships as open-core. This section defines the architectural shape of that split: what is in the OSS distribution, what is in the two paid modules, how modules load, and the orthogonal axis of operator (customer vs aatu). The open-core line is **operation and governance, never capability or connectors** — and it is structural, not a packaging afterthought.
+
+### 13.1 Two distributions, one binary
+
+The same Go binary ships in two distributions:
+
+- **OSS distribution.** Engine only. Single tenant. Bundled deps (Postgres, Temporal, Keycloak single realm). Full investigative capability: aggregate, capability layer, all adapter classes (MCP, NATIVE_API, CUSTOM, FIXTURE, SOAR_PLAYBOOK), normalizers, action authorization machinery, knowledge service core, reasoning loop, VS Code extension. No paywalled connectors. No paywalled investigative features. A single environment investigates fully on the free tier.
+
+- **Paid distribution.** Same engine + one or both paid modules (tenancy, governance) loaded. Production-grade dependencies (managed Postgres, managed Temporal, managed Keycloak HA, S3, Vault) are typical but not required — the bundled deps still work; the choice is operational, not architectural.
+
+The distribution is a build-time + config-time decision. Build-time: which Go packages are compiled in (`oss/`, `paid/tenancy/`, `paid/governance/` or build tags). Config-time: which compiled-in modules are activated. The binary is otherwise identical across distributions.
+
+### 13.2 Module inventory
+
+**OSS engine — always present.**
+- Investigation aggregate (command handler, event store, projections)
+- Capability layer (resolver, all adapter classes, normalizers, identity resolver)
+- Knowledge service core (SOP and concluded-investigation summary corpora, retrieval API, lightweight authoring)
+- Action authorization machinery (CEL evaluator, policy registry, trust tiers, `ActionLifecycle` and `ReversalSaga` workflows)
+- Bundled Keycloak (single realm, single tenant)
+- Bundled Postgres + Temporal (via `embedded-postgres-go` + Temporal CLI dev server)
+- VS Code extension
+- All adapter manifests for first-party connectors, including SOAR_PLAYBOOK bindings
+
+**Tenancy module — paid.**
+- `tenant_id` RLS activation on the aggregate, projections, and side stores
+- Multi-realm or claim-routed Keycloak configuration
+- Per-tenant vault paths for vendor credentials
+- Multi-instance OSS-to-paid consolidation lift workflow (the MSSP conversion mechanism — sub-path B done properly per §9.2)
+- Cross-tenant analyst console
+- Tenant lifecycle workflows (`ProvisionTenant`, `SuspendTenant`, `DecommissionTenant`, `LiftSolo`)
+
+**Governance module — paid.**
+- Tenant-admin UI proxying the Keycloak admin API
+- IdP federation setup helpers and role-mapping templates (Okta, Entra, Google Workspace, Auth0, generic SAML/OIDC)
+- SOP and policy signoff queues (the operational surface around `governance_mode: gated`; see §13.3)
+- Per-SOP citation/usage analytics
+- Auditor read-only export surface (full audit chain, action history, policy evaluation records)
+- Compliance audit-log export for SOC 2 and equivalent regimes
+- Distribution of customer-authored signed policy bundles beyond the baseline shipped with every install
+
+The two modules are independent. A customer can buy tenancy without governance (an MSSP that doesn't yet need SSO/audit tooling), governance without tenancy (an in-house single-environment SOC that needs SSO/audit but never multi-tenant operation), or both. Modules detect each other and integrate where they overlap — e.g., the signoff queue is tenant-scoped when tenancy is also active.
+
+### 13.3 Behaviors and roles are core; operational tooling is paid
+
+The roles in §5.4 (`viewer`, `analyst`, `approver`, `senior_approver`, `policy_author`, `policy_signer`, `sop_author`, `sop_signer`, `tenant_admin`, `auditor`) are defined in the OSS engine. In an OSS install they work — they exist in Keycloak, they're carried in the JWT, the backend enforces them. What's absent in OSS is the *polished operational surface*:
+
+- Role assignments happen through the bundled Keycloak's admin console — functional but raw.
+- The SOP and policy lifecycle has both `lightweight` (write-it-use-it) and `gated` (draft → in-review → published → retired) modes. The mode is a deployment config; both are in the engine. But the gated-mode UX — review queue, signoff history, citation analytics, audit export — is only useful with the governance module's surface.
+- Audit data is recorded fully and queryable — but the auditor's export-and-report surface is governance-module territory.
+
+This is the general philosophy: **behaviors and roles are core; the operational tooling around them is the governance module.** It is what lets the OSS install be genuinely useful standalone while preserving the governance module's commercial value for customers operating at scale. Enterprises pick `lightweight` or `gated` as their working model; the product supports both, one at a time.
+
+### 13.4 Module activation and licensing posture
+
+Modules are activated by configuration. At v0–v1 the activation is honor-system: a config flag enables the module. The architectural seam — separately-compilable packages or build tags — is preserved so that a future signed-entitlement check has a single, isolated place to live.
+
+At v2+ or whenever a real customer makes it worthwhile, the activation gate adds an offline-verifiable signed entitlement file (TR-1: air-gap compatibility forbids periodic phone-home licensing). The entitlement check fires at module load and refuses activation if the signature is invalid or expired. Adding this check is a small, isolated change — not a refactor — precisely because the module seam is preserved from v0.
+
+The architectural commitment is: keep the module boundary clean. The commercial commitment — when to license, how to price — is independent and need not be made at v0.
+
+### 13.5 Operator is orthogonal to distribution
+
+Who runs the bits is independent of which bits are running.
+
+- **OSS — always customer-operated.** aatu does not host the OSS distribution. The customer runs it on a laptop (the default first-run experience per TR-3), a server, or anywhere else they choose. The credential-resolution indirection scheme (§10.2) makes laptop-vs-server a config concern (`keychain://` vs `vault://`/`env://`), not a code path.
+- **Paid — customer-operated OR aatu-operated.** Same Terraform, same Helm chart, same dependency set, same config schema. The differences are who pays the cloud bill, who's on the pager, which VPC the resources live in. None are architectural.
+
+The architecture supports both paid-operator choices uniformly. §11 (the production-operated surface) describes the services — signed-bundle distribution, approval relay, transactional email, observability — that the paid distribution depends on. In aatu-hosted paid, aatu operates these services. In self-hosted paid, the customer operates them, typically from the same Terraform that provisions the rest of the deployment. aatu's CDN-equivalent for signed bundles is *mirrorable* for self-hosted customers (TR-1 air-gap path); the customer's deployment pulls from a local mirror that aatu publishes to on a schedule.
+
+Operator-orthogonality preserves TR-1 (air-gap / self-hostable) for customers who need it while preserving aatu's ability to offer a managed experience for those who don't. There is no architectural fork between the two.
+
+### 13.6 The two paid conversion hooks
+
+The paid distribution exists to satisfy two distinct buyers, each motivated by a different operational pain. Conflating them — bundling them as one inseparable module, or skipping one — costs revenue:
+
+- **Tenancy module — converts the MSSP/MDR.** Conversion event: running N separate OSS installs across N client environments becomes operationally painful. The paid tenancy module consolidates them onto one multi-tenant instance, with the consolidation-lift workflow handling the data movement. The buyer is the MSSP, not the MSSP's client. They pay per tenant or per analyst, not per client environment.
+
+- **Governance module — converts the in-house single-environment enterprise SOC.** This buyer never wants multi-tenancy and would otherwise use the free OSS forever. Conversion event: a compliance, audit, or SSO requirement that the OSS install's raw Keycloak admin console and unstructured audit export cannot satisfy. The paid governance module ships the operational surface that makes those requirements pleasant to operate: federated SSO setup, polished tenant-admin UI, signoff queues, compliance-friendly audit exports.
+
+Both modules are additive, both are independently licensable, and they share no dependencies that would force a customer to buy both. This is TR-26 hook 1 and TR-26 hook 2, satisfied by construction.
+
+---
+
+## 14. Companion edits to upstream specs
 
 These are minor edits that land alongside this spec. Each is small and additive; none changes architectural commitments.
 
@@ -603,33 +700,33 @@ No structural changes. The existing event taxonomy already accommodates the post
 
 ---
 
-## 14. v0 / v1 / v2+ staging
+## 15. v0 / v1 / v2+ staging
 
 | Stage | Deployment | Capability surface | Notes |
 |---|---|---|---|
-| **v0** | Solo localhost only | Read fixtures + write fixture stubs; agent loop functional (interactive client-side); SOPs functional with keyword retrieval | No real integrations. Knowledge service ships with SOP CRUD and basic retrieval; no embeddings yet. Bundled Pg + Temporal. aatu Keycloak in production for solo subscribers. CDN distributing signed bundles. Temporal workflows: action lifecycle, reversal, re-normalization, archive, post-conclusion, summary extraction. Cross-investigation similarity is keyword search over `investigation_current` projection. |
-| **v1** | Solo localhost | Real read integrations (EDR, SIEM, IdP, TI, comms, ticketing, MDM); write-side adapter contract lands; T2/T3 actions live for solo subscribers | Cross-cutting concerns (rate limiting, health probes, credential resolution) actively exercised. Knowledge service adds embeddings and post-conclusion summary extraction. MITRE corpus distribution live. **`InvestigationLifecycleWorkflow` lands as the top-level Temporal orchestrator**; v0 child workflows reparent under it. |
-| **v2** | Solo localhost + multi-tenant SaaS | Both shapes. Shared investigation. Async approvals via aatu relay. Vault-based vendor credentials in SaaS. Federated org IdPs upstream of aatu Keycloak | This is when the SaaS deployment goes live. Lift Sub-path A becomes a customer-facing flow. **`BackgroundHuntWorkflow` and `ScheduledInvestigationWorkflow` land — server-side agent loops with tenant-scoped LLM credentials, separate from per-analyst BYOK.** SOC 2 / compliance work begins. |
-| **v3+** | (deferred) | MSP / hierarchical tenancy if customer demand justifies; cross-tenant indicator pool; single-tenant hosted only if a deal forces it | None of this is on the v0–v2 roadmap. Each is gated on real customer need. |
+| **v0** | OSS only (laptop default) | Read fixtures + write fixture stubs; agent loop functional (interactive client-side); SOPs functional with keyword retrieval. SOAR_PLAYBOOK adapter class shipped with fixture playbooks. | No real integrations. Knowledge service ships with SOP CRUD and lightweight `governance_mode` only; no embeddings yet. Bundled Pg + Temporal + Keycloak. Signed-bundle distribution surface live. Temporal workflows: action lifecycle, reversal, re-normalization, archive, post-conclusion, summary extraction. Cross-investigation similarity is keyword search over `investigation_current` projection. Paid module Go-package boundary preserved (`oss/`, `paid/tenancy/`, `paid/governance/`); no licensing check. |
+| **v1** | OSS (laptop and self-hosted multi-user) | Real read integrations (EDR, SIEM, IdP, TI, comms, ticketing, MDM); write-side adapter contract lands; T2/T3 actions live; real SOAR_PLAYBOOK bindings (Tines/Torq/customer-authored) | Cross-cutting concerns (rate limiting, health probes, credential resolution) actively exercised. Knowledge service adds embeddings and post-conclusion summary extraction. MITRE corpus distribution live. **`InvestigationLifecycleWorkflow` lands as the top-level Temporal orchestrator**; v0 child workflows reparent under it. |
+| **v2** | OSS + paid distribution (self-hosted and aatu-hosted) | Paid tenancy and governance modules launch. Shared investigation, async approvals via relay, vault-based vendor credentials, BYO IdP federation upstream of Keycloak, gated `governance_mode` UX | Paid distribution goes live in both operator modes. Lift Sub-path A consolidates OSS instances into paid multi-tenant. **`BackgroundHuntWorkflow` and `ScheduledInvestigationWorkflow` land — server-side agent loops with tenant-scoped LLM credentials, separate from per-analyst BYOK.** SOC 2 / compliance work begins for aatu-hosted. Honor-system module activation still in place. |
+| **v3+** | (deferred) | MSP / hierarchical tenancy if customer demand justifies; cross-tenant indicator pool; signed offline-verifiable entitlement licensing (replaces honor-system) | None of this is on the v0–v2 roadmap. Each is gated on real customer need. |
 
 ---
 
-## 15. Open questions / Deferred to implementation
+## 16. Open questions / Deferred to implementation
 
 These are deliberate non-decisions; the architecture accommodates either resolution.
 
 - **Realm-per-tenant vs claim-routed shared realm in Keycloak.** Operational choice, doesn't affect the backend's authorization logic. Per-realm gives stronger isolation and simpler admin scoping; shared-realm-with-claims is operationally simpler at small scale. Pick based on customer size and contract requirements at v2 launch.
 - **Default access-token and refresh-token validity.** Proposed defaults: 1h access, 30d refresh. Tunable per tenant and per role; stricter for `tenant_admin` and `policy_signer`.
 - **pgvector vs alternatives** for the knowledge service. pgvector is the v0+ default for operational simplicity (already on the bundled Postgres). If retrieval quality at scale demands a dedicated vector engine, the storage interface in 06 is abstracted enough to swap.
-- **Per-tenant Temporal namespace scaling cap.** Temporal's namespace primitive scales to the low thousands. If SaaS tenant count exceeds that, sharding across multiple Temporal clusters with a dispatcher layer becomes necessary. Not a v2 concern.
-- **Sub-path B (solo joining existing tenant) default behavior.** v0 default is "personal scratch + write fresh into shared tenant." Confirm with first SaaS customers whether re-id or alias-bridge alternatives are demanded.
+- **Per-tenant Temporal namespace scaling cap.** Temporal's namespace primitive scales to the low thousands. If a paid aatu-hosted tenant count exceeds that, sharding across multiple Temporal clusters with a dispatcher layer becomes necessary. Not a v2 concern.
+- **Sub-path B (OSS joining an existing paid tenant) default behavior.** v0 default is "personal scratch + write fresh into shared tenant." Confirm with first paid customers whether re-id or alias-bridge alternatives are demanded.
 - **Telemetry intake schema and consent UX.** What signals to collect, what consent model, retention. Operational call, not an architectural one.
 - **Adapter binary distribution mechanism.** Direct CDN download with signature verification at v0. If adapter version churn becomes painful, an OCI-registry-style distribution is a future option without changing the manifest contract.
 - **Action-authorization enforcement of "guard against half-finished AI multi-step responses."** Whether to support a "composite action" primitive (a single `x-action` bundling multiple effects, atomic in the audit and authorization sense) or to leave multi-step as the agent loop's responsibility with policy gates on individual actions. v0 defers to the agent loop; revisit if real omissions surface in operation.
 
 ---
 
-## 16. Cross-references
+## 17. Cross-references
 
 - **01-domain-model.md** — every primitive this architecture instantiates: aggregate boundary, actor model, identity, lifecycle, edge types, custom STIX objects
 - **02-persistence.md** — event taxonomy, projections, side store mechanics, the optimistic-concurrency property the shared-investigation flow relies on

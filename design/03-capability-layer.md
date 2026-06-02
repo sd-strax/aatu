@@ -884,7 +884,7 @@ Java backend, so:
 ```java
 public interface Adapter {
     String name();
-    AdapterClass adapterClass();              // MCP | NATIVE_API | CUSTOM | FIXTURE
+    AdapterClass adapterClass();              // MCP | NATIVE_API | CUSTOM | SOAR_PLAYBOOK | FIXTURE
     Set<String> supportedOperations();
     AdapterResponse invoke(String operation, Map<String, Object> params);
     HealthStatus health();
@@ -909,10 +909,11 @@ drop, not a code change.
 
 ### 5.4 Adapter classes
 
-Adapters fall into four classes. The contract is identical across all of them;
+Adapters fall into five classes. The contract is identical across all of them;
 the class is metadata for operators (visible in `list_capabilities` health
 output) and a hook for shared infrastructure (e.g., MCP adapters share
-connection pooling and protocol handling that native-API adapters don't need).
+connection pooling and protocol handling that native-API adapters don't need;
+SOAR_PLAYBOOK adapters share the async-callback pattern).
 
 **MCP adapters.** Wrap an MCP server. The adapter's `invoke` translates a
 capability operation to an MCP tool call, awaits the response, and translates
@@ -933,8 +934,36 @@ arbitrary implementation. A custom adapter for an internal CMDB is a thin REST
 client; a custom adapter for a Snowflake-backed data lake is a SQL executor. As
 long as it produces OCSF, it fits.
 
+**SOAR_PLAYBOOK adapters.** Delegate write-side actions to an external SOAR
+orchestrator (Tines, Torq, Splunk SOAR, customer-authored workflows). The
+adapter's `invoke` translates an action dispatch to a playbook invocation
+(typically a signed webhook POST), records the playbook run id as the
+`adapter_request_id`, and either awaits a synchronous return or registers a
+callback URL for the orchestrator to hit on completion. The async-callback
+pattern is the common case — playbooks routinely take minutes to hours, and
+the Temporal `ActionLifecycle` workflow holds the awaiting state. From the
+authorization layer's perspective the dispatch is one step; from the audit
+perspective the chain is truncated at the orchestrator boundary (see 04 §6.1
+`audit_depth: EXTERNAL`).
+
+Why a distinct class rather than "another custom adapter":
+- The async-callback pattern is shared (the resolver and `ActionLifecycle`
+  coordinate with the orchestrator's notification webhook).
+- Approval-gate ownership and reversibility may shift per binding (04 §5.7,
+  §7) — those fields are SOAR-specific binding-manifest metadata.
+- Operators want to see at a glance which actions delegate vs run native; the
+  class label surfaces that in `list_capabilities` and in action review
+  panels.
+
+SOAR_PLAYBOOK adapters do not change the layer's pure-I/O property — invoking
+a playbook is one more outbound call shape, with normalization done on the
+orchestrator's response just like any other adapter. The orchestrator runs
+the playbook; aatu records its inputs and outcomes.
+
 **Fixture adapters.** A special case of custom adapter for v0, replay, and
-testing. See §9.
+testing. See §9. v0 ships fixture SOAR_PLAYBOOK bindings (a "fake Tines"
+that returns canned outcomes) so the SOAR delegation path can be exercised
+end-to-end without a real orchestrator.
 
 The OCSF-shaping responsibility lives in the adapter regardless of class. That's
 the invariant that makes the layer transport-neutral: by the time data crosses

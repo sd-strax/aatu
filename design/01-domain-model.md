@@ -358,6 +358,8 @@ actor.kind         derived: HUMAN if delegate is null, else AI_DELEGATED
 - The **delegate** is who/what *performed* it.
 - Authorization derives from principal permissions; the delegate may be restricted further but never broader.
 
+**External orchestrators (SOAR playbooks) are dispatch routes, not delegates.** When an action is delegated to an external SOAR orchestrator (Tines, Torq, Splunk SOAR — see 03 §5.4 SOAR_PLAYBOOK adapter class), the orchestrator is a *mechanism* aatu invokes on the principal's behalf, not a participant in the actor model. The AI agent remains the delegate that reasoned the action; the human remains the principal who is responsible. Which dispatch route was taken (native API vs SOAR playbook) and how deep the audit chain runs are recorded on the action's `Execution` sub-record (`dispatched_via`, `audit_depth`; see 04 §6.1), not on the actor.
+
 **Scope.** The canonical `ActorRef` shape applies only to **invented primitives** (`x-interpretation`, `x-action`) and to the **persistence event envelope** (see 02-persistence.md §7). STIX SDOs / SROs / SCOs (ObservedData, Sighting, Indicator, Report, Note, Opinion, Relationship, x-hypothesis, x-prediction, all SCOs) use the STIX-standard `created_by_ref` → Identity ref convention as defined by STIX 2.1. The responsibility chain for any STIX-shaped node runs through the Interpretation that produced it, *not* through that node's own `created_by_ref`.
 
 ### Interpretation types (canonical enum)
@@ -598,7 +600,7 @@ These are **not domain-model gaps**. The model accommodates either choice.
 
 - **Eager STIX promotion from OCSF.** Every tool response is normalized at ingest into `ObservedData` and SCOs, with the raw `OcsfEvent` retained as ground truth and re-normalizable on demand. See 03-capability-layer.md §4.13.
 - **Reasoning thread is a projection.** It is materialized as a projection (`investigation_thread`) rebuilt from the event stream; the canonical ordering lives in the events' `sequence_no`, not in a list field on the Grouping. The Grouping's `ReasoningThread` extension is the logical view. See 02-persistence.md §4.2.
-- **`labels` on `x-hypothesis` controlled vocabulary.** Bind to MITRE ATT&CK technique IDs (e.g., `T1486`, `T1078.004`) by convention; freeform values remain permitted. The agent loop is prompted to label hypotheses with applicable techniques where evident. See 05-component-architecture.md §13.1.
+- **`labels` on `x-hypothesis` controlled vocabulary.** Bind to MITRE ATT&CK technique IDs (e.g., `T1486`, `T1078.004`) by convention; freeform values remain permitted. The agent loop is prompted to label hypotheses with applicable techniques where evident. See 05-component-architecture.md §14.1.
 
 
 END OF SPEC

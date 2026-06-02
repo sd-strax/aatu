@@ -307,7 +307,7 @@ Tenants without a SoR or who prefer manual ticketing simply don't configure any 
 
 ### 7.3 Bidirectional linkage
 
-When a ticket is created, the response includes the ticket id and URL. The investigation's projection is updated with a `linked_external_cases` field referencing the ticket. Future capability calls can pull updates from the ticket (`get_external_case_details`, 05 §13.2) so the investigation reflects ongoing work in the SoR.
+When a ticket is created, the response includes the ticket id and URL. The investigation's projection is updated with a `linked_external_cases` field referencing the ticket. Future capability calls can pull updates from the ticket (`get_external_case_details`, 05 §14.2) so the investigation reflects ongoing work in the SoR.
 
 ---
 

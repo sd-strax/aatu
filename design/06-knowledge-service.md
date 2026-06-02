@@ -86,6 +86,19 @@ SOP
 
 ### 2.2 Lifecycle
 
+The lifecycle state machine is controlled by a deployment-level config: `governance_mode: lightweight | gated`. Both modes are present in the OSS engine; the *operational surface* around the gated workflow (review queue UI, signoff history, citation analytics, audit export) is what the paid governance module sells (see 05 §13.3).
+
+**`lightweight` (OSS default; appropriate for solo and small teams):**
+
+```
+PUBLISHED   →  RETIRED      (parent role retires)
+RETIRED     →  (terminal)
+```
+
+A user with the `sop_author` (or parent `analyst`) role writes the SOP and it is immediately PUBLISHED. The DRAFT and IN_REVIEW states do not exist in practice; `status` lands directly at PUBLISHED. No signoff ceremony.
+
+**`gated` (enterprise; activated when the customer wants change-management):**
+
 ```
 DRAFT       →  IN_REVIEW    (sop_author submits)
 IN_REVIEW   →  DRAFT        (sop_signer requests changes)
@@ -94,9 +107,11 @@ PUBLISHED   →  RETIRED      (sop_signer retires; effective_until set)
 RETIRED     →  (terminal)
 ```
 
-Edits to a PUBLISHED SOP create a new version (incrementing the version field) in DRAFT, supersedes the prior version on publication. The prior version stays accessible for retrieval audit (cited Interpretations from before the edit can still resolve the SOP they consulted) but is no longer returned by retrieval queries by default.
+In `gated` mode the `sop_author` and `sop_signer` roles are operationally distinct. PUBLISHED SOPs require at least one user holding `sop_signer` role to sign off; tenants may configure higher requirements (e.g., two `sop_signer`s for SOPs tagged with `severity_min = CRITICAL`). The signoff record is part of the immutable audit trail of the SOP.
 
-**Signoff.** PUBLISHED SOPs require at least one user holding `sop_signer` role to sign off. Tenants may configure higher requirements (e.g., two `sop_signer`s for SOPs tagged with severity_min = CRITICAL). The signoff record is part of the immutable audit trail of the SOP.
+The mode is a deployment-wide config; the engine supports either. Enterprises pick their working model. **Switching modes does not require schema migration** — every SOP carries a `status` field in both modes; in `lightweight` mode the status simply transitions through fewer values.
+
+Edits to a PUBLISHED SOP create a new version (incrementing the version field) in DRAFT (gated mode) or immediately PUBLISHED at the new version (lightweight mode); the prior version stays accessible for retrieval audit but is no longer returned by retrieval queries by default.
 
 ### 2.3 Storage
 
@@ -104,18 +119,21 @@ CRUD table per tenant in `aatu_knowledge.sops`. Embeddings live in `aatu_knowled
 
 ### 2.4 Authoring
 
-Editing happens through aatu's tenant-admin web UI or, for solo subscribers, through the VS Code extension's SOP editor. The flow:
+Editing happens through the SOP editor in the VS Code extension or, when the governance module is loaded, through the web tenant-admin UI's SOP authoring surface (signoff queues, review history, citation analytics).
 
+**`lightweight` mode flow:** user with `sop_author` (or `analyst` parent role) writes the body, sets `applies_to` metadata, saves → SOP is PUBLISHED immediately, embeddings generated, retrieval index updated. No queues, no signoff.
+
+**`gated` mode flow:**
 1. `sop_author` creates DRAFT, edits body, sets `applies_to` metadata
 2. Submits for review → IN_REVIEW
 3. `sop_signer` reviews, requests changes (back to DRAFT) or signs off (→ PUBLISHED)
 4. On PUBLISHED: embeddings generated, retrieval index updated
 
-Tenants may configure a "quick path" where `sop_author` and `sop_signer` are the same user for low-risk SOPs (e.g., severity_min ≤ MEDIUM) — relevant for solo subscribers and small teams. Higher-risk SOPs require distinct author and signer.
+Tenants in `gated` mode may configure a "quick path" exception where `sop_author` and `sop_signer` collapse to the same user for low-risk SOPs (e.g., `severity_min ≤ MEDIUM`). Higher-risk SOPs require distinct author and signer.
 
-### 2.5 Solo subscribers
+### 2.5 OSS single-tenant installs
 
-Solo subscribers hold both `sop_author` and `sop_signer` roles in their personal tenant. They can author SOPs for their own use without signoff ceremony. The system records their dual role on the SOP — when the SOP lifts to a SaaS tenant via the lift path (05 §9), the receiving tenant's signoff requirements may demand re-review before the SOP is published in the new tenant.
+In an OSS single-tenant install (typically `governance_mode: lightweight` by default), the install owner holds every role; SOPs PUBLISH immediately on save. When the install lifts to a paid multi-tenant deployment (05 §9) and the target tenant runs `governance_mode: gated`, the SOPs may need re-review before they're considered PUBLISHED in the new context — the `LiftSolo` workflow surfaces this to the user as a per-SOP review queue rather than auto-publishing.
 
 ---
 
@@ -285,7 +303,7 @@ Specifically, the prompt instructs the LLM to:
 
 ### 6.1 Layer A — structured references on the Interpretation event
 
-Per the companion edits in 05 §13.1, the Interpretation event payload (02-persistence.md §6) gains optional fields:
+Per the companion edits in 05 §14.1, the Interpretation event payload (02-persistence.md §6) gains optional fields:
 
 ```
 consulted_sops                       list<{sop_id, version, retrieval_score, used: bool}>
@@ -401,7 +419,7 @@ The post-conclusion pipeline (07) may generate candidate SOPs from concluded inv
 
 - **01-domain-model.md** — the actor model (knowledge consultations are recorded in the actor's audit trail), the PROVENANCE extension for `consulted_sops` / `consulted_similar_investigations` / `retrieval_context_hash`
 - **02-persistence.md** — the Layer A / Layer B persistence pattern (06 §6 reuses it for retrieval audit)
-- **04-action-authorization.md** — the CEL context extension `ctx.sop_guidance.*` and `ctx.similarity.*` (05 §13.3) lets policies condition on knowledge retrieval outcomes
+- **04-action-authorization.md** — the CEL context extension `ctx.sop_guidance.*` and `ctx.similarity.*` (05 §14.3) lets policies condition on knowledge retrieval outcomes
 - **05-component-architecture.md** — the knowledge service's deployment shape, isolation properties, and lift handling
 - **07-post-conclusion-outputs.md** — the `SummarizeForKnowledgeIndex` workflow and the candidate-SOP generation pipeline that populates the corpora
 
