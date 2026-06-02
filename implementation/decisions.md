@@ -56,7 +56,41 @@ A decision is "pending" until it lands. "Landed" when it's reflected in code and
 
 **Status:** Pending — Phase A.8 (local mode) and Phase J (production).
 **Candidates:** Self-hosted OTel collector + Grafana, vs SaaS (Honeycomb / Datadog / etc.). Production-only concern; local mode just emits to stderr + rolling file.
-**Decider:** SRE/devops hire (Month 5–7) + founder.
+**Decider:** Founder + contractor (R10 in `risks.md`) by Phase J.
+
+### D9 — Claude Code workflow setup
+
+**Status:** Pending — Week 1, parallel with module boundary.
+**Scope:**
+- Skills: `/run-tests`, `/check-cross-refs`, `/validate-module-boundary`, `/generate-adapter-scaffold`
+- Hooks: deny destructive commands; gate `paid/*` writes behind explicit approval
+- Memory: project memory for architectural commitments; feedback memory for review patterns the founder repeats
+- Review command: `/review` runs Claude over a diff with founder's review criteria
+**Output:** Configuration committed under `.claude/` in repo; conventions documented in `CLAUDE.md`.
+**Decider:** Founder.
+
+### D10 — Contractor engineer for periodic code review
+
+**Status:** Pending — engagement starts Month 6.
+**Why:** R10 (bus factor of 1) and R11 (code quality drift) — see `risks.md`. The contractor doesn't write code; they audit, ask questions, push back on architectural choices.
+**Profile:** Senior Go engineer with event-sourcing + multi-tenant SaaS experience. 4 hrs/month → 8 → 16 as codebase grows.
+**Scoping:** Engagement plan written in Month 4; engagement starts Month 6 (or earlier if codebase complexity demands).
+**Decider:** Founder.
+
+### D11 — First permanent engineering hire (Month 12–14)
+
+**Status:** Pending — recruitment starts Month 9–10, hire lands Month 12–14.
+**Why:** Right after v1 OSS launches, right before v2 paid-module deep dive. Two reasons: (1) second pair of eyes on a codebase nobody but the founder has touched — the bus-factor problem, real by Month 12; (2) capacity to take Phase I/J ownership while founder focuses on customer-facing GA prep.
+**Profile:** Done event-sourcing + multi-tenant SaaS. Comfortable taking over a Claude-written codebase. Senior enough to push back on architectural choices.
+**Ramp expectation:** 6 weeks before independently productive; pair with the contractor (D10) for handoff.
+**Decider:** Founder.
+
+### D12 — Claude Design integration cadence
+
+**Status:** Pending — Phase D entry (~Month 5–6).
+**Question:** How often Claude Design deliverables land; how iteration happens; what handoff to Claude Code (for implementing the surface) looks like.
+**Output:** Workflow doc in `implementation/` or `decisions.md` once first cycle has run.
+**Decider:** Founder; first real test is the action review panel in Phase D.
 
 ## Landed
 

@@ -91,32 +91,50 @@ The critical path is A → B → C → D → E → I → K. Parallelism opportun
 
 | Stage | Wall clock | Why |
 |---|---|---|
-| Cold start → v0 design-partner ready | ~8 months | Hiring ramp + architecture decisions + agent-loop prompt engineering (which is research, not implementation) |
-| v0 → v1 OSS public launch | ~5 months | Five real adapters + write side + embeddings + OSS launch prep; parallelizes well |
-| v1 → v2 GA | ~7 months | Two paid modules + GA infra + self-hosted artifacts + aatu-hosted env + SOC 2 prep — most complex chunk |
-| **Cold start → GA** | **~20 months** | Plan for 24 to absorb what we don't see coming |
+| Cold start → v0 design-partner ready | ~6–8 months | Founder-bottlenecked review of Claude-generated code; agent-loop prompt engineering (research, not implementation); hunter recruitment runs in parallel |
+| v0 → v1 OSS public launch | ~5–7 months | Five real adapters calendar-bound by vendor APIs; OSS launch overhead unchanged; hunter onboarded helps with adapter validation |
+| v1 → v2 GA | ~7–9 months | Two paid modules + GA infra + self-hosted artifacts + aatu-hosted env + SOC 2 prep + first non-founder engineer ramping on codebase |
+| **Cold start → GA** | **~20–22 months** | Plan for 24 to absorb what we don't see coming |
 
-## Headcount ramp
+The wall-clock is similar to a small-team plan, but the cost shape is wildly different (~$0.5–1.5M total burn through GA vs $5–8M). Code generation isn't the slow part — review, integration, vendor-API integration, customer conversations, and architectural decisions are. AI augmentation accelerates code but not those.
+
+## Team ramp (real)
 
 ```
-Month       1   3   5   7   9   11  13  15  17  19  21
-─────────────────────────────────────────────────────
-Backend Go  3   4   4   5   5   5   6   6   6   6   6
-TS / Ext    -   1   1   2   2   2   2   2   2   2   2
-Web (Next)  -   -   -   -   -   1   1   2   2   2   2
-SRE/Devops  -   -   1   1   1   1   2   2   2   2   2
-Designer    1   1   1   1   1   1   1   2   2   2   2
-PM          1   1   1   1   1   1   1   1   1   1   1
-Hunter / SE -   -   1   1   1   1   1   1   2   2   2
-Security    -   -   -   -   -   -   1   1   1   1   1
-Sales/CS    -   -   -   -   -   -   -   -   -   1   2
-─────────────────────────────────────────────────────
-Total       5   6   8   10  10  11  14  16  17  18  19
+Month            1   3   5   7   9   11  13  15  17  19  21
+──────────────────────────────────────────────────────────
+Founder / arch   1   1   1   1   1   1   1   1   1   1   1
+Hunter           -   -   1   1   1   1   1   1   1   1   1
+Senior Eng       -   -   -   -   -   -   1   1   1   1   1
+2nd Hunter / SE  -   -   -   -   -   -   -   -   1   1   1
+Customer success -   -   -   -   -   -   -   -   -   1   1
+Sales            -   -   -   -   -   -   -   -   -   -   1
+──────────────────────────────────────────────────────────
+Total            1   1   2   2   2   2   3   3   4   5   6
 ```
 
-Plus founder/architect throughout — tech-leading the backend in A–C, shifting to architecture oversight + customer conversations from D onward.
+**Implicit team members (not on payroll):**
+- **Claude Code** — implementation throughout
+- **Claude Design** — UX throughout
+- **Founder time on review** is the throughput cap, not the headcount
 
-The single most important non-engineering hire is the **hunter / security engineer at Month 5**. Drives fixture quality, agent-loop prompt design, reasoning-quality testing, design-partner conversations. Treat as a peer of engineering, not as a customer-success function. Recruitment is hard; start the search now.
+**Key hires and timing rationale:**
+
+- **Hunter (Month 5).** Hardest hire; start recruitment Month 1. Drives fixture quality, agent-loop prompt design, reasoning-quality testing, design-partner conversations. First real person after founder. Treat as a peer, not a function.
+- **Senior engineer (Month 12–14).** Right after v1 OSS launches, right before v2 paid-module deep dive. Two reasons: (1) second pair of eyes on a codebase nobody but the founder has touched — the bus-factor problem, real by Month 12; (2) capacity to take Phase I/J ownership while founder focuses on customer-facing GA prep and Phase K. Should be someone who's done event-sourcing + multi-tenant SaaS. Hiring this person blind into a Claude-written codebase is risky — see R10.
+- **Customer success (Month 19).** When paid customers exist or are imminent.
+- **Sales (Month 21).** At GA; paid customers need a deal closer.
+
+**What's deliberately absent vs the original team plan:**
+- No backend engineers in months 1–11. Claude Code + founder review.
+- No designer. Claude Design + founder direction.
+- No SRE/devops. Bundled deps + bare cloud infra handled by founder + Claude through GA prep; SRE-shaped hire considered only if scale demands.
+- No PM. Founder is the PM.
+
+**What's still real:**
+- The hunter hire. AI doesn't replace domain expertise on the SOC side.
+- Customer-facing roles. Trust is built person-to-person, not AI-to-prospect.
+- A senior engineer for codebase stewardship before paid modules — not technical capacity, *succession risk* mitigation.
 
 ## Done-bars per cut
 

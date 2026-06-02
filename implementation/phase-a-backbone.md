@@ -1,14 +1,16 @@
 # Phase A — Backbone
 
 **Calendar:** Month 1–3
-**Headcount:** Founder/architect + 2 senior Go backend engineers + designer
+**Team:** Founder/architect supervising Claude Code; Claude Design contributing API/CLI surface shape where relevant
 **Done when:** Bundled deps boot under the supervisor; the aggregate persists events and replays them into projections; JWT-authenticated RPC works end-to-end; paid-module package boundary is in place and proven.
+
+**Ownership convention in this doc:** every subscope below is implemented by Claude Code under founder supervision. "Owner" means *who specifies and reviews* — the founder for everything in Phase A. Where domain expertise is genuinely required (none in Phase A; mostly in Phase B–D), the hunter joins from Month 5.
 
 ## Scope
 
 ### A.1 Module layout and package boundary (Week 1)
 
-**Owner:** Founder/architect or first senior hire.
+**Spec/review owner:** Founder. Implementation by Claude Code; founder writes the interfaces and reviews the implementation.
 **Reference:** `module-layout.md`.
 
 Lay down the directory structure, the `oss/module` interfaces, the cmd-side wireup, and the config loader. No business logic. Single Go test proves the seam switches correctly between OSS and paid distributions.
@@ -21,7 +23,7 @@ Lay down the directory structure, the `oss/module` interfaces, the cmd-side wire
 
 ### A.2 Bundled deps supervisor (Weeks 2–4)
 
-**Owner:** Backend engineer #1.
+**Spec/review owner:** Founder.
 **Reference:** `design/05-component-architecture.md §3.1, §12.1`.
 
 `aatu start` brings up four managed components:
@@ -43,7 +45,7 @@ aatu start
 
 ### A.3 Postgres schema bootstrap (Week 4)
 
-**Owner:** Backend engineer #1.
+**Spec/review owner:** Founder.
 
 Three databases on the bundled Pg instance per `05 §3.2`:
 - `aatu_main` — investigation events, STIX object store, projections, side stores
@@ -56,7 +58,7 @@ Migration tooling: pick one (`migrate` / `goose` / `sqlc-driven`) and stick with
 
 ### A.4 Event-sourced aggregate (Weeks 4–9)
 
-**Owner:** Senior backend engineer #2 + founder/architect.
+**Spec/review owner:** Founder. Heavy founder bandwidth — this is the architectural spine; specs need to be tight before Claude implements.
 **Reference:** `design/02-persistence.md` — the canonical event taxonomy, projection model, optimistic concurrency rules.
 
 The investigation aggregate is the spine. It owns:
@@ -77,7 +79,7 @@ The investigation aggregate is the spine. It owns:
 
 ### A.5 Authentication and authorization middleware (Weeks 5–8, parallel)
 
-**Owner:** Senior backend engineer #1.
+**Spec/review owner:** Founder.
 **Reference:** `design/05-component-architecture.md §5`.
 
 - JWT validation against Keycloak's signing keys
@@ -89,7 +91,7 @@ The investigation aggregate is the spine. It owns:
 
 ### A.6 HTTP+WS server skeleton (Weeks 6–9)
 
-**Owner:** Senior backend engineer #1.
+**Spec/review owner:** Founder.
 
 - HTTP router with the auth middleware in front
 - WebSocket endpoint for projection deltas (subscription model wired but no fan-out yet — fan-out lands in Phase D)
@@ -100,7 +102,7 @@ The investigation aggregate is the spine. It owns:
 
 ### A.7 Temporal worker registration (Weeks 8–10)
 
-**Owner:** Backend engineer #1.
+**Spec/review owner:** Founder.
 
 - Register a Temporal worker in-process on the `aatu` task queue per `05 §3.3`
 - Skeleton workflows registered (empty bodies) so Phase C can fill them: `ActionLifecycle`, `ReversalSaga`, `RenormalizePass`, `ArchiveInvestigation`, `PostConclusionPipeline`, `SummarizeForKnowledgeIndex`
@@ -110,7 +112,7 @@ The investigation aggregate is the spine. It owns:
 
 ### A.8 Telemetry, logging, observability (Weeks 9–12)
 
-**Owner:** Backend engineer #1.
+**Spec/review owner:** Founder.
 
 - Structured logging with levels, contextual fields
 - OpenTelemetry trace setup (no exporter wired yet for v0; just the API)

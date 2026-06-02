@@ -2,6 +2,16 @@
 
 Working folder for delivering aatu from cold start to v2 GA. Specs live in `design/` and are authoritative on *what to build*; this folder is about *how to build it, in what order, by whom, and against which risks*.
 
+## Team shape (real)
+
+- **Founder + architect** — sole human on engineering; supervises all output; makes architectural calls; owns customer conversations; runs strategy.
+- **Claude Code** — implementation. Writes the Go backend, the TypeScript extension, adapters, tests, migrations, CI.
+- **Claude Design** — UX. Surfaces, wireframes, interaction patterns, visual design.
+- **Hunter (first hire, Month 5)** — fixture authoring, agent-loop prompt design, design-partner conversations, reasoning-quality testing. First actual person on the team after the founder.
+- **Subsequent hires** — selectively, from ~Month 12 onward; see `roadmap.md` for ramp.
+
+The throughput-shaping fact: code generation isn't the bottleneck. Founder review capacity is. Plans below are calendar-shaped accordingly.
+
 ## Relationship to `design/`
 
 - `design/` answers "what is this thing?" — domain model, capability layer, action authorization, knowledge service, component topology, post-conclusion outputs, packaging, deployment shapes.
