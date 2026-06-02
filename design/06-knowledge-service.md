@@ -412,6 +412,7 @@ The post-conclusion pipeline (07) may generate candidate SOPs from concluded inv
 - **In-flight investigation indexing freshness.** N-hour granularity vs event-driven re-indexing. Operational tuning, not architecture.
 - **Candidate-SOP generator quality.** v1 candidate SOPs may be rough — the goal at v1 is "useful drafts that a human refines," not "production-ready." Quality bar rises as the pipeline matures.
 - **Authoring UX for solo subscribers.** Whether VS Code extension is sufficient or a web editor is also needed for solo. Pragmatic call after first real users.
+- **SOP citation analytics surface.** Per-SOP "how often consulted, how often led to a conclusion, top-N SOPs by retrieval-to-citation ratio" is derivable from the `consulted_sops` provenance fields already on Interpretation events (§6.1). Data exists from v0. The dashboard surface that exposes it is deferred to governance-module work alongside the broader per-tenant analytics surface (05 §16). Bolt-on, no architectural change required.
 
 ---
 
