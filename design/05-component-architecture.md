@@ -8,7 +8,7 @@ This spec defines the component topology, deployment shapes, authentication, the
 
 ## Thread scope
 
-- Component topology of the same Go binary across two deployment shapes
+- Component topology of the OSS and paid Go binaries across two deployment shapes
 - Solo localhost: process supervision, bundled Postgres + Temporal, agent-loop placement, vendor credential handling
 - Multi-tenant SaaS: managed data plane, federated identity, shared investigation, async approval surface
 - Authentication and authorization: aatu-operated Keycloak, JWT-borne roles, two-axis evaluation
@@ -36,7 +36,7 @@ This spec defines the component topology, deployment shapes, authentication, the
 |---|---|---|
 | Backend language | Go everywhere | Single binary distribution, low cold-start, healthy MCP / cloud-native ecosystem; STIX/OCSF library landscape is workable in any language given the spec's deviations and the codegen-from-schema approach to OCSF |
 | Open-core line | Gate operation and governance; never investigative capability or connectors | OSS engine + all adapter classes must be standalone-usable; tenancy and governance are the paid additions; full rationale in §13 |
-| Distributions | OSS and paid; one Go binary | Module loading via separately-compilable packages (`oss/`, `paid/tenancy/`, `paid/governance/`); same binary across distributions |
+| Distributions | OSS and paid; two binaries from two repos | Public `aatu` repo defines module interfaces and ships the OSS binary; private `aatu-enterprise` depends on `aatu` and implements the interfaces, shipping the paid binary. The seam is repo-enforced — OSS cannot import paid because paid is not in its import graph |
 | Operator | Customer (OSS, paid self-hosted) or aatu (paid aatu-hosted); orthogonal to distribution | Same Terraform/Helm for paid regardless of operator |
 | Postgres | Bundled (`embedded-postgres-go`) in OSS; managed typical in paid; bundled still works in paid | Analyst UX in OSS; operational preference in paid |
 | Temporal | Bundled (Temporal CLI dev server, Postgres-backed) in OSS; managed cluster typical in paid | Eliminates handrolled task-queue plumbing for action expiry, dispatch retries, reversal sagas, re-normalization, archive bundling, post-conclusion workflow |
@@ -57,7 +57,7 @@ This spec defines the component topology, deployment shapes, authentication, the
 
 These follow from the upstream specs and the decisions above. They are load-bearing across the rest of this spec and the dependent threads.
 
-**1. Two deployment shapes, one binary.** The same Go backend artifact runs in solo localhost mode and in multi-tenant SaaS mode. Deployment-mode is a configuration dimension, not a code-path dimension. The aggregate, capability resolver, normalizer, identity resolver, policy engine, knowledge service, and Temporal worker are identical across shapes. What differs is what's wired up: Keycloak realm vs. native user, vault paths vs. OS keychain, S3 side store vs. local table, multi-analyst WebSocket fan-out vs. single-analyst direct WebSocket, etc.
+**1. Two distributions, deployable in any shape.** aatu ships from two repos: a public OSS repo (`aatu`) and a private paid repo (`aatu-enterprise`) that depends on the OSS repo through a stable `module/` interface package. Each repo builds an `aatu` binary; the paid binary is a behavioral superset of the OSS binary (run with `paid.*.enabled: false` it behaves identically). Either binary runs in solo localhost mode or multi-tenant operation mode — deployment-mode is a configuration dimension, not a code-path dimension. The aggregate, capability resolver, normalizer, identity resolver, policy engine, knowledge service, and Temporal worker are identical across shapes. What differs across deployment shapes is what's wired up: Keycloak realm vs. native user, vault paths vs. OS keychain, S3 side store vs. local table, multi-analyst WebSocket fan-out vs. single-analyst direct WebSocket, etc.
 
 **2. Local-first by construction.** Solo localhost runs with zero aatu data-plane involvement. Customer investigation data — events, STIX nodes, OcsfEvents, transcripts, SOPs — never leaves the laptop unless the analyst lifts to SaaS. The aatu-operated surface that solo mode depends on is limited to: aatu's Keycloak (for auth), aatu's CDN (for binary, policy, fixture, MITRE, adapter-registry distribution), and optional approval-relay + transactional email (only when the solo subscriber configures `approver_emails`). Telemetry and licensing intakes, if any, are opt-in.
 
@@ -77,7 +77,7 @@ These follow from the upstream specs and the decisions above. They are load-bear
 
 ## 3. Runtime topology
 
-The aatu Go binary runs in two dependency configurations distinguished only by what Postgres / Temporal / Keycloak it points at. Solo laptop and self-hosted multi-user are both the same binary; paid runs add module-driven behavior on top. Per §13, the open-core line and the operator orthogonality govern *what* is loaded and *who* runs it; this section describes the *runtime* once.
+The aatu binary runs in two dependency configurations distinguished only by what Postgres / Temporal / Keycloak it points at. Solo laptop and self-hosted multi-user are both the same OSS binary; the paid binary (built from `aatu-enterprise`, which depends on the OSS engine) adds module-driven behavior on top of the same code paths. Per §13, the open-core line and the operator orthogonality govern *what* is loaded and *who* runs it; this section describes the *runtime* once.
 
 ### 3.1 Process model
 
@@ -574,15 +574,15 @@ Standard cloud-native deployment: stateless aatu-backend workers behind a load b
 
 aatu ships as open-core. This section defines the architectural shape of that split: what is in the OSS distribution, what is in the two paid modules, how modules load, and the orthogonal axis of operator (customer vs aatu). The open-core line is **operation and governance, never capability or connectors** — and it is structural, not a packaging afterthought.
 
-### 13.1 Two distributions, one binary
+### 13.1 Two distributions, two binaries from two repos
 
-The same Go binary ships in two distributions:
+The open-core split is enforced by a repo boundary, not a folder boundary:
 
-- **OSS distribution.** Engine only. Single tenant. Bundled deps (Postgres, Temporal, Keycloak single realm). Full investigative capability: aggregate, capability layer, all adapter classes (MCP, NATIVE_API, CUSTOM, FIXTURE, SOAR_PLAYBOOK), normalizers, action authorization machinery, knowledge service core, reasoning loop, VS Code extension. No paywalled connectors. No paywalled investigative features. A single environment investigates fully on the free tier.
+- **OSS distribution.** Public repo `aatu`. The `aatu` binary built from this repo is the engine only: aggregate, capability layer, all adapter classes (MCP, NATIVE_API, CUSTOM, FIXTURE, SOAR_PLAYBOOK), normalizers, action authorization machinery, knowledge service core, reasoning loop, VS Code extension. No paywalled connectors. No paywalled investigative features. Single tenant. Bundled deps (Postgres, Temporal, Keycloak single realm). A single environment investigates fully on the free tier.
 
-- **Paid distribution.** Same engine + one or both paid modules (tenancy, governance) loaded. Production-grade dependencies (managed Postgres, managed Temporal, managed Keycloak HA, S3, Vault) are typical but not required — the bundled deps still work; the choice is operational, not architectural.
+- **Paid distribution.** Private repo `aatu-enterprise`, which depends on the public `aatu` repo as a Go module and implements the `aatu/module/` interfaces. The `aatu` binary built from this repo is a *behavioral superset* of the OSS engine: the same code paths plus the loaded paid modules (tenancy, governance, or both). Production-grade dependencies (managed Postgres, managed Temporal, managed Keycloak HA, S3, Vault) are typical but not required — the bundled deps still work; the choice is operational, not architectural.
 
-The distribution is a build-time + config-time decision. Build-time: which Go packages are compiled in (`oss/`, `paid/tenancy/`, `paid/governance/` or build tags). Config-time: which compiled-in modules are activated. The binary is otherwise identical across distributions.
+The repo boundary is the architectural enforcement: the OSS binary has no paid code on disk because the paid code is not in its import graph. The interface contract lives in `aatu/module/` and is implemented in `aatu-enterprise/tenancy/` and `aatu-enterprise/governance/`. Run the paid binary with all `paid.*.enabled: false` and it behaves identically to OSS — same engine, same code paths. The honor-system gate at v0–v1 is config-driven; at v2+ a signed entitlement check joins the config flag. The repo layout is in `implementation/module-layout.md`.
 
 ### 13.2 Module inventory
 

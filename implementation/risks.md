@@ -120,6 +120,18 @@ Living register. Each risk has a description, likelihood/impact, mitigation, and
 - The first senior engineer hire makes this conversation easier. Schedule them in time for the GA sales motion.
 **Trigger:** First buyer explicitly raises this as a concern; track frequency.
 
+### R14 — Cross-repo coordination tax
+
+**L/I:** Certain / Low–Medium
+**Why:** Two repos (public `aatu`, private `aatu-enterprise`) is the right architectural and optics shape (see D13), but it adds friction: two CI pipelines, two release flows, occasional refactors that have to span both, and interface contracts that must be honored carefully (a breaking change in `aatu/module/` is a paid-repo breakage). With a founder + Claude Code team, this friction is real but not disqualifying.
+**Mitigation:**
+- `go.work` for local dev — Claude Code edits both repos in one workspace, sees breakage immediately.
+- CI in the paid repo runs against a pinned `aatu` version; bumping the pin is an explicit commit, not an accident.
+- Interface changes in `aatu/module/` follow a deliberate workflow: spec the change, update OSS first, then update paid against the new spec.
+- Refactor-spanning-both PRs get a checklist: "OSS PR merged; paid PR rebased; pin bumped; paid CI green."
+- Memory captures the contract once it's settled so future sessions don't re-litigate.
+**Trigger:** A paid-repo CI break from an `aatu` change that wasn't caught locally — once is teaching, twice means the workflow isn't sticking.
+
 ## Resolved
 
 *(none yet)*

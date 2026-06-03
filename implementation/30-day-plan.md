@@ -23,15 +23,19 @@ The three things that must land before any business logic is written.
 
 **Unblocks:** Everything else.
 
-### 2. Land the Go package boundary
+### 2. Land the two-repo OSS / paid boundary
 
-**Why first:** Single most leveraged architectural commit of the whole project. ~1 week of focused work now; saves 4–6 weeks of refactor at v2. The seam between OSS and paid modules has to be defined before any business logic gets written.
+**Why first:** Single most leveraged architectural commit of the whole project. ~1 week of focused work now; saves 4–6 weeks of refactor at v2 and avoids a high-stakes split right before OSS goes public. The seam between OSS and paid modules is a *repo boundary* — public `aatu`, private `aatu-enterprise` — not a folder boundary.
 
-**How this gets done:** Founder writes the architectural decisions (Option A vs B, package layout, interface signatures), Claude Code implements the structure, founder reviews and corrects. Spec reference is `implementation/module-layout.md` (already drafted).
+**How this gets done:** Founder writes the architectural decisions (repo layout, interface signatures, binary-naming convention), Claude Code implements both repo skeletons, founder reviews and corrects. Spec reference is `implementation/module-layout.md`.
 
-**Definition of Done:** Repo compiles. `go test ./...` passes (empty tests OK). A `paid_modules.tenancy.enabled` config flag flips a no-op switch. Sample command logs `tenancy module: disabled` at startup. Decision on Option A vs B recorded in `decisions.md`.
+**Definition of Done:**
+- Public `aatu` repo: compiles, `go test ./...` passes (empty tests OK), `module/` interfaces + disabled stubs land, `cmd/aatu version` runs, single test proves disabled-stub behavior.
+- Private `aatu-enterprise` repo: depends on `aatu` as a Go module, `tenancy/` and `governance/` stubs land, paid `cmd/aatu version` reports as paid build, single integration test proves the config flag flips activation correctly.
+- `go.work` set up locally so Claude Code can edit both repos against each other.
+- D13 (two-repo decision) recorded in `decisions.md`; D1 marked superseded.
 
-**Unblocks:** Phase A; everything downstream stays clean.
+**Unblocks:** Phase A; everything downstream stays clean. The repo boundary makes Phase H OSS launch a non-event — the public repo IS what goes public.
 
 ### 3. Start the agent-loop prompt-engineering research thread
 

@@ -8,18 +8,23 @@
 
 ## Scope
 
-### A.1 Module layout and package boundary (Week 1)
+### A.1 Two-repo layout and package boundary (Week 1)
 
 **Spec/review owner:** Founder. Implementation by Claude Code; founder writes the interfaces and reviews the implementation.
 **Reference:** `module-layout.md`.
 
-Lay down the directory structure, the `oss/module` interfaces, the cmd-side wireup, and the config loader. No business logic. Single Go test proves the seam switches correctly between OSS and paid distributions.
+Stand up two repos:
+- Public `aatu` — directory structure, `module/` interfaces, OSS-side cmd wireup, config loader.
+- Private `aatu-enterprise` — `tenancy/` and `governance/` stubs, paid-side cmd wireup, dependency on `aatu` as a Go module.
+
+No business logic in either. Tests prove the seam switches correctly between OSS and paid binaries.
 
 **Done bar:**
-- Repo compiles, `go test ./...` passes (empty tests OK).
-- `aatu version` runs.
-- A config flag flips a no-op switch demonstrably.
-- Decision on Option A vs B build configuration recorded in `decisions.md`.
+- Both repos compile. `go test ./...` passes in each (empty tests OK).
+- `aatu version` runs from both binaries; paid build reports as paid.
+- In the paid binary, a `paid.tenancy.enabled` config flag flips a no-op switch demonstrably; in the OSS binary, the flag is logged-and-ignored.
+- `go.work` works for local cross-repo dev.
+- D13 (two-repo decision) recorded in `decisions.md`.
 
 ### A.2 Bundled deps supervisor (Weeks 2–4)
 
@@ -143,7 +148,7 @@ A backend engineer can:
 7. Replay events from scratch and get an identical projection
 8. Hit Temporal Web UI and see worker registered with empty workflow stubs
 9. Run `go test ./...` and see all tests pass
-10. Run the same binary in `deployment.mode: paid, paid.tenancy.enabled: true` and see the stub log "tenancy module enabled but not implemented" without crashing
+10. Run the *paid* binary (from `aatu-enterprise`) with `paid.tenancy.enabled: true` and see the stub log "tenancy module enabled (stub)" without crashing; flip to `false` and see "tenancy module: disabled"
 
 That's the spine. Phase B starts adding the capability layer on top.
 

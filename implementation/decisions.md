@@ -8,10 +8,18 @@ A decision is "pending" until it lands. "Landed" when it's reflected in code and
 
 ### D1 — Build configuration: Option A (single binary) vs Option B (build tags)
 
+**Status:** Superseded by D13 (two-repo layout).
+**Original framing:** Single repo with `oss/` + `paid/` siblings; choose between one binary with runtime config (A) or two artifacts via build tags (B).
+**Why superseded:** Both options assumed a single repo. The repo boundary moved to a *repo-level* split (public `aatu`, private `aatu-enterprise`), which architecturally enforces the OSS/paid seam in a way buyers and OSS contributors immediately recognize. Two binaries, full stop; build tags become unnecessary.
+
+### D13 — Two-repo OSS / paid boundary
+
 **Status:** Pending — must land in Week 1 alongside `module-layout.md` implementation.
-**Default recommendation:** Option A (single binary, runtime config) through v2 GA. Evaluate Option B post-GA if open-source community asks for it.
-**Why default:** One CI matrix, one release artifact, one set of integration tests. The seam — what matters architecturally — is identical in both options.
-**Decider:** Founder/architect + first senior backend engineer.
+**Decision:** Public `aatu` repo for OSS engine + adapters + module interfaces; private `aatu-enterprise` repo for tenancy and governance module implementations. Paid repo depends on OSS repo as a Go module. Each repo builds its own `aatu` binary; the paid binary supersets OSS behaviorally.
+**Why:** Dominant open-core pattern (Mattermost, Grafana, Sentry, Vault historical). A public repo with `paid/` folders reads as OSS-adjacent; two repos read as a genuine OSS commitment. Architectural enforcement: OSS cannot import paid because paid isn't in its import graph.
+**Trade-off accepted:** Cross-repo coordination tax (two CI pipelines, two release flows, occasional refactors that span both). Mitigated by `go.work` for local dev and a pinned-version contract for CI; tracked as R14 in `risks.md`.
+**Open binary-naming sub-question:** Both binaries named `aatu` (yes — customer install source changes when converting OSS → paid; binary name does not).
+**Decider:** Founder.
 
 ### D2 — Postgres migration tooling
 

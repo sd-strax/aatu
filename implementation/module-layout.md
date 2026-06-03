@@ -1,186 +1,239 @@
-# Module layout — the OSS / paid boundary
+# Module layout — the OSS / paid repo boundary
 
-The single most leveraged architectural commit. Lays down the seam between OSS and paid modules in code so they fill in cleanly at v2 without touching anything in OSS. Lands in Week 1; everything in Phase A and beyond hangs off it.
+The single most leveraged architectural commit. aatu's open-core split is enforced by a **repo boundary**, not a folder boundary: OSS in one public repo, paid modules in one private repo, with the paid repo depending on the OSS repo through a stable module-interface package. Lands in Week 1; everything in Phase A and beyond hangs off it.
 
-## Why a code-level boundary at all
+## Why a repo-level boundary
 
-Per `design/05-component-architecture.md §13.4`:
-- One Go binary across OSS and paid distributions
-- Paid modules ship as separately-compilable Go packages
-- Activation is config-driven at v0–v1 (honor system); signed-entitlement check bolts on later in a single PR
+Open-core projects with `oss/` and `paid/` folders inside a single public repo (GitLab `ee/`, PostHog `ee/`) are widely cited as licensing-and-optics oddities. The dominant pattern in real open-core projects is two repos:
 
-The architectural seam exists to make that last point true. If OSS code calls directly into paid code, there's no clean place to gate. If paid code calls into OSS via interfaces OSS defines, the gate goes on the interface implementations.
+- Mattermost / Mattermost EE
+- Grafana / Grafana Enterprise
+- Sentry / getsentry
+- HashiCorp Vault (OSS) / Vault Enterprise (historical structure)
 
-## Top-level layout
+Two repos give us:
+
+- A public OSS repo that reads as a *real* OSS commitment, not OSS-with-attached-paid
+- A clean licensing story — OSS code under an OSS license, paid code under a commercial license, no in-repo confusion
+- Architecturally enforced separation: OSS *cannot* import paid because paid isn't in its import graph
+
+The interface contract works identically in one repo or two. Two repos just enforces it harder.
+
+## The two repos
 
 ```
-aatu/
+aatu                                       # public — github.com/sd-strax/aatu
 ├── cmd/
-│   ├── aatu/                # CLI entry (init, start, stop, status, ...)
-│   └── aatu-backend/        # backend supervisor entry
-├── oss/                     # OSS engine — always compiled in
-│   ├── aggregate/           # event-sourced investigation aggregate
-│   ├── capability/          # resolver, adapter runtime, normalizers
-│   ├── action/              # action authorization machinery
-│   ├── knowledge/           # SOPs, concluded-investigation summaries, retrieval
-│   ├── identity/            # per-tenant namespace UUID, UUIDv5 resolver
-│   ├── authz/               # JWT validation, role extraction, two-axis evaluation
-│   ├── temporal/            # worker registration, OSS workflows
-│   ├── module/              # module loader, interfaces paid modules implement
-│   ├── config/              # config loader, env, secrets indirection
-│   └── server/              # HTTP+WS server
-├── paid/
-│   ├── tenancy/             # paid tenancy module (multi-tenant operation)
-│   └── governance/          # paid governance module (SSO helpers, signoff queues, etc.)
-├── adapters/                # first-party adapter binaries (separate processes)
-│   ├── fixture/             # fixture adapter (always present)
-│   ├── mcp-shim/            # MCP adapter scaffold
-│   └── ...                  # native vendor adapters land here (v1+)
-├── internal/                # truly internal helpers; no module concerns
-└── design/                  # specs (existing)
+│   ├── aatu/                              # OSS CLI entry
+│   └── aatu-backend/                      # OSS backend supervisor entry
+├── module/                                # interface package — paid repo implements these
+├── aggregate/                             # event-sourced investigation aggregate
+├── capability/                            # resolver, adapter runtime, normalizers
+├── action/                                # action authorization machinery
+├── knowledge/                             # SOPs, summaries, retrieval
+├── identity/                              # per-tenant namespace, UUIDv5 resolver
+├── authz/                                 # JWT validation, role extraction, two-axis evaluation
+├── temporal/                              # worker registration, OSS workflows
+├── config/                                # config loader
+├── server/                                # HTTP+WS server
+├── adapters/                              # first-party adapter binaries
+├── internal/                              # truly internal helpers
+├── design/                                # specs (existing)
+└── go.mod
+
+aatu-enterprise                            # private — github.com/sd-strax/aatu-enterprise
+├── cmd/
+│   ├── aatu/                              # paid CLI entry (supersets OSS)
+│   └── aatu-backend/                      # paid backend supervisor entry
+├── tenancy/                               # paid tenancy module implementation
+├── governance/                            # paid governance module implementation
+├── internal/                              # paid-side internal helpers
+└── go.mod                                 # depends on github.com/sd-strax/aatu
 ```
+
+`aatu-enterprise/go.mod` declares the dependency:
+
+```go
+module github.com/sd-strax/aatu-enterprise
+
+go 1.22
+
+require github.com/sd-strax/aatu v0.x.y
+```
+
+The OSS repo has no awareness of the paid repo. It defines `module/` and ships.
 
 ## The interface seam
 
-`oss/module/` defines interfaces; `paid/tenancy/` and `paid/governance/` implement them. OSS calls *only* into `oss/module/` interfaces — never directly into `paid/*`. The loader wires implementations in at startup based on config; if a module is disabled, the OSS-side interface returns a no-op or "not enabled" sentinel.
+`aatu/module/` defines interfaces and disabled-stub implementations. `aatu-enterprise/tenancy/` and `aatu-enterprise/governance/` implement them. OSS code calls *only* through `module/` interfaces — and the import path from OSS to paid does not exist because the paid repo isn't in OSS's import graph.
 
 Sketch (Go pseudocode; refine when implementing):
 
 ```go
-// oss/module/tenancy.go — interface OSS depends on
+// aatu/module/tenancy.go — interface OSS depends on
 package module
 
 type TenancyModule interface {
-    // Enabled returns true when the paid tenancy module is loaded and activated.
     Enabled() bool
-
-    // ApplyRLS returns the SQL fragment for tenant-aware queries, or empty
-    // string when the module is disabled (single-tenant default).
     ApplyRLS(ctx context.Context, query string) string
-
-    // ResolveTenant returns the tenant context for the current request, or
-    // the singleton OSS tenant when disabled.
     ResolveTenant(ctx context.Context) (TenantID, error)
-
-    // LiftPath returns the consolidation lift workflow handle, or
-    // ErrModuleDisabled when not loaded.
     LiftPath() (LiftWorkflow, error)
 }
 
-type GovernanceModule interface {
-    Enabled() bool
+// DisabledTenancy is the OSS-default stub. The OSS binary always uses this;
+// the paid binary uses it when paid.tenancy.enabled: false.
+type DisabledTenancy struct{}
 
-    // GovernanceMode returns "lightweight" (OSS default) or "gated".
-    GovernanceMode() GovernanceMode
-
-    // SignoffRequired returns true for artifacts that require explicit signoff
-    // (only true in gated mode); always false in lightweight mode.
-    SignoffRequired(artifactType ArtifactType) bool
-
-    // RoleMappingTemplates returns the federation role-mapping templates UI
-    // (populated when governance module is loaded; empty otherwise).
-    RoleMappingTemplates() []RoleTemplate
+func (DisabledTenancy) Enabled() bool { return false }
+func (DisabledTenancy) ApplyRLS(_ context.Context, q string) string { return q }
+func (DisabledTenancy) ResolveTenant(_ context.Context) (TenantID, error) {
+    return SingleTenantID, nil
+}
+func (DisabledTenancy) LiftPath() (LiftWorkflow, error) {
+    return nil, ErrModuleDisabled
 }
 ```
 
-In `oss/`, code calls `module.Tenancy().Enabled()` to branch, or just calls `module.Tenancy().ApplyRLS(...)` and accepts the no-op return when disabled. Never imports `paid/tenancy`.
-
-In `cmd/aatu-backend/`, the wireup happens once at startup:
+In OSS code, calls go through the registry:
 
 ```go
-func setupModules(cfg Config) module.Registry {
-    reg := module.NewRegistry()
+// somewhere in aatu/aggregate/
+import "github.com/sd-strax/aatu/module"
 
-    if cfg.Paid.Tenancy.Enabled {
-        reg.Tenancy = tenancy.New(cfg.Paid.Tenancy)  // import paid/tenancy
-    } else {
-        reg.Tenancy = module.DisabledTenancy{}  // OSS-side stub
+func (a *Aggregate) load(ctx context.Context, id ID) (*Investigation, error) {
+    tenant, _ := module.Tenancy().ResolveTenant(ctx)  // OSS-stub returns SingleTenantID
+    rlsClause := module.Tenancy().ApplyRLS(ctx, baseQuery)  // OSS-stub returns baseQuery
+    ...
+}
+```
+
+The OSS aggregate doesn't know whether the tenancy module is real or stub. It just calls the interface.
+
+In `cmd/aatu-backend/main.go` (OSS repo):
+
+```go
+import "github.com/sd-strax/aatu/module"
+
+func setupModules(cfg Config) module.Registry {
+    return module.Registry{
+        Tenancy:    module.DisabledTenancy{},
+        Governance: module.DisabledGovernance{},
+    }
+}
+```
+
+In `cmd/aatu-backend/main.go` (paid repo):
+
+```go
+import (
+    "github.com/sd-strax/aatu/module"
+    "github.com/sd-strax/aatu-enterprise/tenancy"
+    "github.com/sd-strax/aatu-enterprise/governance"
+)
+
+func setupModules(cfg Config) module.Registry {
+    reg := module.Registry{
+        Tenancy:    module.DisabledTenancy{},
+        Governance: module.DisabledGovernance{},
     }
 
+    if cfg.Paid.Tenancy.Enabled {
+        reg.Tenancy = tenancy.New(cfg.Paid.Tenancy)
+    }
     if cfg.Paid.Governance.Enabled {
         reg.Governance = governance.New(cfg.Paid.Governance)
-    } else {
-        reg.Governance = module.DisabledGovernance{}
     }
 
     return reg
 }
 ```
 
-This is the only place `paid/*` is imported. Everything else in OSS imports `oss/module` only.
+The two `setupModules` functions diverge only here. Everything else in the binary is unchanged.
 
-## Build configurations
+## Two binaries, same name
 
-Two reasonable options; pick one in Week 1:
+Both repos build a binary named `aatu` (and `aatu-backend`). Customers install one or the other:
 
-**Option A — single binary, runtime config (recommended at v0–v1).**
+- **OSS distribution** — install `aatu` from public binary releases / homebrew / brew tap
+- **Paid distribution** — install `aatu` from aatu's customer portal (signed artifacts)
 
-All packages compile in; `paid/*` activates via config flag. OSS users running the same binary technically *have* the paid code compiled in but can't activate it without flipping the flag. This is the honor-system gate. At v2+ when licensing lands, the flag check expands to "config flag AND valid signed entitlement file."
+The paid binary is a *behavioral superset* of the OSS binary: run it with all `paid.*.enabled: false` and it behaves identically to OSS (same engine, same code paths). This is what makes the honor-system gate at v0–v1 work: paid binary, flag off = OSS behavior; flag on = paid behavior. At v2+ the entitlement check joins the config flag.
 
-Pros: one CI matrix, one release artifact, one set of integration tests. Simple.
+The OSS binary *cannot* run paid modules — they aren't compiled in. This is the architectural enforcement: an OSS install genuinely has no paid code on disk.
 
-Cons: OSS users have paid bytes on disk. Not a security concern (the code path is gated), but some open-source purists find it odd.
+## Dev workflow (founder + Claude Code on both repos)
 
-**Option B — build tags, two distributions.**
+Local layout:
 
-`paid/*` packages tagged `//go:build paid`. OSS builds with no tag — paid code isn't compiled in. Paid builds with `-tags=paid` — full binary.
-
-Pros: clean physical separation. OSS users have only OSS code on disk.
-
-Cons: two CI builds, two release artifacts, paid integration tests run in a separate pipeline.
-
-**Recommendation: Option A through v2 GA, evaluate Option B post-GA if open-source community asks for it.** Simpler operationally; the seam is what matters, not the build artifact split.
-
-## Config schema sketch
-
-```yaml
-# ~/.aatu/config.yaml
-deployment:
-  mode: oss              # oss | paid
-
-# Paid module activation (ignored when deployment.mode == oss)
-paid:
-  tenancy:
-    enabled: false
-  governance:
-    enabled: false
-    mode: lightweight    # lightweight | gated
-
-# everything else unchanged across modes
-identity:
-  keycloak_issuer: https://keycloak.aatu.dev/realms/aatu
-  ...
+```
+~/strax/
+├── aatu/                                  # public OSS checkout
+└── aatu-enterprise/                       # private paid checkout
 ```
 
-When `deployment.mode: oss`, the `paid:` section is ignored by the loader (with a log warning if `paid.tenancy.enabled: true` is set, to catch misconfigurations).
+A Go workspace file at `~/strax/aatu.work` (gitignored from both repos) makes both modules visible at once:
 
-When `deployment.mode: paid`, the loader instantiates each enabled module. At v0–v1 this is just a config check. At v2+, this is `config check AND entitlement file valid for this customer for this module`.
+```
+go 1.22
 
-## What lives in `internal/` vs `oss/`
+use ./aatu
+use ./aatu-enterprise
+```
+
+This lets Claude Code edit both repos in one workspace and test the paid binary against local OSS without going through a published version. For CI, the paid repo's pipeline fetches a pinned OSS version (no workspace; no replace directive).
+
+The Claude Code workflow setup (per `30-day-plan.md` item 1) needs to know about both checkouts: skills, hooks, and the `/review` command should handle either repo.
+
+## What lives where
 
 Quick rule:
-- `oss/` — code that is part of the OSS commitment. Documented, supported, public.
-- `internal/` — helpers, utilities, shared infrastructure that isn't a commitment we're making to OSS users (and Go's import-restriction enforcement of `internal/` keeps us honest).
+
+- `aatu` (public): code that is part of the OSS commitment. Documented, supported, public.
+- `aatu/internal/`: helpers, utilities, shared infrastructure that isn't a commitment to OSS users.
+- `aatu-enterprise/`: paid module implementations + the paid binary wireup.
+- `aatu-enterprise/internal/`: paid-side internal helpers.
 
 Examples:
-- `oss/aggregate/` — yes, this is the public OSS commitment for the event-sourcing layer.
-- `internal/pgutil/` — Postgres helpers that aren't part of the public API.
+
+- `aatu/aggregate/` — yes, public OSS commitment for the event-sourcing layer.
+- `aatu/internal/pgutil/` — Postgres helpers; not part of the public API.
+- `aatu-enterprise/tenancy/` — paid tenancy module implementation.
 
 ## What this looks like in PR #1
 
-The Week 1 commit lands:
-- Top-level directory structure as above (mostly empty)
-- `oss/module/` with interfaces and disabled-stub implementations
-- `cmd/aatu-backend/` with the wireup boilerplate
-- `cmd/aatu/` with `aatu version` only
-- Config loader that respects `deployment.mode`
-- A single Go test that proves: with `mode: oss`, `module.Tenancy().Enabled()` returns false; with `mode: paid, paid.tenancy.enabled: true`, it returns true (and a stub returns "module ready but not implemented").
+The Week 1 commits land in two repos.
 
-No business logic. Just the seam, the wireup, and the proof it switches correctly.
+**`aatu` PR #1:**
+- Top-level directory structure as above (mostly empty)
+- `module/` with interfaces and disabled-stub implementations
+- `cmd/aatu-backend/` with OSS-side wireup
+- `cmd/aatu/` with `aatu version` only
+- Config loader (recognizes paid keys but the OSS binary logs a warning if they're set — OSS binary has no paid module to wire)
+- A single Go test that proves: `module.Tenancy().Enabled() == false` and the disabled stubs return their no-op defaults.
+
+**`aatu-enterprise` PR #1:**
+- `tenancy/` and `governance/` skeletons with `Enabled() bool` stubs and a stub return
+- `cmd/aatu-backend/` with paid-side wireup
+- `cmd/aatu/` with paid-side `aatu version` (reports as paid build)
+- `go.mod` depending on local OSS via `replace` directive during dev; CI uses pinned version
+- A single integration test that proves: build the paid binary, run with `paid.tenancy.enabled: true`, observe `tenancy module: enabled (stub)`; flip to false, observe `tenancy module: disabled`.
+
+No business logic in either. Just the seam, the wireup, and the proof both binaries behave correctly.
+
+## What about D1 (Option A vs B)?
+
+D1 in `decisions.md` framed the question as "single binary with runtime config" vs "build tags, two artifacts." Both were single-repo options. With two repos, both options retire:
+
+- There's no longer a single binary that supersets OSS and paid — there are two binaries from two repos.
+- There's no longer a build-tag question — paid code isn't in the OSS repo at all.
+
+The new architectural question is: "is the paid binary distributed under the same name as the OSS binary?" Recommendation: **yes**, both named `aatu`. The paid binary supersets OSS behaviorally (config + entitlement gate paid features), and the binary name shouldn't change as the customer converts from OSS to paid — they just swap the install source.
+
+D1 is marked superseded in `decisions.md`.
 
 ## Cross-references
 
-- `design/05-component-architecture.md §13` — open-core packaging, the architectural commitments this implements
-- `design/05-component-architecture.md §13.4` — licensing-as-bolt-on, why the seam matters
-- `phase-a-backbone.md` — Phase A scope that depends on this landing first
-- `decisions.md` — Option A vs B build configuration decision (pending Week 1)
+- `design/05-component-architecture.md §13` — open-core packaging; the architectural commitments this implements
+- `design/05-component-architecture.md §13.4` — licensing-as-bolt-on; why the seam matters
+- `phase-a-backbone.md §A.1` — Phase A scope that depends on this landing first
+- `decisions.md` — D1 retired in favor of the two-repo layout

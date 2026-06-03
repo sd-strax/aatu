@@ -37,7 +37,7 @@ Differentiator vs. existing SOAR: investigation-engine-with-judgment-applied, no
 
 ---
 
-## Two distributions, one binary; operator orthogonal
+## Two distributions, two binaries from two repos; operator orthogonal
 
 | | OSS | Paid |
 |---|---|---|
@@ -59,7 +59,7 @@ OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-in
 
 | Domain | Decision |
 |---|---|
-| Stack | Go everywhere; one binary across both shapes |
+| Stack | Go everywhere; OSS binary from public `aatu` repo, paid binary from private `aatu-enterprise` repo; paid binary supersets OSS behaviorally |
 | Local Postgres | Bundled |
 | Local Temporal | Bundled (dev mode, sharing Pg) |
 | Identity | Keycloak is the trust root in every deployment; customer IdPs federate upstream via SAML/OIDC |
