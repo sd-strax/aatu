@@ -109,46 +109,81 @@ func (a *Aggregate) load(ctx context.Context, id ID) (*Investigation, error) {
 
 The OSS aggregate doesn't know whether the tenancy module is real or stub. It just calls the interface.
 
-In `cmd/aatu-backend/main.go` (OSS repo):
+### Paid is layered on OSS, never overlapping
+
+The non-negotiable: paid contributes *implementations* of OSS-defined interfaces and nothing else. It does not reimplement OSS's binary setup, server wiring, supervisor logic, or anything else OSS already owns. To make that architecturally enforceable, OSS exposes the binary's behavior as a `runtime.Run` entry point; both binaries' `main` packages are tiny and differ only in the registry builder they inject.
 
 ```go
-import "github.com/sd-strax/aatu/module"
+// aatu/runtime/runtime.go — OSS owns the binary's behavior
+package runtime
 
-func setupModules(cfg Config) module.Registry {
-    return module.Registry{
-        Tenancy:    module.DisabledTenancy{},
-        Governance: module.DisabledGovernance{},
-    }
+type ModuleBuilder func(Config) module.Registry
+
+func Run(build ModuleBuilder) error {
+    cfg := config.Load()
+    reg := build(cfg)
+    return supervisor.Start(cfg, reg)  // boots Pg/Temporal/Keycloak, registers worker,
+                                       // starts HTTP+WS server with reg installed
 }
 ```
 
-In `cmd/aatu-backend/main.go` (paid repo):
-
 ```go
+// aatu/cmd/aatu-backend/main.go — OSS binary, three lines
+package main
+
 import (
     "github.com/sd-strax/aatu/module"
-    "github.com/sd-strax/aatu-enterprise/tenancy"
-    "github.com/sd-strax/aatu-enterprise/governance"
+    "github.com/sd-strax/aatu/runtime"
 )
 
-func setupModules(cfg Config) module.Registry {
-    reg := module.Registry{
-        Tenancy:    module.DisabledTenancy{},
-        Governance: module.DisabledGovernance{},
-    }
-
-    if cfg.Paid.Tenancy.Enabled {
-        reg.Tenancy = tenancy.New(cfg.Paid.Tenancy)
-    }
-    if cfg.Paid.Governance.Enabled {
-        reg.Governance = governance.New(cfg.Paid.Governance)
-    }
-
-    return reg
+func main() {
+    runtime.Run(func(runtime.Config) module.Registry {
+        return module.Registry{
+            Tenancy:    module.DisabledTenancy{},
+            Governance: module.DisabledGovernance{},
+        }
+    })
 }
 ```
 
-The two `setupModules` functions diverge only here. Everything else in the binary is unchanged.
+```go
+// aatu-enterprise/cmd/aatu-backend/main.go — paid binary, same shape
+package main
+
+import (
+    "github.com/sd-strax/aatu/module"
+    "github.com/sd-strax/aatu/runtime"
+    "github.com/sd-strax/aatu-enterprise/governance"
+    "github.com/sd-strax/aatu-enterprise/tenancy"
+)
+
+func main() {
+    runtime.Run(func(cfg runtime.Config) module.Registry {
+        reg := module.Registry{
+            Tenancy:    module.DisabledTenancy{},
+            Governance: module.DisabledGovernance{},
+        }
+        if cfg.Paid.Tenancy.Enabled {
+            reg.Tenancy = tenancy.New(cfg.Paid.Tenancy)
+        }
+        if cfg.Paid.Governance.Enabled {
+            reg.Governance = governance.New(cfg.Paid.Governance)
+        }
+        return reg
+    })
+}
+```
+
+The only paid-side code that diverges from OSS is the registry builder. Everything else — config loading, supervisor, server, worker registration, lifecycle — lives in OSS's `runtime/` and `supervisor/` packages and is imported by both binaries. There is no paid-side copy of any OSS code.
+
+Other places overlap could creep in, and how it's prevented:
+
+- **Config schema** — defined in `aatu/config/`. Paid imports the schema and its paid sub-tree; never redefines it. The OSS binary recognizes paid keys (logs a warning when they're set), so the schema can't drift.
+- **Test helpers** — `aatu/internal/testutil/` is the canonical place for engine-level helpers; paid imports them. (`internal/` would normally block external imports, but the paid repo can use `// +build paidtest` tags or move shared helpers out of `internal/` if the need arises. Defer until it does.)
+- **Server hooks / middleware** — the registry is the *only* injection surface. If paid needs to install middleware, it goes through a `module.Middleware()` method on the relevant module interface, not through paid touching OSS's server code.
+- **Supervisor / lifecycle** — OSS owns. Paid modules participate via `Start(ctx)` / `Stop(ctx)` methods on their interface; OSS's supervisor invokes them.
+
+If a future paid concern doesn't fit through an existing OSS interface, the answer is to *extend the OSS interface* (in a PR to the OSS repo), not to teach paid to reach around it. The repo boundary is the forcing function: paid literally cannot reach around OSS because OSS doesn't import paid.
 
 ## Two binaries, same name
 
