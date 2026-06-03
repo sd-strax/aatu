@@ -196,17 +196,17 @@ The paid binary is a *behavioral superset* of the OSS binary: run it with all `p
 
 The OSS binary *cannot* run paid modules — they aren't compiled in. This is the architectural enforcement: an OSS install genuinely has no paid code on disk.
 
-## Dev workflow (founder + Claude Code on both repos)
+## Local cross-repo dev workflow
 
-Local layout:
+For contributors working across both repos, the canonical local layout is:
 
 ```
 ~/strax/
 ├── aatu/                                  # public OSS checkout
-└── aatu-enterprise/                       # private paid checkout
+└── aatu-enterprise/                       # paid checkout (where applicable)
 ```
 
-A Go workspace file at `~/strax/aatu.work` (gitignored from both repos) makes both modules visible at once:
+A Go workspace file (gitignored from both repos) makes both modules visible at once:
 
 ```
 go 1.22
@@ -215,9 +215,7 @@ use ./aatu
 use ./aatu-enterprise
 ```
 
-This lets Claude Code edit both repos in one workspace and test the paid binary against local OSS without going through a published version. For CI, the paid repo's pipeline fetches a pinned OSS version (no workspace; no replace directive).
-
-The Claude Code workflow setup (per `30-day-plan.md` item 1) needs to know about both checkouts: skills, hooks, and the `/review` command should handle either repo.
+This lets you edit both repos in one workspace and test the paid binary against local OSS without going through a published version. For CI, the paid repo's pipeline fetches a pinned OSS version (no workspace; no replace directive).
 
 ## What lives where
 
@@ -255,20 +253,16 @@ The Week 1 commits land in two repos.
 
 No business logic in either. Just the seam, the wireup, and the proof both binaries behave correctly.
 
-## What about D1 (Option A vs B)?
+## Why not single-binary + build tags?
 
-D1 in `decisions.md` framed the question as "single binary with runtime config" vs "build tags, two artifacts." Both were single-repo options. With two repos, both options retire:
+An earlier draft considered a single-repo build with two configurations: (A) one binary, runtime config flag activates paid modules; (B) build tags compile paid code in or out. Both were single-repo options. With two repos, both retire:
 
 - There's no longer a single binary that supersets OSS and paid — there are two binaries from two repos.
 - There's no longer a build-tag question — paid code isn't in the OSS repo at all.
 
-The new architectural question is: "is the paid binary distributed under the same name as the OSS binary?" Recommendation: **yes**, both named `aatu`. The paid binary supersets OSS behaviorally (config + entitlement gate paid features), and the binary name shouldn't change as the customer converts from OSS to paid — they just swap the install source.
-
-D1 is marked superseded in `decisions.md`.
+The remaining architectural question is: "is the paid binary distributed under the same name as the OSS binary?" Yes — both named `aatu`. The paid binary supersets OSS behaviorally (config + entitlement gate paid features), and the binary name shouldn't change as a deployment converts from OSS to paid; the install source does.
 
 ## Cross-references
 
 - `design/05-component-architecture.md §13` — open-core packaging; the architectural commitments this implements
 - `design/05-component-architecture.md §13.4` — licensing-as-bolt-on; why the seam matters
-- `phase-a-backbone.md §A.1` — Phase A scope that depends on this landing first
-- `decisions.md` — D1 retired in favor of the two-repo layout

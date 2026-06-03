@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository nature
 
-This repo contains **design specifications only** — no code, no build, no tests. All work happens in `design/*.md`. There is no toolchain to run; review and revise prose. When asked to "implement" something, the work is to update the relevant spec and reconcile it with the others.
+This repo contains **design specifications and engineering planning** — no code yet; Phase A engineering work starts Week 1. Design work happens in `design/*.md`; planning lives in `private/`. When asked to "implement" something, the work today is to update the relevant spec and reconcile it with the others.
+
+**This repo is private. A subset of its content is destined for the public OSS repo `aatu` at Phase H.** See "Public/private boundary" below — it is load-bearing for every edit.
 
 ## The product (aatu)
 
-"Cursor for SOC analysts" — an AI-native investigation environment for threat hunters and IR responders (not T1/T2 triage). Substrate: **VS Code extension (primary), CLI (secondary), Java backend, Next.js frontend, transport-neutral capability layer for tool federation** (adapters span MCP, native vendor APIs, and custom integrations; see `design/03-capability-layer.md` §5.4). v0 prototype runs against OCSF fixtures via the fixture adapter, not real tenants.
+"Cursor for SOC analysts" — an AI-native investigation environment for threat hunters and IR responders (not T1/T2 triage). Substrate: **VS Code extension (primary), CLI (secondary), Go backend, transport-neutral capability layer for tool federation** (adapter classes: MCP, NATIVE_API, CUSTOM, FIXTURE, SOAR_PLAYBOOK; see `design/03-capability-layer.md` §5.4). v0 prototype runs against OCSF fixtures via the fixture adapter, not real tenants.
 
 Two workflows, same loop, different entry points: **investigation** (entity-rooted) and **hunt** (hypothesis-rooted).
 
@@ -38,6 +40,22 @@ These are decisions that have been ruled out of re-litigation in `01-domain-mode
 - **AI is a delegate, never a principal.** Every event records a human principal; `actor.delegate` captures the AI. Authorization is the *intersection* of principal permissions and delegate policy.
 - **Capability layer is pure I/O + normalization.** It does not reason, never produces `x-interpretation`, always emits `derivation_mode = DIRECT`. Only exception: detection_finding normalizer (`03-capability-layer.md` §4.12).
 - **Blast radius, not action verb, drives the trust tier.** T2→T3 escalator at >10 distinct targets is non-negotiable in code, only adjustable.
+- **Open core: paid layers on OSS, no overlap.** OSS engine lives in `aatu` (public-bound); paid modules live in a separate private `aatu-enterprise` repo that depends on `aatu` as a Go module and implements its `module/` interfaces. OSS has zero awareness of paid; the repo boundary enforces this. See `implementation/module-layout.md`.
+
+## Public/private boundary
+
+This repo is private. The public OSS repo `aatu` doesn't exist yet (it lands at Phase H). Until then, every edit to public-bound content must respect the boundary in advance.
+
+- **`private/` is never public.** Files there don't go to the OSS repo. **Do not reference `private/` paths from any file outside `private/`.** (`grep` for cross-refs after moving anything in or out of `private/`.)
+- **Public-bound today:** all of `design/` (sanitized), `implementation/module-layout.md`. Everything else under the repo root that isn't in `private/` should be reviewed before being treated as public-bound.
+- **Sanitization principles for public-bound content** — architectural facts stay; the following come out:
+  - Buyer profiles ("MSSP," "in-house SOC," "the buyer pays per...")
+  - Conversion economics (revenue framing, conversion events, pricing/licensing terms beyond "licensing is bolt-on")
+  - Commercial commitments ("the product won't," "no third conversion hook")
+  - Team-shape framing (founder, Claude Code, Claude Design, hunter, contractor, hiring, calendar weeks/months)
+  - Customer-specific context (design partners by name, customer pull anecdotes)
+  - Competitive positioning vs SOAR/EDR/SIEM vendors by name (generic capability comparisons are fine)
+- **When in doubt, write the sentence in `private/`** and link to or paraphrase it from the public doc only if the architectural-fact distillation works without the private context.
 
 ## Conventions in the prose
 
@@ -48,5 +66,5 @@ These are decisions that have been ruled out of re-litigation in `01-domain-mode
 
 ## Working in this repo
 
-- The `design/` directory is currently untracked in git; the prior tracked copies were at the repo root (`04-action-authorization.md`, `03-capability-layer.md`, `01-domain-model.md`, `02-persistence.md`) and show as `deleted` in `git status`. This is in the middle of a reorganization — confirm with the user before staging or committing the moves.
 - When adding a new spec, follow the existing structure: framing/scope → out-of-scope → numbered sections → end-of-spec marker. Cross-reference other specs with section numbers (e.g., "see §4.3"), not page numbers.
+- Engineering planning (roadmap, 30-day plan, decisions, risks, phase-by-phase scope) lives in `private/` because it's framed around team shape and timelines. Architectural seam docs (`implementation/module-layout.md`) live outside `private/` because they describe the codebase any contributor would see.

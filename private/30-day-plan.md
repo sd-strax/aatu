@@ -16,10 +16,11 @@ The three things that must land before any business logic is written.
 - Project-level `CLAUDE.md` in repo root (already exists; refine as architecture lands)
 - Skills configured (a few small skills for: running tests, checking spec cross-refs, validating module-boundary invariants, generating adapter scaffolds)
 - Settings/hooks for safety (deny destructive commands, gate sensitive paths)
+- **OSS-leak prevention:** pre-commit hook on the public `aatu` repo that grep-checks the diff for confidentiality flags (e.g., `MSSP`, `conversion`, `revenue`, `burn`, `runway`, `Claude Code`, `founder`, `hunter` as person, `contractor`, `customer pull`, design-partner names, calendar dates). Not airtight — a sanity net that catches obvious accidents. The discipline lives in `CLAUDE.md`'s "Public/private boundary" section; the hook is the backstop.
 - Memory discipline: project memory for architectural decisions, feedback memory for review patterns the founder repeats
 - A `/review` or equivalent slash command that runs Claude over a diff with founder's review criteria
 
-**Definition of Done:** Founder runs a sample task end-to-end through Claude Code — writes a small adapter scaffold, gets it reviewed, gets it tested, merges it — without any tooling-side friction. Time-from-spec-to-merged-PR is measurable.
+**Definition of Done:** Founder runs a sample task end-to-end through Claude Code — writes a small adapter scaffold, gets it reviewed, gets it tested, merges it — without any tooling-side friction. Time-from-spec-to-merged-PR is measurable. Pre-commit hook is installed in the public repo skeleton (the repo itself lands as part of item 2) and flags a deliberately-confidential test phrase.
 
 **Unblocks:** Everything else.
 

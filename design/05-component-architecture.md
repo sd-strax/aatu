@@ -412,7 +412,7 @@ Per-investigation presence (which users are currently viewing, who's editing wha
 
 ## 9. The lift path
 
-The lift moves an OSS instance's investigation work into a paid multi-tenant aggregate. It is not a rewrite — it is a replay of the same events into a different deployment of the same backend. Identity continuity (per-tenant namespace UUID) is the property that makes it clean. **This is the MSSP conversion mechanism**: an MSSP running N OSS instances (one per client) consolidates them onto a single paid multi-tenant deployment when the operational pain of N instances exceeds the cost of the tenancy module.
+The lift moves an OSS instance's investigation work into a paid multi-tenant aggregate. It is not a rewrite — it is a replay of the same events into a different deployment of the same backend. Identity continuity (per-tenant namespace UUID) is the property that makes it clean. This is the multi-instance consolidation mechanism: an operator running N OSS instances (one per environment) consolidates them onto a single paid multi-tenant deployment when the operational overhead of N instances justifies adopting the tenancy module.
 
 ### 9.1 Sub-path A — OSS lifts to a fresh tenant of one (primary)
 
@@ -428,7 +428,7 @@ Steps:
 
 The user's data is identical, just hosted differently. The principal recorded on every event is unchanged. No aliasing edges, no re-id, no migration drama.
 
-For an MSSP consolidating N OSS instances, Sub-path A runs N times — each client install lifts into its own tenant within the paid multi-tenant deployment. The MSSP's analysts gain a cross-tenant console (governance module) and switch tenants via the JWT's `tenant_memberships` claim.
+When consolidating N OSS instances, Sub-path A runs N times — each install lifts into its own tenant within the paid multi-tenant deployment. Analysts gain a cross-tenant console (governance module) and switch tenants via the JWT's `tenant_memberships` claim.
 
 ### 9.2 Sub-path B — joining an existing tenant
 
@@ -600,7 +600,7 @@ The repo boundary is the architectural enforcement: the OSS binary has no paid c
 - `tenant_id` RLS activation on the aggregate, projections, and side stores
 - Multi-realm or claim-routed Keycloak configuration
 - Per-tenant vault paths for vendor credentials
-- Multi-instance OSS-to-paid consolidation lift workflow (the MSSP conversion mechanism — sub-path B done properly per §9.2)
+- Multi-instance OSS-to-paid consolidation lift workflow (sub-path B done properly per §9.2)
 - Cross-tenant analyst console
 - Tenant lifecycle workflows (`ProvisionTenant`, `SuspendTenant`, `DecommissionTenant`, `LiftSolo`)
 
@@ -613,7 +613,7 @@ The repo boundary is the architectural enforcement: the OSS binary has no paid c
 - Compliance audit-log export for SOC 2 and equivalent regimes
 - Distribution of customer-authored signed policy bundles beyond the baseline shipped with every install
 
-The two modules are independent. A customer can buy tenancy without governance (an MSSP that doesn't yet need SSO/audit tooling), governance without tenancy (an in-house single-environment SOC that needs SSO/audit but never multi-tenant operation), or both. Modules detect each other and integrate where they overlap — e.g., the signoff queue is tenant-scoped when tenancy is also active.
+The two modules are independent: a deployment can activate tenancy without governance, governance without tenancy, or both. Modules detect each other and integrate where they overlap — e.g., the signoff queue is tenant-scoped when tenancy is also active.
 
 ### 13.3 Behaviors and roles are core; operational tooling is paid
 
@@ -623,15 +623,15 @@ The roles in §5.4 (`viewer`, `analyst`, `approver`, `senior_approver`, `policy_
 - The SOP and policy lifecycle has both `lightweight` (write-it-use-it) and `gated` (draft → in-review → published → retired) modes. The mode is a deployment config; both are in the engine. But the gated-mode UX — review queue, signoff history, citation analytics, audit export — is only useful with the governance module's surface.
 - Audit data is recorded fully and queryable — but the auditor's export-and-report surface is governance-module territory.
 
-This is the general philosophy: **behaviors and roles are core; the operational tooling around them is the governance module.** It is what lets the OSS install be genuinely useful standalone while preserving the governance module's commercial value for customers operating at scale. Enterprises pick `lightweight` or `gated` as their working model; the product supports both, one at a time.
+This is the general philosophy: **behaviors and roles are core; the operational tooling around them is the governance module.** It is what lets the OSS install be genuinely useful standalone while keeping the governance module's surface meaningful for deployments operating at scale. A deployment picks `lightweight` or `gated` as its working model; the engine supports both, one at a time.
 
 ### 13.4 Module activation and licensing posture
 
 Modules are activated by configuration. At v0–v1 the activation is honor-system: a config flag enables the module. The architectural seam — separately-compilable packages or build tags — is preserved so that a future signed-entitlement check has a single, isolated place to live.
 
-At v2+ or whenever a real customer makes it worthwhile, the activation gate adds an offline-verifiable signed entitlement file (TR-1: air-gap compatibility forbids periodic phone-home licensing). The entitlement check fires at module load and refuses activation if the signature is invalid or expired. Adding this check is a small, isolated change — not a refactor — precisely because the module seam is preserved from v0.
+At v2+, the activation gate adds an offline-verifiable signed entitlement file (TR-1: air-gap compatibility forbids periodic phone-home licensing). The entitlement check fires at module load and refuses activation if the signature is invalid or expired. Adding this check is a small, isolated change — not a refactor — precisely because the module seam is preserved from v0.
 
-The architectural commitment is: keep the module boundary clean. The commercial commitment — when to license, how to price — is independent and need not be made at v0.
+The architectural commitment is: keep the module boundary clean. Pricing and licensing terms are independent of this commitment.
 
 ### 13.5 Operator is orthogonal to distribution
 
@@ -643,18 +643,6 @@ Who runs the bits is independent of which bits are running.
 The architecture supports both paid-operator choices uniformly. §11 (the production-operated surface) describes the services — signed-bundle distribution, approval relay, transactional email, observability — that the paid distribution depends on. In aatu-hosted paid, aatu operates these services. In self-hosted paid, the customer operates them, typically from the same Terraform that provisions the rest of the deployment. aatu's CDN-equivalent for signed bundles is *mirrorable* for self-hosted customers (TR-1 air-gap path); the customer's deployment pulls from a local mirror that aatu publishes to on a schedule.
 
 Operator-orthogonality preserves TR-1 (air-gap / self-hostable) for customers who need it while preserving aatu's ability to offer a managed experience for those who don't. There is no architectural fork between the two.
-
-### 13.6 The two paid conversion hooks
-
-The paid distribution exists to satisfy two distinct buyers, each motivated by a different operational pain. Conflating them — bundling them as one inseparable module, or skipping one — costs revenue:
-
-- **Tenancy module — converts the MSSP/MDR.** Conversion event: running N separate OSS installs across N client environments becomes operationally painful. The paid tenancy module consolidates them onto one multi-tenant instance, with the consolidation-lift workflow handling the data movement. The buyer is the MSSP, not the MSSP's client. They pay per tenant or per analyst, not per client environment.
-
-- **Governance module — converts the in-house single-environment enterprise SOC.** This buyer never wants multi-tenancy and would otherwise use the free OSS forever. Conversion event: a compliance, audit, or SSO requirement that the OSS install's raw Keycloak admin console and unstructured audit export cannot satisfy. The paid governance module ships the operational surface that makes those requirements pleasant to operate: federated SSO setup, polished tenant-admin UI, signoff queues, compliance-friendly audit exports.
-
-Both modules are additive, both are independently licensable, and they share no dependencies that would force a customer to buy both. This is TR-26 hook 1 and TR-26 hook 2, satisfied by construction.
-
-There is **no third paid conversion hook into workflow-shaped/T1-volume work**, by design. The open-core commitment is to the judgment-shaped half of the SOC's work — novel investigations, hunts, response under uncertainty. The workflow-shaped half (alert triage, fixed-step enrichment, high-volume auto-containment) is SOAR's domain and remains so. The architecture would let aatu's reasoning loop run at T1 volume; the product won't, because forcing an LLM loop onto playbook-shaped work is bad economics (LLM tokens per FP-close) and worse reliability (a directed playbook is more deterministic than an LLM deciding to investigate a known-FP class). Coexistence with SOAR (TR-18) is not just about delegating writes — it's about respecting that workflow-shaped and judgment-shaped work want different primitives, and the two products serve different shapes of work, not different tiers of analyst.
 
 ---
 
@@ -726,7 +714,7 @@ These are deliberate non-decisions; the architecture accommodates either resolut
 - **Adapter binary distribution mechanism.** Direct CDN download with signature verification at v0. If adapter version churn becomes painful, an OCI-registry-style distribution is a future option without changing the manifest contract.
 - **Action-authorization enforcement of "guard against half-finished AI multi-step responses."** Whether to support a "composite action" primitive (a single `x-action` bundling multiple effects, atomic in the audit and authorization sense) or to leave multi-step as the agent loop's responsibility with policy gates on individual actions. v0 defers to the agent loop; revisit if real omissions surface in operation.
 - **Per-tenant analytics surface (MTTR, approval latency, reversal rate, throughput, SOP citation analytics).** All metrics are derivable from the event-sourced aggregate — every event carries timestamp, principal, delegate, correlation id, and target set. The data exists from v0. The *surface* (CISO dashboard, team-lead view, analyst self-view) is deferred to governance-module work post-v2; bolt-on, no architectural change required. MTTD is explicitly out of scope (detection happens upstream of aatu's Seed events).
-- **Cross-client analyst console for MSSPs.** Promised in §13.2 as part of the tenancy module. Detailed surface — cross-tenant MTTR/throughput/reversal rollups for the MSSP operator looking across their client tenants — deferred to tenancy-module work post-v2. The cross-tenant *aggregation* path is structurally available the moment the tenancy module is on; the dashboard is additive UI over it.
+- **Cross-tenant analyst console.** Promised in §13.2 as part of the tenancy module. Detailed surface — cross-tenant MTTR/throughput/reversal rollups for an operator looking across their tenants — deferred to tenancy-module work post-v2. The cross-tenant *aggregation* path is structurally available the moment the tenancy module is on; the dashboard is additive UI over it.
 - **Cross-org / industry-benchmark surface (peer comparisons across customer tenants).** Genuinely cross-tenant by definition; requires explicit opt-in, anonymization, and differential-privacy-shaped design per TR-22. Deferred to v3+ alongside cross-tenant indicator pool. Not a v0–v2 concern.
 
 ---
