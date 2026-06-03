@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository nature
 
-This repo contains **design specifications and engineering planning** — no code yet; Phase A engineering work starts Week 1. Design work happens in `design/*.md`; planning lives in `private/`. When asked to "implement" something, the work today is to update the relevant spec and reconcile it with the others.
+This repo is the **aatu OSS engine** — design specifications today, code starting Week 1 of Phase A. Currently private on GitHub; goes public at Phase H. **Treat every edit as if it's already public.**
 
-**This repo is private. A subset of its content is destined for the public OSS repo `aatu` at Phase H.** See "Public/private boundary" below — it is load-bearing for every edit.
+Paid modules and commercial strategy live in the separate private repo `aatu-enterprise` (`github.com/sd-strax/aatu-enterprise`). That repo depends on this one as a Go module and implements the `module/` interfaces; this repo has zero awareness of it. The repo boundary is the architectural enforcement of the open-core split.
+
+See "Public OSS posture" below — it is load-bearing for every edit.
 
 ## The product (aatu)
 
@@ -42,20 +44,22 @@ These are decisions that have been ruled out of re-litigation in `01-domain-mode
 - **Blast radius, not action verb, drives the trust tier.** T2→T3 escalator at >10 distinct targets is non-negotiable in code, only adjustable.
 - **Open core: paid layers on OSS, no overlap.** OSS engine lives in `aatu` (public-bound); paid modules live in a separate private `aatu-enterprise` repo that depends on `aatu` as a Go module and implements its `module/` interfaces. OSS has zero awareness of paid; the repo boundary enforces this. See `implementation/module-layout.md`.
 
-## Public/private boundary
+## Public OSS posture
 
-This repo is private. The public OSS repo `aatu` doesn't exist yet (it lands at Phase H). Until then, every edit to public-bound content must respect the boundary in advance.
+This repo is destined to be public OSS. Every edit must respect that. The following kinds of content do **not** belong here — they belong in `aatu-enterprise`:
 
-- **`private/` is never public.** Files there don't go to the OSS repo. **Do not reference `private/` paths from any file outside `private/`.** (`grep` for cross-refs after moving anything in or out of `private/`.)
-- **Public-bound today:** all of `design/` (sanitized), `implementation/module-layout.md`. Everything else under the repo root that isn't in `private/` should be reviewed before being treated as public-bound.
-- **Sanitization principles for public-bound content** — architectural facts stay; the following come out:
-  - Buyer profiles ("MSSP," "in-house SOC," "the buyer pays per...")
-  - Conversion economics (revenue framing, conversion events, pricing/licensing terms beyond "licensing is bolt-on")
-  - Commercial commitments ("the product won't," "no third conversion hook")
-  - Team-shape framing (founder, Claude Code, Claude Design, hunter, contractor, hiring, calendar weeks/months)
-  - Customer-specific context (design partners by name, customer pull anecdotes)
-  - Competitive positioning vs SOAR/EDR/SIEM vendors by name (generic capability comparisons are fine)
-- **When in doubt, write the sentence in `private/`** and link to or paraphrase it from the public doc only if the architectural-fact distillation works without the private context.
+- **Buyer profiles** ("MSSP," "in-house SOC," "the buyer pays per...")
+- **Conversion economics** (revenue framing, conversion events, pricing/licensing terms beyond "licensing is bolt-on")
+- **Commercial commitments** ("the product won't," "no third conversion hook")
+- **Team-shape framing** (founder, Claude Code, Claude Design, hunter, contractor, hiring, calendar weeks/months)
+- **Customer-specific context** (design partners by name, customer pull anecdotes, internal stakeholder names)
+- **Competitive positioning vs SOAR/EDR/SIEM vendors by name** (generic capability comparisons are fine)
+
+What stays here: architectural facts — what the codebase does, how it's structured, the rationale for the tradeoffs a contributor would need to understand.
+
+**When in doubt, write the sentence in `aatu-enterprise`** and surface only the architectural distillation here, if any survives.
+
+A pre-commit hook lands in Week 1 alongside Claude Code workflow setup (per `aatu-enterprise/30-day-plan.md` item 1) to catch obvious commercial keywords on commit. It is a backstop; the discipline lives here.
 
 ## Conventions in the prose
 
@@ -67,4 +71,5 @@ This repo is private. The public OSS repo `aatu` doesn't exist yet (it lands at 
 ## Working in this repo
 
 - When adding a new spec, follow the existing structure: framing/scope → out-of-scope → numbered sections → end-of-spec marker. Cross-reference other specs with section numbers (e.g., "see §4.3"), not page numbers.
-- Engineering planning (roadmap, 30-day plan, decisions, risks, phase-by-phase scope) lives in `private/` because it's framed around team shape and timelines. Architectural seam docs (`implementation/module-layout.md`) live outside `private/` because they describe the codebase any contributor would see.
+- Engineering planning (roadmap, 30-day plan, decisions log, risk register, phase-by-phase scope) lives in `aatu-enterprise` because it's framed around team shape, calendar, and commercial context. Architectural seam docs (`implementation/module-layout.md`) live here because they describe the codebase any contributor would see.
+- Cross-references go OSS → OSS only. **Do not reference `aatu-enterprise` paths from any file in this repo.** If you find yourself wanting to, the content you're describing probably belongs over there, and what's in this repo should stand on its own architectural merit.
