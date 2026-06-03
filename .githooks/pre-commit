@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — OSS-leak prevention for the public aatu repo.
+#
+# Greps the staged diff for keywords that should never appear in OSS-bound
+# content (commercial framing, team-shape context, customer/partner names,
+# calendar dates, fiscal terms). Blocks the commit if any match.
+#
+# This is a backstop, not the discipline. The discipline lives in CLAUDE.md
+# "Public OSS posture". A confirmed-intentional commit can bypass via
+# `git commit --no-verify` — every bypass is an aspirational rule weakened.
+#
+# Activation: `git config core.hooksPath .githooks/` (run once per clone).
+
+set -euo pipefail
+
+# Files that legitimately mention agent / collab terms and should be skipped
+# entirely. The agent-collaboration files exist for Claude Code / Codex / etc.
+# and naturally reference Claude Code, founder context, and similar. The
+# discipline applies to specs, code, and contributor-facing docs.
+SKIP_PATHSPECS=(
+    ':!CLAUDE.md'
+    ':!AGENTS.md'
+    ':!.claude/**'
+    ':!.githooks/**'
+)
+
+# Forbidden keywords. Case-insensitive substring match against added lines only
+# (lines starting with '+' in the unified diff, excluding the diff header).
+KEYWORDS=(
+    "MSSP"
+    "MDR\\b"
+    "conversion hook"
+    "Claude Code"
+    "Claude Design"
+    "the founder"
+    "founder/architect"
+    "contractor engineer"
+    "customer pull"
+    "design partner"
+    "burn rate"
+    "runway"
+)
+
+# Regex patterns for anchored shapes.
+PATTERNS=(
+    "\\bMonth 1[0-9]\\b"
+    "\\bMonth [2-9]\\b"
+    "\\bQ[1-4] 202[5-9]\\b"
+    "\\\$[0-9]+(\\.[0-9]+)?[MK]\\b"
+)
+
+# Only inspect added lines (start with '+', not '+++'). This means modifying an
+# existing line that already contained a forbidden keyword won't re-trigger;
+# adding a new line that contains one will.
+DIFF=$(git diff --cached --diff-filter=AM --unified=0 -- "${SKIP_PATHSPECS[@]}" \
+       | grep -E '^\+[^+]' || true)
+
+if [ -z "$DIFF" ]; then
+    exit 0
+fi
+
+HITS=""
+
+for kw in "${KEYWORDS[@]}"; do
+    if matches=$(printf '%s' "$DIFF" | grep -iE "$kw" || true); then
+        if [ -n "$matches" ]; then
+            HITS+=$'\n  • keyword: '"$kw"
+        fi
+    fi
+done
+
+for pat in "${PATTERNS[@]}"; do
+    if matches=$(printf '%s' "$DIFF" | grep -E "$pat" || true); then
+        if [ -n "$matches" ]; then
+            HITS+=$'\n  • pattern: '"$pat"
+        fi
+    fi
+done
+
+if [ -n "$HITS" ]; then
+    cat <<EOF
+✗ OSS-leak prevention: staged diff contains forbidden content.
+
+  This repo is destined for public OSS — commercial framing, team-shape
+  context, and customer/partner-specific content belongs in aatu-enterprise.
+
+  Matches:$HITS
+
+  If this is intentional (e.g., the keyword appears in an OSS-appropriate
+  architectural context that the hook misclassified), bypass with:
+
+      git commit --no-verify
+
+  Better path: rephrase to avoid the keyword, or move the content to
+  aatu-enterprise. See CLAUDE.md "Public OSS posture" for the rationale.
+EOF
+    exit 1
+fi
+
+exit 0
