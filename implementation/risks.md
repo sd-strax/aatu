@@ -38,10 +38,11 @@ Living register. Each risk has a description, likelihood/impact, mitigation, and
 
 ### R5 — SOC 2 calendar gates aatu-hosted commercial readiness
 
-**L/I:** Certain / Medium (high impact only for regulated buyers)
+**L/I:** Certain / Medium (high impact only for regulated buyers; zero impact on self-hosted)
+**Scope:** This risk applies *only* to aatu-hosted. Self-hosted distributions (OSS and paid) inherit the customer's compliance posture — no aatu-side attestation needed.
 **Why:** Type I window + Type II observation = ~12 months from engagement to defensible attestation. If aatu-hosted GA commercial release is gated on Type II, calendar adds ~12 months to anything regulated.
-**Mitigation:** Engage SOC 2 advisor at Month 1 (scoping only). Formal engagement at ~Month 12 (mid-Phase H). Type II observation runs Phase K → post-GA. Ship aatu-hosted as **limited preview** at GA; full commercial-with-Type-II lands post-GA. Self-hosted paid is unaffected — customer owns data, no aatu-side attestation needed.
-**Trigger:** Month 9 and SOC 2 engagement still hasn't started — by then the timing is locked in.
+**Mitigation:** SOC 2 advisor scoping call deferred to Month 9–10 — when Phase J planning solidifies the aatu-hosted preview commitment. Formal engagement at ~Month 12 (mid-Phase H) per roadmap Phase K. Type II observation runs Phase K → post-GA. Ship aatu-hosted as **limited preview** at GA; full commercial-with-Type-II lands post-GA. Limited preview is invite-only design partners who accept the assurance posture — no Type II needed for that stage.
+**Trigger:** Month 10 and the advisor scoping conversation still hasn't happened — by then the formal-engagement timing starts slipping.
 
 ### R6 — BYOK LLM economics as a buyer-side headwind
 

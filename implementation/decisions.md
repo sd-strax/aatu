@@ -28,8 +28,9 @@ A decision is "pending" until it lands. "Landed" when it's reflected in code and
 
 ### D4 — SOC 2 advisor / consultancy engagement
 
-**Status:** Pending — Month 1 (scoping call only).
-**Output:** Written summary in this file under "Landed" once consultation completes.
+**Status:** Pending — revisit Month 9–10 when Phase J aatu-hosted preview is committed. Not a Day-1 concern.
+**Why deferred:** SOC 2 is an aatu-hosted concern only. Self-hosted distributions (OSS and paid) inherit the customer's compliance posture — there's no aatu-side audit story to defend. aatu-hosted is limited preview at v2 GA; formal SOC 2 engagement happens Phase H (~Month 12) per `roadmap.md` Phase K. The Month 9–10 trigger is to leave enough lead time for advisor scoping before formal engagement.
+**Output (when triggered):** Written summary in this file under "Landed" once consultation completes: minimum lead time from "ready to engage" to Type I completion; controls required; rough cost; timing relative to v2 GA.
 **Decider:** Founder.
 
 ### D5 — Canonical EDR / SIEM / IdP / TI / CM for v1 adapter set
