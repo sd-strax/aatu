@@ -23,6 +23,15 @@ func TestDefaults(t *testing.T) {
 	if cfg.Data.Dir == "" {
 		t.Errorf("default data dir is empty")
 	}
+	if cfg.Temporal.FrontendPort != 7233 {
+		t.Errorf("default temporal frontend port = %d; want 7233", cfg.Temporal.FrontendPort)
+	}
+	if !cfg.Temporal.UIEnabled {
+		t.Errorf("default temporal UIEnabled = false; want true")
+	}
+	if cfg.Temporal.Namespace != "default" {
+		t.Errorf("default temporal namespace = %q; want %q", cfg.Temporal.Namespace, "default")
+	}
 }
 
 func TestUnmarshalDataAndPostgres(t *testing.T) {

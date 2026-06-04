@@ -13,6 +13,7 @@ type Config struct {
 	Deployment Deployment `yaml:"deployment"`
 	Data       Data       `yaml:"data"`
 	Postgres   Postgres   `yaml:"postgres"`
+	Temporal   Temporal   `yaml:"temporal"`
 	Paid       Paid       `yaml:"paid"`
 }
 
@@ -34,6 +35,22 @@ type Postgres struct {
 	// Port defaults to 5435 (non-standard to avoid colliding with a system
 	// Postgres on 5432 during dev).
 	Port uint32 `yaml:"port"`
+}
+
+// Temporal configures the bundled Temporal dev server.
+type Temporal struct {
+	// FrontendPort is the gRPC port the dev-server frontend listens on.
+	// Default 7233 (Temporal's standard).
+	FrontendPort int `yaml:"frontend_port"`
+	// UIEnabled controls whether the Temporal web UI is started.
+	// Default true.
+	UIEnabled bool `yaml:"ui_enabled"`
+	// UIPort is the HTTP port for the web UI when UIEnabled.
+	// Default 8233.
+	UIPort int `yaml:"ui_port"`
+	// Namespace is the default Temporal namespace pre-registered at startup.
+	// Default "default".
+	Namespace string `yaml:"namespace"`
 }
 
 // Paid groups the activation flags for paid modules. Ignored when the
@@ -66,6 +83,12 @@ func Default() Config {
 		Deployment: Deployment{Mode: "oss"},
 		Data:       Data{Dir: dataDir},
 		Postgres:   Postgres{Port: 5435},
+		Temporal: Temporal{
+			FrontendPort: 7233,
+			UIEnabled:    true,
+			UIPort:       8233,
+			Namespace:    "default",
+		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},
 		},

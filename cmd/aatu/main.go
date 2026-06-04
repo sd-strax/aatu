@@ -68,6 +68,16 @@ func runStart() error {
 		}),
 		supervisor.FatalOnExit,
 	)
+	sup.Register(
+		supervisor.NewTemporal(supervisor.TemporalConfig{
+			DataDir:      filepath.Join(cfg.Data.Dir, "temporal"),
+			FrontendPort: cfg.Temporal.FrontendPort,
+			EnableUI:     cfg.Temporal.UIEnabled,
+			UIPort:       cfg.Temporal.UIPort,
+			Namespace:    cfg.Temporal.Namespace,
+		}),
+		supervisor.RestartOnExit,
+	)
 
 	if err := sup.Start(ctx); err != nil {
 		return fmt.Errorf("supervisor start: %w", err)
