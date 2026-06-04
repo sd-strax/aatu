@@ -1,0 +1,181 @@
+package supervisor
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"time"
+
+	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
+	_ "github.com/lib/pq"
+)
+
+// PostgresConfig configures the bundled Postgres instance.
+type PostgresConfig struct {
+	// DataDir is the root directory for Pg state.
+	// Subdirs created on first start: data/ (Pg cluster), runtime/ (binary cache).
+	DataDir string
+
+	// Port is the TCP port Pg listens on. Default 5435 to avoid collision
+	// with a system Pg on the default 5432.
+	Port uint32
+
+	// Databases to create on first start, in addition to the default
+	// "postgres" maintenance database.
+	Databases []string
+}
+
+// Postgres is a Component wrapping fergusstrange/embedded-postgres.
+//
+// pgvector availability is a deferred concern (D14): the vanilla embedded
+// distribution does not ship pgvector. Phase G (embeddings) bundles a
+// pgvector-enabled Pg or installs the .so files at first run. Until then
+// the embedding-bearing tables use TEXT placeholders.
+type Postgres struct {
+	cfg PostgresConfig
+	pg  *embeddedpostgres.EmbeddedPostgres
+}
+
+// NewPostgres constructs the Postgres component (not yet started).
+// Defaults: Port=5435; DataDir=~/.aatu/pg.
+func NewPostgres(cfg PostgresConfig) *Postgres {
+	if cfg.Port == 0 {
+		cfg.Port = 5435
+	}
+	if cfg.DataDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.DataDir = filepath.Join(home, ".aatu", "pg")
+	}
+	return &Postgres{cfg: cfg}
+}
+
+// Name returns "postgres".
+func (p *Postgres) Name() string { return "postgres" }
+
+// Start downloads (first run) and starts the embedded Pg process, then
+// ensures every requested database exists.
+func (p *Postgres) Start(ctx context.Context) error {
+	if err := os.MkdirAll(p.cfg.DataDir, 0o700); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
+	}
+	runtimePath := filepath.Join(p.cfg.DataDir, "runtime")
+	dataPath := filepath.Join(p.cfg.DataDir, "data")
+
+	cfg := embeddedpostgres.DefaultConfig().
+		Version(embeddedpostgres.V16).
+		Port(p.cfg.Port).
+		RuntimePath(runtimePath).
+		DataPath(dataPath).
+		Database("postgres").
+		Username("aatu").
+		Password("aatu") // local-only credentials; for laptop / single-node use
+
+	p.pg = embeddedpostgres.NewDatabase(cfg)
+	if err := p.pg.Start(); err != nil {
+		return fmt.Errorf("start postgres: %w", err)
+	}
+
+	if err := p.ensureDatabases(ctx); err != nil {
+		_ = p.pg.Stop()
+		return fmt.Errorf("ensure databases: %w", err)
+	}
+	return nil
+}
+
+// Stop the embedded Pg process. Idempotent — multiple calls return nil.
+func (p *Postgres) Stop(_ context.Context) error {
+	if p.pg == nil {
+		return nil
+	}
+	pg := p.pg
+	p.pg = nil
+	if err := pg.Stop(); err != nil {
+		return fmt.Errorf("stop postgres: %w", err)
+	}
+	return nil
+}
+
+// Health returns Ready=true when the maintenance database accepts a ping.
+func (p *Postgres) Health(ctx context.Context) HealthStatus {
+	if p.pg == nil {
+		return HealthStatus{Ready: false, Message: "not started"}
+	}
+	db, err := p.open(ctx, "postgres")
+	if err != nil {
+		return HealthStatus{Ready: false, Message: err.Error()}
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return HealthStatus{Ready: false, Message: err.Error()}
+	}
+	return HealthStatus{Ready: true, Message: fmt.Sprintf("listening on :%d", p.cfg.Port)}
+}
+
+// DSN returns a libpq connection string for a given database on this instance.
+// Downstream components (Temporal, knowledge service, etc.) consume this.
+func (p *Postgres) DSN(dbname string) string {
+	return fmt.Sprintf("host=localhost port=%d user=aatu password=aatu dbname=%s sslmode=disable",
+		p.cfg.Port, dbname)
+}
+
+func (p *Postgres) ensureDatabases(ctx context.Context) error {
+	db, err := p.open(ctx, "postgres")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	for _, name := range p.cfg.Databases {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var exists bool
+		err := db.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", name,
+		).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("query database %s: %w", name, err)
+		}
+		if exists {
+			continue
+		}
+		log.Printf("postgres: creating database %s", name)
+		// CREATE DATABASE doesn't accept parameterized identifiers; the name
+		// comes from our config (not user input) so the formatted statement
+		// is safe.
+		stmt := fmt.Sprintf(`CREATE DATABASE %q`, name)
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("create database %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func (p *Postgres) open(ctx context.Context, dbname string) (*sql.DB, error) {
+	db, err := sql.Open("postgres", p.DSN(dbname))
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	// Brief retry loop in case Pg is still warming up immediately post-Start.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := db.PingContext(ctx); err == nil {
+			return db, nil
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			db.Close()
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	db.Close()
+	return nil, fmt.Errorf("postgres ping timeout on %s", dbname)
+}

@@ -11,6 +11,8 @@ import (
 // Config is the top-level deployment configuration.
 type Config struct {
 	Deployment Deployment `yaml:"deployment"`
+	Data       Data       `yaml:"data"`
+	Postgres   Postgres   `yaml:"postgres"`
 	Paid       Paid       `yaml:"paid"`
 }
 
@@ -19,6 +21,19 @@ type Deployment struct {
 	// Mode is "oss" or "paid". OSS binaries ignore the paid section
 	// (with a warning when paid.*.enabled is true).
 	Mode string `yaml:"mode"`
+}
+
+// Data names the root directory aatu uses for state (Pg data, logs, etc.).
+type Data struct {
+	// Dir defaults to ~/.aatu.
+	Dir string `yaml:"dir"`
+}
+
+// Postgres configures the bundled embedded Postgres.
+type Postgres struct {
+	// Port defaults to 5435 (non-standard to avoid colliding with a system
+	// Postgres on 5432 during dev).
+	Port uint32 `yaml:"port"`
 }
 
 // Paid groups the activation flags for paid modules. Ignored when the
@@ -39,11 +54,18 @@ type PaidGovernance struct {
 	Mode    string `yaml:"mode"` // "lightweight" or "gated"
 }
 
-// Default returns the zero-value config with deployment.mode = "oss"
-// and all paid modules disabled. governance.mode defaults to "lightweight".
+// Default returns the zero-value config with deployment.mode = "oss",
+// data.dir = ~/.aatu, postgres.port = 5435, and all paid modules disabled
+// (governance.mode = "lightweight").
 func Default() Config {
+	dataDir := "~/.aatu"
+	if home, err := os.UserHomeDir(); err == nil {
+		dataDir = filepath.Join(home, ".aatu")
+	}
 	return Config{
 		Deployment: Deployment{Mode: "oss"},
+		Data:       Data{Dir: dataDir},
+		Postgres:   Postgres{Port: 5435},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},
 		},
