@@ -23,7 +23,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	pg := NewPostgres(PostgresConfig{
 		DataDir:   dir,
 		Port:      0, // use default 5435
-		Databases: []string{"aatu_main", "aatu_temporal", "aatu_knowledge"},
+		Databases: []string{"aatu_main", "aatu_knowledge"},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -44,7 +44,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	for _, name := range []string{"aatu_main", "aatu_temporal", "aatu_knowledge"} {
+	for _, name := range []string{"aatu_main", "aatu_knowledge"} {
 		var exists bool
 		err := db.QueryRowContext(ctx,
 			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name,
@@ -82,7 +82,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	// Restart against the same data directory; existing data should be visible
 	pg2 := NewPostgres(PostgresConfig{
 		DataDir:   dir,
-		Databases: []string{"aatu_main", "aatu_temporal", "aatu_knowledge"},
+		Databases: []string{"aatu_main", "aatu_knowledge"},
 	})
 	if err := pg2.Start(ctx); err != nil {
 		t.Fatalf("restart: %v", err)

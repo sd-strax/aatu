@@ -62,9 +62,11 @@ func runStart() error {
 	sup := supervisor.New()
 	sup.Register(
 		supervisor.NewPostgres(supervisor.PostgresConfig{
-			DataDir:   filepath.Join(cfg.Data.Dir, "pg"),
-			Port:      cfg.Postgres.Port,
-			Databases: []string{"aatu_main", "aatu_temporal", "aatu_knowledge"},
+			DataDir: filepath.Join(cfg.Data.Dir, "pg"),
+			Port:    cfg.Postgres.Port,
+			// Temporal manages its own SQLite store under cfg.Data.Dir/temporal
+			// (see D15) so there's no aatu_temporal database here today.
+			Databases: []string{"aatu_main", "aatu_knowledge"},
 		}),
 		supervisor.FatalOnExit,
 	)
