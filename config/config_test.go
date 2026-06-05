@@ -41,6 +41,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Keycloak.Realm != "aatu" {
 		t.Errorf("default keycloak realm = %q; want %q", cfg.Keycloak.Realm, "aatu")
 	}
+	if cfg.Backend.HTTPPort != 8080 {
+		t.Errorf("default backend port = %d; want 8080", cfg.Backend.HTTPPort)
+	}
 }
 
 func TestUnmarshalDataAndPostgres(t *testing.T) {

@@ -15,6 +15,7 @@ type Config struct {
 	Postgres   Postgres   `yaml:"postgres"`
 	Temporal   Temporal   `yaml:"temporal"`
 	Keycloak   Keycloak   `yaml:"keycloak"`
+	Backend    Backend    `yaml:"backend"`
 	Paid       Paid       `yaml:"paid"`
 }
 
@@ -67,6 +68,13 @@ type Keycloak struct {
 	Realm string `yaml:"realm"`
 }
 
+// Backend configures the in-process aatu backend.
+type Backend struct {
+	// HTTPPort is where the backend exposes /healthz and /status.
+	// Default 8080.
+	HTTPPort int `yaml:"http_port"`
+}
+
 // Paid groups the activation flags for paid modules. Ignored when the
 // binary is OSS; consulted by the paid binary's registry builder.
 type Paid struct {
@@ -107,6 +115,9 @@ func Default() Config {
 			HTTPPort:       8543,
 			ManagementPort: 9543,
 			Realm:          "aatu",
+		},
+		Backend: Backend{
+			HTTPPort: 8080,
 		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},
