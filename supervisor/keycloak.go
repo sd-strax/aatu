@@ -312,7 +312,7 @@ func (k *Keycloak) spawn() error {
 	cmd.Stderr = logF
 
 	if err := cmd.Start(); err != nil {
-		logF.Close()
+		_ = logF.Close()
 		return fmt.Errorf("spawn keycloak: %w", err)
 	}
 	k.cmd = cmd
@@ -335,8 +335,8 @@ func (k *Keycloak) waitForReady(ctx context.Context) error {
 		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
 				return nil
 			}
@@ -359,7 +359,7 @@ func (k *Keycloak) kill() error {
 	_, _ = k.cmd.Process.Wait()
 	k.cmd = nil
 	if k.logF != nil {
-		k.logF.Close()
+		_ = k.logF.Close()
 		k.logF = nil
 	}
 	return nil

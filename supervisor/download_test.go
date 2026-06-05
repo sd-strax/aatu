@@ -63,7 +63,7 @@ func TestDownloadAndExtractTarGz_StripComponentsAndIdempotent(t *testing.T) {
 		{"toplevel/lib/data.txt", "world"},
 	})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(tarball)
 	}))
 	t.Cleanup(srv.Close)
@@ -105,7 +105,7 @@ func TestDownloadAndExtractTarGz_RejectsPathTraversal(t *testing.T) {
 		{"toplevel/bin/marker", "hello"},
 	})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(tarball)
 	}))
 	t.Cleanup(srv.Close)
@@ -123,7 +123,7 @@ func TestDownloadAndExtractTarGz_RejectsPathTraversal(t *testing.T) {
 }
 
 func TestDownloadAndExtractTarGz_HTTPErrorPropagates(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
@@ -140,7 +140,7 @@ func TestDownloadAndExtractTarGz_MissingMarkerAfterExtraction(t *testing.T) {
 	tarball := makeTarGz(t, [][2]string{
 		{"toplevel/other.txt", "data"},
 	})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(tarball)
 	}))
 	t.Cleanup(srv.Close)

@@ -41,7 +41,10 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatalf("temp dir: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	// Use a named cleanup function we can call before any os.Exit path.
+	// `defer` here is unsafe because log.Fatalf calls os.Exit which skips
+	// deferred functions — same reason the gocritic linter flags this.
+	cleanupDir := func() { _ = os.RemoveAll(dir) }
 
 	testPg = embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().
 		Version(embeddedpostgres.V16).
@@ -53,26 +56,30 @@ func TestMain(m *testing.M) {
 		Database("aatu_test"))
 
 	if err := testPg.Start(); err != nil {
+		cleanupDir()
 		log.Fatalf("embedded postgres start: %v", err)
 	}
 
 	dsn := "host=localhost port=15436 user=test password=test dbname=aatu_test sslmode=disable"
 	if err := pgmigrate.Run(dsn, Migrations(), "aatu_main"); err != nil {
 		_ = testPg.Stop()
+		cleanupDir()
 		log.Fatalf("migrate: %v", err)
 	}
 
 	testDB, err = sql.Open("postgres", dsn)
 	if err != nil {
 		_ = testPg.Stop()
+		cleanupDir()
 		log.Fatalf("sql.Open: %v", err)
 	}
 
 	testReady = true
 	code := m.Run()
 
-	testDB.Close()
+	_ = testDB.Close()
 	_ = testPg.Stop()
+	cleanupDir()
 	os.Exit(code)
 }
 

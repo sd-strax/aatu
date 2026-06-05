@@ -197,10 +197,10 @@ func base64URLEncode(b []byte) string {
 			charset[b[i+2]&0x3f],
 		)
 	}
-	rem := len(b) % 3
-	if rem == 1 {
+	switch rem := len(b) % 3; rem {
+	case 1:
 		out = append(out, charset[b[len(b)-1]>>2], charset[(b[len(b)-1]&0x03)<<4])
-	} else if rem == 2 {
+	case 2:
 		out = append(out,
 			charset[b[len(b)-2]>>2],
 			charset[((b[len(b)-2]&0x03)<<4)|(b[len(b)-1]>>4)],

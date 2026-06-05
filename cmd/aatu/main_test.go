@@ -89,7 +89,7 @@ func TestIsProcessAlive(t *testing.T) {
 	}
 }
 
-func TestOrderedComponentNames_PreferredOrder(t *testing.T) {
+func TestOrderedComponentNames_PreferredOrder(_ *testing.T) {
 	// (Use the supervisor.ComponentStatus shape via untyped interface to
 	// avoid pulling supervisor as a test dep here; we only check that
 	// preferred ordering is preserved.)

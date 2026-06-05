@@ -1,0 +1,122 @@
+# golangci-lint configuration.
+#
+# Conventions we lint against: Google Go Style Guide, Go Code Review
+# Comments, Uber Go Style Guide. Project-specific patterns live in
+# implementation/aatu-patterns.md. See `make lint`.
+#
+# Schema: golangci-lint v2.x.
+
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.24"
+
+linters:
+  default: none
+  enable:
+    # Bug catchers
+    - errcheck      # unchecked errors
+    - govet         # bundled go vet checks
+    - staticcheck   # the big one: many bug + correctness patterns
+    - ineffassign   # ineffectual assignments
+    - unused        # unused symbols (functions, vars, types)
+    - bodyclose     # http.Response.Body left unclosed
+    - errorlint     # err comparisons that should use errors.Is/As
+    - copyloopvar   # loop var captured into closure (Go 1.22+ pitfall)
+
+    # Style + idioms
+    - revive        # idiomatic Go; replaces deprecated golint
+    - gocritic      # opinionated style checks
+    - misspell      # typos in comments
+    - unconvert     # unnecessary type conversions
+    - whitespace    # leading/trailing whitespace in blocks
+
+    # Security
+    - gosec         # security smells (SQL injection, weak crypto, etc.)
+
+  settings:
+    revive:
+      rules:
+        - name: var-naming
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: unused-parameter
+          arguments:
+            - allowRegex: "^_"
+
+    staticcheck:
+      checks: ["all"]
+
+    errcheck:
+      # Don't flag the standard "defer X.Close()" / "X.Close()" idiom for
+      # common closer types. We trust deferred Close failures to be
+      # surfaced by the operation itself (e.g., commit failures on db).
+      exclude-functions:
+        - io.Closer.Close
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*compress/gzip.Reader).Close
+        - (*compress/gzip.Writer).Close
+        - (*archive/tar.Writer).Close
+        - (*net/http.Response).Body.Close
+        - io.Copy
+        - encoding/json.Encoder.Encode
+        - encoding/json.Decoder.Decode
+
+    gosec:
+      excludes:
+        # G115: integer overflow when converting; common with uint32 ports
+        - G115
+        # G601: implicit memory aliasing in for loop — fixed by Go 1.22+
+        - G601
+        # G302/G306: file mode on logs/markers in user's home dir; 0o644 is
+        # the right permission for these. gosec wants 0o600 which is too
+        # strict for non-secret files.
+        - G302
+        - G306
+        # G301: directory mode 0o755 (vs 0o750). aatu's data dirs live in
+        # the user's home dir; 0o755 lets the user inspect them with the
+        # tools they expect.
+        - G301
+        # G304: "file inclusion via variable" — every file path in our
+        # supervisor is derived from our own config, not user-controlled
+        # input. False positive across the board.
+        - G304
+        # G204: subprocess with variable cmd — same story. The bundled
+        # binaries we spawn (kc.sh, java, temporal CLI) are paths we
+        # construct from our own config.
+        - G204
+        # G110: decompression bomb. Our tarballs come from pinned upstream
+        # URLs we control; not user input.
+        - G110
+        # G703: path-traversal via taint analysis — false positive on our
+        # XDG-shaped path joining.
+        - G703
+
+    gocritic:
+      disabled-checks:
+        # dupBranchBody is noisy without catching real bugs.
+        - dupBranchBody
+
+  exclusions:
+    rules:
+      # Tests are allowed to be looser with errcheck and gosec — closing
+      # bodies in deferred t.Cleanup, weak random for fixtures, etc.
+      - path: '_test\.go$'
+        linters: [errcheck, gosec, bodyclose]
+      # Generated SQL migration package + embed.FS wrappers don't need
+      # exported docstrings.
+      - path: 'migrations\.go$'
+        linters: [revive]

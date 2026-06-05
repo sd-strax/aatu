@@ -212,11 +212,11 @@ func (p *Postgres) open(ctx context.Context, dbname string) (*sql.DB, error) {
 		}
 		select {
 		case <-ctx.Done():
-			db.Close()
+			_ = db.Close()
 			return nil, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	db.Close()
+	_ = db.Close()
 	return nil, fmt.Errorf("postgres ping timeout on %s", dbname)
 }

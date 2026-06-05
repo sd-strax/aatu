@@ -92,10 +92,12 @@ func downloadAndExtractTarGz(ctx context.Context, url, destDir, markerFile strin
 				return fmt.Errorf("open %s: %w", target, err)
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("write %s: %w", target, err)
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				return fmt.Errorf("close %s: %w", target, err)
+			}
 		case tar.TypeSymlink:
 			_ = os.Remove(target)
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

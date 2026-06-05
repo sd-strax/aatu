@@ -73,3 +73,16 @@ A pre-commit hook lands in Week 1 alongside Claude Code workflow setup (per `aat
 - When adding a new spec, follow the existing structure: framing/scope → out-of-scope → numbered sections → end-of-spec marker. Cross-reference other specs with section numbers (e.g., "see §4.3"), not page numbers.
 - Engineering planning (roadmap, 30-day plan, decisions log, risk register, phase-by-phase scope) lives in `aatu-enterprise` because it's framed around team shape, calendar, and commercial context. Architectural seam docs (`implementation/module-layout.md`) live here because they describe the codebase any contributor would see.
 - Cross-references go OSS → OSS only. **Do not reference `aatu-enterprise` paths from any file in this repo.** If you find yourself wanting to, the content you're describing probably belongs over there, and what's in this repo should stand on its own architectural merit.
+
+## Go conventions
+
+We adopt industry-standard public Go conventions rather than maintaining our own style guide. Read these in order:
+
+1. **[Google Go Style Guide](https://google.github.io/styleguide/go/)** — canonical reference. Style Guide + Style Decisions + Best Practices.
+2. **[Go Code Review Comments](https://go.dev/wiki/CodeReviewComments)** — the actual review checklist.
+3. **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** — supplementary; especially the mutex placement and error wrapping sections.
+4. **`implementation/aatu-patterns.md`** — the small set of patterns specific to this codebase that the public guides don't address. ~5–6 patterns total. Read once; cite from new code as needed.
+
+`make lint` runs `golangci-lint` with a config (`.golangci.yml`) tuned to enforce most of the above mechanically — `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `govet`, `bodyclose`, `errorlint`, `unused`. `make ci` (lint + test + build) is the pre-commit / pre-PR check.
+
+When extending the code, prefer references to the public guides over re-arguing style locally. When a project-specific pattern emerges three+ times, add it to `aatu-patterns.md`.

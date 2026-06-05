@@ -24,7 +24,7 @@ func TestPermissiveGate2_AlwaysAutoApproves(t *testing.T) {
 	}
 }
 
-func TestGate2_InterfaceContract(t *testing.T) {
+func TestGate2_InterfaceContract(_ *testing.T) {
 	// Compile-time check: PermissiveGate2 satisfies the Gate2 interface.
 	// Useful so that swapping in the Phase C implementation can be detected
 	// by a compile-time test failure if the interface drifts.

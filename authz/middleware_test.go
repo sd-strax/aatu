@@ -16,7 +16,7 @@ func TestRequireAuth_RejectsMissingHeader(t *testing.T) {
 		ClientID: "aatu",
 	})
 
-	handler := RequireAuth(v)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RequireAuth(v)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		t.Fatal("inner handler should not run on missing Authorization")
 	}))
 
@@ -41,7 +41,7 @@ func TestRequireAuth_RejectsMalformedScheme(t *testing.T) {
 		ClientID: "aatu",
 	})
 
-	handler := RequireAuth(v)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RequireAuth(v)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		t.Fatal("inner handler should not run")
 	}))
 
@@ -90,7 +90,7 @@ func TestRequireRole_DeniesMissingRole_SurfacesRequiredList(t *testing.T) {
 	// Bypass RequireAuth — directly inject claims.
 	c := Claims{Subject: "x", Roles: []string{RoleViewer}}
 	handler := RequireRole(RoleTenantAdmin, RoleAuditor)(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Fatal("inner handler should not run")
 		}),
 	)
@@ -131,7 +131,7 @@ func TestRequireRole_500sWhenMisConfigured(t *testing.T) {
 	// RequireRole without RequireAuth ahead of it should surface a wiring
 	// error, not silently pass.
 	handler := RequireRole(RoleAnalyst)(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Fatal("inner handler should not run")
 		}),
 	)
@@ -156,7 +156,7 @@ func TestRequireAuth_Then_RequireRole(t *testing.T) {
 	raw := tk.mintToken(t, nil)
 
 	chain := RequireAuth(v)(RequireRole(RoleTenantAdmin)(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Fatal("inner handler should not run on 403")
 		}),
 	))

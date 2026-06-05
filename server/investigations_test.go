@@ -52,7 +52,10 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatalf("temp dir: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	// `defer` is unsafe here — log.Fatalf calls os.Exit which skips
+	// deferred functions. Use a named cleanup we can call before any
+	// fatal exit path.
+	cleanupDir := func() { _ = os.RemoveAll(dir) }
 
 	testPg = embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().
 		Version(embeddedpostgres.V16).
@@ -63,18 +66,21 @@ func TestMain(m *testing.M) {
 		Password("test").
 		Database("aatu_test"))
 	if err := testPg.Start(); err != nil {
+		cleanupDir()
 		log.Fatalf("embedded postgres: %v", err)
 	}
 
 	dsn := "host=localhost port=15437 user=test password=test dbname=aatu_test sslmode=disable"
 	if err := pgmigrate.Run(dsn, aggregate.Migrations(), "aatu_main"); err != nil {
 		_ = testPg.Stop()
+		cleanupDir()
 		log.Fatalf("migrate: %v", err)
 	}
 
 	testDB, err = sql.Open("postgres", dsn)
 	if err != nil {
 		_ = testPg.Stop()
+		cleanupDir()
 		log.Fatalf("sql.Open: %v", err)
 	}
 	testHandler = aggregate.NewHandler(aggregate.NewStore(testDB), aggregate.InvestigationCurrentProjector{})
@@ -84,6 +90,7 @@ func TestMain(m *testing.M) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		_ = testPg.Stop()
+		cleanupDir()
 		log.Fatalf("rsa key: %v", err)
 	}
 	testRSAKey = priv
@@ -106,13 +113,14 @@ func TestMain(m *testing.M) {
 		})
 	})
 	testIssuerSrv = httptest.NewServer(mux)
-	defer testIssuerSrv.Close()
 
 	testReady = true
 	code := m.Run()
 
-	testDB.Close()
+	testIssuerSrv.Close()
+	_ = testDB.Close()
 	_ = testPg.Stop()
+	cleanupDir()
 	os.Exit(code)
 }
 
@@ -448,10 +456,10 @@ func base64URLEncode(b []byte) string {
 			charset[b[i+2]&0x3f],
 		)
 	}
-	rem := len(b) % 3
-	if rem == 1 {
+	switch rem := len(b) % 3; rem {
+	case 1:
 		out = append(out, charset[b[len(b)-1]>>2], charset[(b[len(b)-1]&0x03)<<4])
-	} else if rem == 2 {
+	case 2:
 		out = append(out,
 			charset[b[len(b)-2]>>2],
 			charset[((b[len(b)-2]&0x03)<<4)|(b[len(b)-1]>>4)],

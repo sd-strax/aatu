@@ -81,7 +81,7 @@ func runStart() error {
 	if err := writePIDFile(pidFilePath(cfg)); err != nil {
 		return err
 	}
-	defer os.Remove(pidFilePath(cfg))
+	defer func() { _ = os.Remove(pidFilePath(cfg)) }()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -163,11 +163,11 @@ func runStatus() error {
 	if err != nil {
 		return fmt.Errorf("aatu not reachable at %s — is the supervisor running?", url)
 	}
-	defer resp.Body.Close()
-
 	var status server.StatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return fmt.Errorf("parse /status response: %w", err)
+	decErr := json.NewDecoder(resp.Body).Decode(&status)
+	_ = resp.Body.Close()
+	if decErr != nil {
+		return fmt.Errorf("parse /status response: %w", decErr)
 	}
 
 	fmt.Printf("aatu: %s\n", status.Overall)
@@ -180,6 +180,7 @@ func runStatus() error {
 		fmt.Printf("  %s %-10s %s\n", mark, name, c.Message)
 	}
 	if status.Overall != "ok" {
+		// Body already closed above so os.Exit doesn't skip cleanup.
 		os.Exit(1)
 	}
 	return nil
