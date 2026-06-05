@@ -1,0 +1,20 @@
+[Unit]
+Description=aatu supervisor (bundled stack: Postgres + Temporal + Keycloak + backend)
+After=network.target
+Documentation=https://github.com/sd-strax/aatu
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aatu start
+ExecStop=/usr/local/bin/aatu stop
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=60s
+
+# StandardOutput=append:%h/.aatu/logs/aatu.log
+# StandardError=append:%h/.aatu/logs/aatu.error.log
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
