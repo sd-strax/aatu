@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -83,13 +84,17 @@ func NewKeycloak(cfg KeycloakConfig) *Keycloak {
 func (k *Keycloak) Name() string { return "keycloak" }
 
 // Start ensures the JRE + Keycloak distribution are present (downloading if
-// missing), installs the realm-import JSON, spawns the Keycloak JVM, and
-// polls the management /health/ready endpoint until it responds.
+// missing), installs the realm-import JSON, bootstraps a master-realm admin
+// user on first install, spawns the Keycloak JVM, and polls the management
+// /health/ready endpoint until it responds.
 func (k *Keycloak) Start(ctx context.Context) error {
 	if err := k.ensureBinaries(ctx); err != nil {
 		return err
 	}
 	if err := k.installRealmFile(); err != nil {
+		return err
+	}
+	if err := k.ensureBootstrapAdmin(ctx); err != nil {
 		return err
 	}
 	if err := k.spawn(); err != nil {
@@ -225,6 +230,47 @@ func relativeJavaBin() string {
 		return filepath.Join("Contents", "Home", "bin", "java")
 	}
 	return filepath.Join("bin", "java")
+}
+
+// ensureBootstrapAdmin creates a master-realm admin user (admin/admin) so the
+// Keycloak admin console at /admin/ is usable. Idempotent via a marker file
+// next to Keycloak's H2 database — if H2 is wiped, the marker goes with it
+// and bootstrap re-runs.
+//
+// The app-side `aatu-admin` user in keycloak_realm.json lives in the `aatu`
+// realm and is for OIDC token issuance against the aatu application, not for
+// the admin console — two distinct Keycloak authentication contexts.
+//
+// "admin/admin" is a deliberate weak default for dev/OSS-solo. Production
+// deployments either re-bootstrap with stronger creds or rotate post-install.
+func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
+	markerFile := filepath.Join(k.serverDir(), "data", "h2", ".aatu-admin-bootstrapped")
+	if _, err := os.Stat(markerFile); err == nil {
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, k.keycloakLauncher(),
+		"bootstrap-admin", "user",
+		"--username", "admin",
+		"--password:env", "KC_ADMIN_PW",
+		"--no-prompt",
+	)
+	cmd.Env = append(os.Environ(),
+		"JAVA_HOME="+k.javaHome(),
+		"KC_ADMIN_PW=admin",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// bootstrap-admin may legitimately fail if an admin already exists
+		// in some edge cases (e.g., partial wipe). Log and continue — the
+		// subsequent start-dev will surface any real auth issue.
+		log.Printf("keycloak bootstrap-admin returned non-zero: %v\n%s", err, out)
+	} else {
+		log.Printf("keycloak: master-realm admin bootstrapped (admin/admin)")
+	}
+
+	_ = os.MkdirAll(filepath.Dir(markerFile), 0o755)
+	_ = os.WriteFile(markerFile, []byte("admin"), 0o644)
+	return nil
 }
 
 func (k *Keycloak) installRealmFile() error {
