@@ -32,6 +32,15 @@ func TestDefaults(t *testing.T) {
 	if cfg.Temporal.Namespace != "default" {
 		t.Errorf("default temporal namespace = %q; want %q", cfg.Temporal.Namespace, "default")
 	}
+	if cfg.Keycloak.HTTPPort != 8543 {
+		t.Errorf("default keycloak http port = %d; want 8543", cfg.Keycloak.HTTPPort)
+	}
+	if cfg.Keycloak.ManagementPort != 9543 {
+		t.Errorf("default keycloak management port = %d; want 9543", cfg.Keycloak.ManagementPort)
+	}
+	if cfg.Keycloak.Realm != "aatu" {
+		t.Errorf("default keycloak realm = %q; want %q", cfg.Keycloak.Realm, "aatu")
+	}
 }
 
 func TestUnmarshalDataAndPostgres(t *testing.T) {

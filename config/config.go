@@ -14,6 +14,7 @@ type Config struct {
 	Data       Data       `yaml:"data"`
 	Postgres   Postgres   `yaml:"postgres"`
 	Temporal   Temporal   `yaml:"temporal"`
+	Keycloak   Keycloak   `yaml:"keycloak"`
 	Paid       Paid       `yaml:"paid"`
 }
 
@@ -53,6 +54,19 @@ type Temporal struct {
 	Namespace string `yaml:"namespace"`
 }
 
+// Keycloak configures the bundled Keycloak IdP.
+type Keycloak struct {
+	// HTTPPort is the Keycloak HTTP listener.
+	// Default 8543 (non-standard to avoid colliding with the common 8080).
+	HTTPPort int `yaml:"http_port"`
+	// ManagementPort is the Keycloak health/metrics endpoint.
+	// Default 9543.
+	ManagementPort int `yaml:"management_port"`
+	// Realm is the bootstrap realm imported on first start.
+	// Default "aatu".
+	Realm string `yaml:"realm"`
+}
+
 // Paid groups the activation flags for paid modules. Ignored when the
 // binary is OSS; consulted by the paid binary's registry builder.
 type Paid struct {
@@ -88,6 +102,11 @@ func Default() Config {
 			UIEnabled:    true,
 			UIPort:       8233,
 			Namespace:    "default",
+		},
+		Keycloak: Keycloak{
+			HTTPPort:       8543,
+			ManagementPort: 9543,
+			Realm:          "aatu",
 		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},

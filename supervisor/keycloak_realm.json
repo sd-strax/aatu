@@ -1,0 +1,55 @@
+{
+  "realm": "aatu",
+  "enabled": true,
+  "displayName": "aatu",
+  "registrationAllowed": false,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginTheme": "keycloak",
+  "accessTokenLifespan": 3600,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "sslRequired": "external",
+  "roles": {
+    "realm": [
+      {"name": "viewer", "description": "Read-only access to investigations"},
+      {"name": "analyst", "description": "Can create and modify investigations"},
+      {"name": "approver", "description": "Can approve actions at trust tier T2"},
+      {"name": "senior_approver", "description": "Can approve actions at trust tier T3"},
+      {"name": "policy_author", "description": "Can author CEL policies"},
+      {"name": "policy_signer", "description": "Can sign policies in gated governance mode"},
+      {"name": "sop_author", "description": "Can author SOPs"},
+      {"name": "sop_signer", "description": "Can sign SOPs in gated governance mode"},
+      {"name": "tenant_admin", "description": "Tenant-level administration"},
+      {"name": "auditor", "description": "Read-only audit access"}
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "aatu",
+      "name": "aatu CLI / VS Code extension",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:*", "vscode://*"],
+      "webOrigins": ["+"],
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "aatu-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "aatu",
+      "lastName": "Admin",
+      "credentials": [
+        {"type": "password", "value": "aatu", "temporary": true}
+      ],
+      "realmRoles": ["tenant_admin", "analyst", "approver", "senior_approver"]
+    }
+  ]
+}

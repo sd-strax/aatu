@@ -80,6 +80,15 @@ func runStart() error {
 		}),
 		supervisor.RestartOnExit,
 	)
+	sup.Register(
+		supervisor.NewKeycloak(supervisor.KeycloakConfig{
+			DataDir:        filepath.Join(cfg.Data.Dir, "keycloak"),
+			HTTPPort:       cfg.Keycloak.HTTPPort,
+			ManagementPort: cfg.Keycloak.ManagementPort,
+			RealmName:      cfg.Keycloak.Realm,
+		}),
+		supervisor.RestartOnExit,
+	)
 
 	if err := sup.Start(ctx); err != nil {
 		return fmt.Errorf("supervisor start: %w", err)

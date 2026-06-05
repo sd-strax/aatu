@@ -1,0 +1,351 @@
+package supervisor
+
+import (
+	"context"
+	_ "embed"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	goruntime "runtime"
+	"strconv"
+	"syscall"
+	"time"
+)
+
+// jreVersion and keycloakVersion pin the bundled IdP distribution. Bumping
+// either is a deliberate decision — see D17 in aatu-enterprise/decisions.md.
+const (
+	jreVersion      = "17.0.13+11"
+	keycloakVersion = "26.0.7"
+)
+
+//go:embed keycloak_realm.json
+var defaultRealmJSON []byte
+
+// KeycloakConfig configures the bundled Keycloak IdP.
+type KeycloakConfig struct {
+	// DataDir is the root for Keycloak state. Subdirs:
+	//   jre/      Temurin JRE 17 (extracted)
+	//   server/   Keycloak Quarkus distribution (extracted)
+	//   data/     Keycloak's persistent state (H2 by default)
+	//   logs/     Keycloak stdout/stderr
+	DataDir string
+
+	// HTTPPort is the Keycloak HTTP listener. Default 8543 (non-standard to
+	// avoid colliding with the common 8080).
+	HTTPPort int
+
+	// ManagementPort is the Keycloak management/health endpoint. Default 9543.
+	ManagementPort int
+
+	// RealmName is the bootstrap realm imported on first start. Default "aatu".
+	RealmName string
+}
+
+// Keycloak is a Component wrapping the Keycloak Quarkus distribution.
+//
+// First-run cost: ~50–100 MB Temurin JRE + ~150 MB Keycloak download, ~10s
+// JVM + Keycloak boot. Subsequent runs ~10–15s warm.
+//
+// Air-gap compatibility: if DataDir is pre-populated (e.g., via `make bundle`
+// or a delivered tarball), no downloads happen. The supervisor's behavior is
+// the same; only the source of the binaries differs.
+type Keycloak struct {
+	cfg  KeycloakConfig
+	cmd  *exec.Cmd
+	logF *os.File
+}
+
+// NewKeycloak constructs the Keycloak component (not yet started).
+// Defaults: HTTPPort=8543, ManagementPort=9543, RealmName="aatu",
+// DataDir=~/.aatu/keycloak.
+func NewKeycloak(cfg KeycloakConfig) *Keycloak {
+	if cfg.HTTPPort == 0 {
+		cfg.HTTPPort = 8543
+	}
+	if cfg.ManagementPort == 0 {
+		cfg.ManagementPort = 9543
+	}
+	if cfg.RealmName == "" {
+		cfg.RealmName = "aatu"
+	}
+	if cfg.DataDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.DataDir = filepath.Join(home, ".aatu", "keycloak")
+	}
+	return &Keycloak{cfg: cfg}
+}
+
+// Name returns "keycloak".
+func (k *Keycloak) Name() string { return "keycloak" }
+
+// Start ensures the JRE + Keycloak distribution are present (downloading if
+// missing), installs the realm-import JSON, spawns the Keycloak JVM, and
+// polls the management /health/ready endpoint until it responds.
+func (k *Keycloak) Start(ctx context.Context) error {
+	if err := k.ensureBinaries(ctx); err != nil {
+		return err
+	}
+	if err := k.installRealmFile(); err != nil {
+		return err
+	}
+	if err := k.spawn(); err != nil {
+		return err
+	}
+	if err := k.waitForReady(ctx); err != nil {
+		_ = k.kill()
+		return err
+	}
+	return nil
+}
+
+// Stop sends SIGTERM, waits up to ctx's deadline (or 30s default) for clean
+// exit, then SIGKILLs. Idempotent.
+func (k *Keycloak) Stop(ctx context.Context) error {
+	if k.cmd == nil {
+		return nil
+	}
+	cmd := k.cmd
+	k.cmd = nil
+	defer func() {
+		if k.logF != nil {
+			_ = k.logF.Close()
+			k.logF = nil
+		}
+	}()
+
+	if cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	deadline := 30 * time.Second
+	if d, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(d); remaining > 0 && remaining < deadline {
+			deadline = remaining
+		}
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-time.After(deadline):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-done
+		return fmt.Errorf("keycloak did not stop cleanly within %s; killed", deadline)
+	}
+}
+
+// Health probes the management /health/ready endpoint.
+func (k *Keycloak) Health(ctx context.Context) HealthStatus {
+	if k.cmd == nil {
+		return HealthStatus{Ready: false, Message: "not started"}
+	}
+	url := fmt.Sprintf("http://localhost:%d/health/ready", k.cfg.ManagementPort)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return HealthStatus{Ready: false, Message: err.Error()}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return HealthStatus{Ready: false, Message: err.Error()}
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != 200 {
+		return HealthStatus{Ready: false, Message: fmt.Sprintf("health %d", resp.StatusCode)}
+	}
+	return HealthStatus{
+		Ready:   true,
+		Message: fmt.Sprintf("http :%d, realm %s", k.cfg.HTTPPort, k.cfg.RealmName),
+	}
+}
+
+// IssuerURL returns the OIDC issuer URL for the configured realm. Stable
+// across restarts as long as HTTPPort and RealmName don't change.
+func (k *Keycloak) IssuerURL() string {
+	return fmt.Sprintf("http://localhost:%d/realms/%s", k.cfg.HTTPPort, k.cfg.RealmName)
+}
+
+// --- internals ---------------------------------------------------------------
+
+func (k *Keycloak) jreDir() string    { return filepath.Join(k.cfg.DataDir, "jre") }
+func (k *Keycloak) serverDir() string { return filepath.Join(k.cfg.DataDir, "server") }
+
+// javaHome is what kc.sh expects in $JAVA_HOME. macOS Temurin nests the
+// JRE under Contents/Home/; Linux Temurin extracts straight to the root.
+func (k *Keycloak) javaHome() string {
+	if goruntime.GOOS == "darwin" {
+		return filepath.Join(k.jreDir(), "Contents", "Home")
+	}
+	return k.jreDir()
+}
+
+// keycloakLauncher is the kc.sh script that owns CLASSPATH + JAVA_OPTS setup.
+// Running `java -jar quarkus-run.jar` directly skips this and breaks
+// Environment.getHomePath().
+func (k *Keycloak) keycloakLauncher() string {
+	return filepath.Join(k.serverDir(), "bin", "kc.sh")
+}
+
+func (k *Keycloak) ensureBinaries(ctx context.Context) error {
+	jreURL, err := temurinJREURL()
+	if err != nil {
+		return err
+	}
+	jreMarker := relativeJavaBin()
+	if err := downloadAndExtractTarGz(ctx, jreURL, k.jreDir(), jreMarker, 1); err != nil {
+		return fmt.Errorf("ensure JRE: %w", err)
+	}
+
+	kcURL := keycloakTarballURL()
+	kcMarker := filepath.Join("bin", "kc.sh")
+	if err := downloadAndExtractTarGz(ctx, kcURL, k.serverDir(), kcMarker, 1); err != nil {
+		return fmt.Errorf("ensure Keycloak: %w", err)
+	}
+	// kc.sh must be executable; preserve mode from tarball but defensive chmod.
+	if err := os.Chmod(k.keycloakLauncher(), 0o755); err != nil {
+		return fmt.Errorf("chmod kc.sh: %w", err)
+	}
+	return nil
+}
+
+// relativeJavaBin returns the path to the `java` binary relative to the JRE
+// install root (after stripComponents=1 has stripped the tarball's top-level
+// directory).
+func relativeJavaBin() string {
+	if goruntime.GOOS == "darwin" {
+		return filepath.Join("Contents", "Home", "bin", "java")
+	}
+	return filepath.Join("bin", "java")
+}
+
+func (k *Keycloak) installRealmFile() error {
+	importDir := filepath.Join(k.serverDir(), "data", "import")
+	if err := os.MkdirAll(importDir, 0o755); err != nil {
+		return fmt.Errorf("create import dir: %w", err)
+	}
+	target := filepath.Join(importDir, "aatu-realm.json")
+	if err := os.WriteFile(target, defaultRealmJSON, 0o644); err != nil {
+		return fmt.Errorf("write realm file: %w", err)
+	}
+	return nil
+}
+
+func (k *Keycloak) spawn() error {
+	logsDir := filepath.Join(k.cfg.DataDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		return fmt.Errorf("create logs dir: %w", err)
+	}
+	logF, err := os.OpenFile(filepath.Join(logsDir, "keycloak.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+
+	args := []string{
+		"start-dev",
+		"--http-enabled=true",
+		"--http-port=" + strconv.Itoa(k.cfg.HTTPPort),
+		"--http-management-port=" + strconv.Itoa(k.cfg.ManagementPort),
+		"--hostname=localhost",
+		"--hostname-strict=false",
+		"--health-enabled=true",
+		"--import-realm",
+	}
+	cmd := exec.Command(k.keycloakLauncher(), args...)
+	cmd.Env = append(os.Environ(), "JAVA_HOME="+k.javaHome())
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+
+	if err := cmd.Start(); err != nil {
+		logF.Close()
+		return fmt.Errorf("spawn keycloak: %w", err)
+	}
+	k.cmd = cmd
+	k.logF = logF
+	return nil
+}
+
+func (k *Keycloak) waitForReady(ctx context.Context) error {
+	url := fmt.Sprintf("http://localhost:%d/health/ready", k.cfg.ManagementPort)
+	// Keycloak's first boot takes 10–20s warm; the JVM + Quarkus init are slow.
+	// Generous outer cap so first-run smoke tests work.
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("keycloak /health/ready did not respond within 90s; see %s/logs/keycloak.log", k.cfg.DataDir)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func (k *Keycloak) kill() error {
+	if k.cmd == nil || k.cmd.Process == nil {
+		return nil
+	}
+	if err := k.cmd.Process.Kill(); err != nil {
+		return err
+	}
+	_, _ = k.cmd.Process.Wait()
+	k.cmd = nil
+	if k.logF != nil {
+		k.logF.Close()
+		k.logF = nil
+	}
+	return nil
+}
+
+// --- URLs --------------------------------------------------------------------
+
+func temurinJREURL() (string, error) {
+	var osTag, archTag string
+	switch goruntime.GOOS {
+	case "darwin":
+		osTag = "mac"
+	case "linux":
+		osTag = "linux"
+	default:
+		return "", fmt.Errorf("supervisor.Keycloak: unsupported OS %q (need darwin or linux for now)", goruntime.GOOS)
+	}
+	switch goruntime.GOARCH {
+	case "amd64":
+		archTag = "x64"
+	case "arm64":
+		archTag = "aarch64"
+	default:
+		return "", fmt.Errorf("supervisor.Keycloak: unsupported arch %q", goruntime.GOARCH)
+	}
+	// Adoptium tag URL-encodes '+' as %2B.
+	tag := "jdk-17.0.13%2B11"
+	file := fmt.Sprintf("OpenJDK17U-jre_%s_%s_hotspot_17.0.13_11.tar.gz", archTag, osTag)
+	return "https://github.com/adoptium/temurin17-binaries/releases/download/" + tag + "/" + file, nil
+}
+
+func keycloakTarballURL() string {
+	return fmt.Sprintf("https://github.com/keycloak/keycloak/releases/download/%s/keycloak-%s.tar.gz",
+		keycloakVersion, keycloakVersion)
+}
