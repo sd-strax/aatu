@@ -1,4 +1,4 @@
-.PHONY: help build test test-race run vet tidy hooks clean ci
+.PHONY: help build test test-race run vet tidy hooks clean ci bundle
 .DEFAULT_GOAL := help
 
 help: ## List available targets
@@ -32,3 +32,6 @@ clean: ## Remove built binaries
 	rm -rf bin/
 
 ci: vet test build ## What CI runs: vet, test, build
+
+bundle: build ## Build an air-gap-able distribution tarball for the current OS/arch
+	@bash scripts/build-bundle.sh
