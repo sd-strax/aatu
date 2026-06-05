@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +16,12 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/lib/pq"
+
 	"github.com/sd-strax/aatu/aggregate"
 	"github.com/sd-strax/aatu/config"
 	"github.com/sd-strax/aatu/knowledge"
+	"github.com/sd-strax/aatu/server"
 	"github.com/sd-strax/aatu/supervisor"
 )
 
@@ -111,12 +115,26 @@ func runStart() error {
 	sup.Register(temp, supervisor.RestartOnExit)
 	sup.Register(kc, supervisor.RestartOnExit)
 
-	backend := supervisor.NewBackend(supervisor.BackendConfig{
+	// Open the aggregate's DB lazily — sql.Open doesn't actually connect
+	// until first query, so it's safe to construct before Pg starts. The
+	// Backend's probe verifies reachability before the HTTP server accepts
+	// traffic.
+	aggDB, err := sql.Open("postgres", pg.DSN("aatu_main"))
+	if err != nil {
+		return fmt.Errorf("open aggregate db: %w", err)
+	}
+	defer aggDB.Close()
+	handler := aggregate.NewHandler(aggregate.NewStore(aggDB),
+		aggregate.InvestigationCurrentProjector{},
+	)
+
+	backend := server.NewBackend(server.BackendConfig{
 		HTTPPort:         cfg.Backend.HTTPPort,
 		PgDSN:            pg.DSN("aatu_main"),
 		TemporalHostPort: fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
 		KeycloakIssuer: fmt.Sprintf("http://localhost:%d/realms/%s",
 			cfg.Keycloak.HTTPPort, cfg.Keycloak.Realm),
+		Handler: handler,
 	}, sup)
 	sup.Register(backend, supervisor.RestartOnExit)
 
@@ -147,7 +165,7 @@ func runStatus() error {
 	}
 	defer resp.Body.Close()
 
-	var status supervisor.StatusResponse
+	var status server.StatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return fmt.Errorf("parse /status response: %w", err)
 	}
@@ -212,7 +230,7 @@ func runStop() error {
 // orderedComponentNames returns supervisor component names in registration
 // order. We use the well-known names rather than sorting alphabetically so
 // the output reads top-down dependency order.
-func orderedComponentNames(m map[string]supervisor.ComponentStatus) []string {
+func orderedComponentNames(m map[string]server.ComponentStatus) []string {
 	preferred := []string{"postgres", "temporal", "keycloak", "backend"}
 	seen := map[string]bool{}
 	out := []string{}

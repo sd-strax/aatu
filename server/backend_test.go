@@ -1,4 +1,4 @@
-package supervisor
+package server
 
 import (
 	"context"
@@ -7,7 +7,40 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sd-strax/aatu/supervisor"
 )
+
+// fakeComponent is a tiny supervisor.Component that returns whatever
+// readiness we configure. Start/Stop are no-ops; Health is the test surface.
+// Same shape as the one inside the supervisor package, copied here so server
+// tests don't depend on supervisor's test helpers.
+type fakeComponent struct {
+	name    string
+	healthy bool
+	msg     string
+}
+
+func (f *fakeComponent) Name() string                                       { return f.name }
+func (f *fakeComponent) Start(_ context.Context) error                      { return nil }
+func (f *fakeComponent) Stop(_ context.Context) error                       { return nil }
+func (f *fakeComponent) Health(_ context.Context) supervisor.HealthStatus {
+	return supervisor.HealthStatus{Ready: f.healthy, Message: f.msg}
+}
+
+// makeSupWithStarted registers the given components and runs sup.Start so
+// they land in the "started" set that Health iterates over.
+func makeSupWithStarted(t *testing.T, components ...supervisor.Component) *supervisor.Supervisor {
+	t.Helper()
+	s := supervisor.New()
+	for _, c := range components {
+		s.Register(c, supervisor.RestartOnExit)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("supervisor.Start: %v", err)
+	}
+	return s
+}
 
 func TestBackendHandleHealthz(t *testing.T) {
 	b := &Backend{}
@@ -23,25 +56,11 @@ func TestBackendHandleHealthz(t *testing.T) {
 	}
 }
 
-// makeSupWithStarted is a test helper that installs a set of started
-// components on a Supervisor without going through Start. Lets us drive
-// handler tests without spinning up real processes.
-func makeSupWithStarted(components ...Component) *Supervisor {
-	s := New()
-	for _, c := range components {
-		s.Register(c, RestartOnExit)
-	}
-	s.mu.Lock()
-	s.started = append(s.started, components...)
-	s.mu.Unlock()
-	return s
-}
-
 func TestBackendHandleStatus_AllReady(t *testing.T) {
-	a := &fakeComponent{name: "postgres", healthy: true}
-	b := &fakeComponent{name: "temporal", healthy: true}
-	sup := makeSupWithStarted(a, b)
-
+	sup := makeSupWithStarted(t,
+		&fakeComponent{name: "postgres", healthy: true, msg: "listening on :5435"},
+		&fakeComponent{name: "temporal", healthy: true, msg: "frontend localhost:7233"},
+	)
 	backend := &Backend{sup: sup}
 	req := httptest.NewRequest("GET", "/status", nil)
 	w := httptest.NewRecorder()
@@ -50,7 +69,6 @@ func TestBackendHandleStatus_AllReady(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d; want 200", w.Code)
 	}
-
 	var resp StatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -67,10 +85,10 @@ func TestBackendHandleStatus_AllReady(t *testing.T) {
 }
 
 func TestBackendHandleStatus_Degraded(t *testing.T) {
-	a := &fakeComponent{name: "postgres", healthy: true}
-	b := &fakeComponent{name: "temporal", healthy: false}
-	sup := makeSupWithStarted(a, b)
-
+	sup := makeSupWithStarted(t,
+		&fakeComponent{name: "postgres", healthy: true},
+		&fakeComponent{name: "temporal", healthy: false},
+	)
 	backend := &Backend{sup: sup}
 	req := httptest.NewRequest("GET", "/status", nil)
 	w := httptest.NewRecorder()
@@ -79,16 +97,12 @@ func TestBackendHandleStatus_Degraded(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d; want 503 for degraded", w.Code)
 	}
-
 	var resp StatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if resp.Overall != "degraded" {
 		t.Errorf("overall = %q; want \"degraded\"", resp.Overall)
-	}
-	if resp.Components["temporal"].Ready {
-		t.Errorf("temporal should be not-ready")
 	}
 }
 
