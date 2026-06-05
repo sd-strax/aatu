@@ -76,10 +76,10 @@ func TestKeycloakDefaults(t *testing.T) {
 	if k.cfg.ManagementPort != 9543 {
 		t.Errorf("default ManagementPort = %d; want 9543", k.cfg.ManagementPort)
 	}
-	if k.cfg.RealmName != "aatu" {
-		t.Errorf("default RealmName = %q; want \"aatu\"", k.cfg.RealmName)
+	if k.cfg.RealmName != "reckon" {
+		t.Errorf("default RealmName = %q; want \"reckon\"", k.cfg.RealmName)
 	}
-	if !strings.Contains(k.cfg.DataDir, ".aatu") {
-		t.Errorf("default DataDir = %q; want to contain .aatu", k.cfg.DataDir)
+	if !strings.Contains(k.cfg.DataDir, ".reckon") {
+		t.Errorf("default DataDir = %q; want to contain .reckon", k.cfg.DataDir)
 	}
 }

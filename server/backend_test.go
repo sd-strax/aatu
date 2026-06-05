@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sd-strax/aatu/supervisor"
+	"github.com/sd-strax/reckon/supervisor"
 )
 
 // fakeComponent is a tiny supervisor.Component that returns whatever

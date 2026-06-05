@@ -69,7 +69,7 @@ func (tk *testKeycloak) mintToken(t *testing.T, override map[string]any) string 
 	claims := jwt.MapClaims{
 		"iss":                tk.srv.URL,
 		"sub":                "test-subject",
-		"aud":                "aatu",
+		"aud":                "reckon",
 		"exp":                now.Add(time.Hour).Unix(),
 		"iat":                now.Unix(),
 		"preferred_username": "alice",
@@ -91,7 +91,7 @@ func TestVerifier_VerifyValidToken(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, err := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -117,7 +117,7 @@ func TestVerifier_RejectsExpiredToken(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 
 	raw := tk.mintToken(t, map[string]any{
@@ -134,7 +134,7 @@ func TestVerifier_RejectsBadSignature(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 
 	raw := tk.mintToken(t, nil)
@@ -151,7 +151,7 @@ func TestVerifier_RejectsWrongIssuer(t *testing.T) {
 	// Verifier configured for tk1, token minted by tk2
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk1.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 	raw := tk2.mintToken(t, map[string]any{"iss": tk2.srv.URL})
 	_, err := v.Verify(context.Background(), raw)
@@ -164,7 +164,7 @@ func TestVerifier_ExtractsTenantAndDelegate(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 
 	raw := tk.mintToken(t, map[string]any{

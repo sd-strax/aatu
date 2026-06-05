@@ -4,7 +4,7 @@ import (
 	"slices"
 )
 
-// Claims is aatu's view of an authenticated user, extracted from a Keycloak
+// Claims is reckon's view of an authenticated user, extracted from a Keycloak
 // JWT. The fields cover what the engine actually consumes; raw Keycloak
 // claims (audience, jti, etc.) we ignore.
 type Claims struct {
@@ -72,7 +72,7 @@ type rawClaims struct {
 	} `json:"resource_access"`
 }
 
-// toClaims flattens the on-wire shape into aatu's Claims. Realm and
+// toClaims flattens the on-wire shape into reckon's Claims. Realm and
 // resource-access roles are merged; duplicates are squashed.
 func (r rawClaims) toClaims(clientID string) Claims {
 	roles := append([]string{}, r.RealmAccess.Roles...)

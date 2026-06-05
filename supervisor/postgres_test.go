@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sd-strax/aatu/aggregate"
-	"github.com/sd-strax/aatu/knowledge"
+	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/knowledge"
 )
 
 // TestPostgresLifecycle exercises the full Postgres component lifecycle:
@@ -27,8 +27,8 @@ func TestPostgresLifecycle(t *testing.T) {
 		DataDir: dir,
 		Port:    0, // use default 5435
 		Databases: []DatabaseSpec{
-			{Name: "aatu_main"},
-			{Name: "aatu_knowledge"},
+			{Name: "reckon_main"},
+			{Name: "reckon_knowledge"},
 		},
 	})
 
@@ -50,7 +50,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	for _, name := range []string{"aatu_main", "aatu_knowledge"} {
+	for _, name := range []string{"reckon_main", "reckon_knowledge"} {
 		var exists bool
 		err := db.QueryRowContext(ctx,
 			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", name,
@@ -64,10 +64,10 @@ func TestPostgresLifecycle(t *testing.T) {
 	}
 	db.Close()
 
-	// Write to aatu_main; verify it persists across restart
-	main, err := pg.open(ctx, "aatu_main")
+	// Write to reckon_main; verify it persists across restart
+	main, err := pg.open(ctx, "reckon_main")
 	if err != nil {
-		t.Fatalf("open aatu_main: %v", err)
+		t.Fatalf("open reckon_main: %v", err)
 	}
 	if _, err := main.ExecContext(ctx,
 		"CREATE TABLE IF NOT EXISTS test_persist (id INT PRIMARY KEY, val TEXT)",
@@ -89,8 +89,8 @@ func TestPostgresLifecycle(t *testing.T) {
 	pg2 := NewPostgres(PostgresConfig{
 		DataDir: dir,
 		Databases: []DatabaseSpec{
-			{Name: "aatu_main"},
-			{Name: "aatu_knowledge"},
+			{Name: "reckon_main"},
+			{Name: "reckon_knowledge"},
 		},
 	})
 	if err := pg2.Start(ctx); err != nil {
@@ -102,9 +102,9 @@ func TestPostgresLifecycle(t *testing.T) {
 		_ = pg2.Stop(stopCtx)
 	})
 
-	main2, err := pg2.open(ctx, "aatu_main")
+	main2, err := pg2.open(ctx, "reckon_main")
 	if err != nil {
-		t.Fatalf("open aatu_main after restart: %v", err)
+		t.Fatalf("open reckon_main after restart: %v", err)
 	}
 	defer main2.Close()
 	var val string
@@ -132,8 +132,8 @@ func TestPostgresMigrations(t *testing.T) {
 		DataDir: dir,
 		Port:    0,
 		Databases: []DatabaseSpec{
-			{Name: "aatu_main", Migrations: aggregate.Migrations()},
-			{Name: "aatu_knowledge", Migrations: knowledge.Migrations()},
+			{Name: "reckon_main", Migrations: aggregate.Migrations()},
+			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
 		},
 	})
 
@@ -149,10 +149,10 @@ func TestPostgresMigrations(t *testing.T) {
 		_ = pg.Stop(stopCtx)
 	})
 
-	// aatu_main: events, stix_objects, stix_relationships, ai_tool_calls, ai_transcripts
-	mainDB, err := pg.open(ctx, "aatu_main")
+	// reckon_main: events, stix_objects, stix_relationships, ai_tool_calls, ai_transcripts
+	mainDB, err := pg.open(ctx, "reckon_main")
 	if err != nil {
-		t.Fatalf("open aatu_main: %v", err)
+		t.Fatalf("open reckon_main: %v", err)
 	}
 	defer mainDB.Close()
 
@@ -167,14 +167,14 @@ func TestPostgresMigrations(t *testing.T) {
 			continue
 		}
 		if !exists {
-			t.Errorf("aatu_main: table %s was not created by aggregate migrations", table)
+			t.Errorf("reckon_main: table %s was not created by aggregate migrations", table)
 		}
 	}
 
-	// aatu_knowledge: sops, investigation_summaries
-	knowDB, err := pg.open(ctx, "aatu_knowledge")
+	// reckon_knowledge: sops, investigation_summaries
+	knowDB, err := pg.open(ctx, "reckon_knowledge")
 	if err != nil {
-		t.Fatalf("open aatu_knowledge: %v", err)
+		t.Fatalf("open reckon_knowledge: %v", err)
 	}
 	defer knowDB.Close()
 
@@ -189,7 +189,7 @@ func TestPostgresMigrations(t *testing.T) {
 			continue
 		}
 		if !exists {
-			t.Errorf("aatu_knowledge: table %s was not created by knowledge migrations", table)
+			t.Errorf("reckon_knowledge: table %s was not created by knowledge migrations", table)
 		}
 	}
 
@@ -198,20 +198,20 @@ func TestPostgresMigrations(t *testing.T) {
 	if err := mainDB.QueryRowContext(ctx,
 		"SELECT version FROM schema_migrations",
 	).Scan(&mainVersion); err != nil {
-		t.Errorf("aatu_main schema_migrations: %v", err)
+		t.Errorf("reckon_main schema_migrations: %v", err)
 	}
 	if mainVersion != 3 {
-		t.Errorf("aatu_main version = %d; want 3 (three aggregate migrations)", mainVersion)
+		t.Errorf("reckon_main version = %d; want 3 (three aggregate migrations)", mainVersion)
 	}
 
 	var knowVersion int
 	if err := knowDB.QueryRowContext(ctx,
 		"SELECT version FROM schema_migrations",
 	).Scan(&knowVersion); err != nil {
-		t.Errorf("aatu_knowledge schema_migrations: %v", err)
+		t.Errorf("reckon_knowledge schema_migrations: %v", err)
 	}
 	if knowVersion != 2 {
-		t.Errorf("aatu_knowledge version = %d; want 2 (two knowledge migrations)", knowVersion)
+		t.Errorf("reckon_knowledge version = %d; want 2 (two knowledge migrations)", knowVersion)
 	}
 
 	// Restart against the same data dir; migrations should be a no-op.
@@ -222,8 +222,8 @@ func TestPostgresMigrations(t *testing.T) {
 	pg2 := NewPostgres(PostgresConfig{
 		DataDir: dir,
 		Databases: []DatabaseSpec{
-			{Name: "aatu_main", Migrations: aggregate.Migrations()},
-			{Name: "aatu_knowledge", Migrations: knowledge.Migrations()},
+			{Name: "reckon_main", Migrations: aggregate.Migrations()},
+			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
 		},
 	})
 	if err := pg2.Start(ctx); err != nil {
@@ -236,16 +236,16 @@ func TestPostgresMigrations(t *testing.T) {
 	})
 
 	// Schema versions unchanged
-	mainDB2, err := pg2.open(ctx, "aatu_main")
+	mainDB2, err := pg2.open(ctx, "reckon_main")
 	if err != nil {
-		t.Fatalf("open aatu_main after restart: %v", err)
+		t.Fatalf("open reckon_main after restart: %v", err)
 	}
 	defer mainDB2.Close()
 	var mainVersion2 int
 	if err := mainDB2.QueryRowContext(ctx,
 		"SELECT version FROM schema_migrations",
 	).Scan(&mainVersion2); err != nil {
-		t.Errorf("aatu_main schema_migrations after restart: %v", err)
+		t.Errorf("reckon_main schema_migrations after restart: %v", err)
 	}
 	if mainVersion2 != mainVersion {
 		t.Errorf("version changed after restart: was %d, now %d", mainVersion, mainVersion2)

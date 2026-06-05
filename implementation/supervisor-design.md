@@ -1,21 +1,21 @@
 # Supervisor design
 
-How the bundled-deps supervisor in `aatu/supervisor/` works. Written so a future contributor coming in cold can change supervisor code with confidence.
+How the bundled-deps supervisor in `reckon/supervisor/` works. Written so a future contributor coming in cold can change supervisor code with confidence.
 
-This doc covers patterns, not API reference. For exact signatures, read `aatu/supervisor/supervisor.go`.
+This doc covers patterns, not API reference. For exact signatures, read `reckon/supervisor/supervisor.go`.
 
 ---
 
 ## Job
 
-`aatu start` brings up four things on the analyst's laptop:
+`reckon start` brings up four things on the analyst's laptop:
 
-1. **Postgres** — embedded via `fergusstrange/embedded-postgres`. Two databases: `aatu_main`, `aatu_knowledge`.
+1. **Postgres** — embedded via `fergusstrange/embedded-postgres`. Two databases: `reckon_main`, `reckon_knowledge`.
 2. **Temporal** — dev server via `go.temporal.io/sdk/testsuite.StartDevServer`. SQLite-backed (D15).
-3. **Keycloak** — bundled Temurin JRE 17 + Keycloak 26.0.7 Quarkus distribution. Single realm `aatu` with the canonical role set; master-realm admin auto-bootstrapped (D17).
-4. **aatu-backend** — in-process Go service. Today a placeholder that validates dep connectivity and serves `/healthz` + `/status`. Phase A.4–A.7 fill in the engine.
+3. **Keycloak** — bundled Temurin JRE 17 + Keycloak 26.0.7 Quarkus distribution. Single realm `reckon` with the canonical role set; master-realm admin auto-bootstrapped (D17).
+4. **reckon-backend** — in-process Go service. Today a placeholder that validates dep connectivity and serves `/healthz` + `/status`. Phase A.4–A.7 fill in the engine.
 
-`aatu stop` signals a running supervisor. `aatu status` queries `/status`.
+`reckon stop` signals a running supervisor. `reckon status` queries `/status`.
 
 ---
 
@@ -126,7 +126,7 @@ This is why `Run` does `wg.Wait()` before `Stop`.
 
 Three of the four components download artifacts on first run (Pg via embedded-postgres, Temporal CLI via testsuite, JRE+Keycloak via supervisor.downloadAndExtractTarGz). All three honor "if marker file exists at expected path, skip download" semantics.
 
-`make bundle` runs `aatu start` once against a temp data dir, lets all downloads complete, strips transient state, and tars the result. An air-gap user untars to their `~/.aatu/`, runs `aatu start`, and the supervisor finds every binary already present — zero network calls.
+`make bundle` runs `reckon start` once against a temp data dir, lets all downloads complete, strips transient state, and tars the result. An air-gap user untars to their `~/.reckon/`, runs `reckon start`, and the supervisor finds every binary already present — zero network calls.
 
 The supervisor code is **path-based, not download-based**. Components check for binaries at known paths; how the binaries arrived (download / `make bundle` tarball / OS package) is a distribution concern, not a supervisor concern.
 
@@ -134,21 +134,21 @@ The supervisor code is **path-based, not download-based**. Components check for 
 
 ## What each component owns
 
-- **`supervisor.Postgres`** — wraps `embedded-postgres`. Owns: data dir layout (`~/.aatu/pg/{data,runtime}`), port (default 5435), database creation (idempotent), legacy `aatu_temporal` cleanup. Exposes: `DSN(dbname)` for downstream consumers.
+- **`supervisor.Postgres`** — wraps `embedded-postgres`. Owns: data dir layout (`~/.reckon/pg/{data,runtime}`), port (default 5435), database creation (idempotent), legacy `reckon_temporal` cleanup. Exposes: `DSN(dbname)` for downstream consumers.
 
 - **`supervisor.Temporal`** — wraps `testsuite.DevServer`. Owns: data dir, ports (gRPC 7233, UI 8233), namespace registration. Exposes: `FrontendHostPort()`, `Namespace()`.
 
-- **`supervisor.Keycloak`** — orchestrates the IdP. Owns: JRE download/extract, Keycloak download/extract, realm-file installation, bootstrap-admin (idempotent via marker file at `~/.aatu/keycloak/server/data/h2/.aatu-admin-bootstrapped`), kc.sh subprocess management with SIGTERM-then-SIGKILL fallback. Exposes: `IssuerURL()`.
+- **`supervisor.Keycloak`** — orchestrates the IdP. Owns: JRE download/extract, Keycloak download/extract, realm-file installation, bootstrap-admin (idempotent via marker file at `~/.reckon/keycloak/server/data/h2/.reckon-admin-bootstrapped`), kc.sh subprocess management with SIGTERM-then-SIGKILL fallback. Exposes: `IssuerURL()`.
 
-- **`supervisor.Backend`** — in-process placeholder for the eventual aatu engine. Owns: dependency probes (Pg ping, Temporal CheckHealth, Keycloak OIDC discovery), HTTP server on `:8080` with `/healthz` + `/status`. Will be replaced by real engine code through Phase A.4–A.7.
+- **`supervisor.Backend`** — in-process placeholder for the eventual reckon engine. Owns: dependency probes (Pg ping, Temporal CheckHealth, Keycloak OIDC discovery), HTTP server on `:8080` with `/healthz` + `/status`. Will be replaced by real engine code through Phase A.4–A.7.
 
 - **`supervisor.Supervisor`** — owns: registration order, start/stop orchestration, watcher goroutines, RestartPolicy enforcement, health rollup. Does not know what individual components do.
 
 ---
 
-## PID file + `aatu stop`
+## PID file + `reckon stop`
 
-`cmd/aatu start` writes its PID to `$DATA_DIR/supervisor.pid` on entry, removes on exit (defer). `cmd/aatu stop` reads the file, sends SIGTERM, polls for the file to disappear.
+`cmd/reckon start` writes its PID to `$DATA_DIR/supervisor.pid` on entry, removes on exit (defer). `cmd/reckon stop` reads the file, sends SIGTERM, polls for the file to disappear.
 
 Safety: `writePIDFile` reads any existing file and checks if the recorded PID is alive (`Signal(0)` probe). If alive, refuses to overwrite — protects against two supervisors racing on the same data dir. If absent or pointing at a dead PID, overwrites.
 
@@ -172,7 +172,7 @@ Adding a new component:
 
 1. Write a type that implements `Component`.
 2. Decide its RestartPolicy: FatalOnExit if uncontrolled exit threatens data integrity; RestartOnExit otherwise.
-3. Register it in `cmd/aatu/main.go` in dependency order.
+3. Register it in `cmd/reckon/main.go` in dependency order.
 4. If it needs to be reachable by Backend, expose a `DSN()` / `HostPort()` / `URL()` getter and wire it into Backend's config.
 5. Add unit tests for any non-trivial Start/Stop/Health logic. Use `withFastWatcher` if you want to assert watcher behavior.
 
@@ -182,7 +182,7 @@ Avoid: storing global state in the component (use struct fields), spawning gorou
 
 ## See also
 
-- `aatu/design/05-component-architecture.md §3` — runtime topology this implements
-- `aatu/implementation/module-layout.md` — the OSS/paid repo split this lives inside
-- `aatu-enterprise/decisions.md` D15 (Temporal SQLite vs Pg), D17 (JRE+Keycloak bundling)
-- `aatu/init/README.md` — launchd / systemd templates for running the supervisor as a system service
+- `reckon/design/05-component-architecture.md §3` — runtime topology this implements
+- `reckon/implementation/module-layout.md` — the OSS/paid repo split this lives inside
+- `reckon-enterprise/decisions.md` D15 (Temporal SQLite vs Pg), D17 (JRE+Keycloak bundling)
+- `reckon/init/README.md` — launchd / systemd templates for running the supervisor as a system service

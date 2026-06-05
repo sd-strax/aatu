@@ -16,7 +16,7 @@ import (
 // and retry.
 var ErrConcurrent = errors.New("optimistic concurrency: aggregate moved")
 
-// Store is the event-store interface to aatu_main.events. The Store does
+// Store is the event-store interface to reckon_main.events. The Store does
 // not own a transaction — callers (typically the Handler) pass one in so
 // the event-append and projection-update share atomicity.
 type Store struct {

@@ -9,7 +9,7 @@ import (
 )
 
 // Verifier validates Keycloak-issued JWTs against the configured issuer's
-// JWKS and extracts aatu's Claims from them.
+// JWKS and extracts reckon's Claims from them.
 //
 // Construction discovers the issuer's JWKS via the standard OIDC discovery
 // URL (issuer + /.well-known/openid-configuration), so the supervisor's
@@ -24,11 +24,11 @@ type Verifier struct {
 type VerifierConfig struct {
 	// Issuer is the full OIDC issuer URL. For the bundled deployment this
 	// comes from supervisor.Keycloak.IssuerURL() — e.g.,
-	// "http://localhost:8543/realms/aatu".
+	// "http://localhost:8543/realms/reckon".
 	Issuer string
 
 	// ClientID identifies the OIDC client whose tokens we accept. For the
-	// bundled deployment this is "aatu". Set to empty string to disable
+	// bundled deployment this is "reckon". Set to empty string to disable
 	// audience checking (useful in tests; not recommended in production).
 	ClientID string
 

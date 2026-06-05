@@ -1,4 +1,4 @@
-# aatu-specific Go patterns
+# reckon-specific Go patterns
 
 For general Go style, read in this order:
 
@@ -6,13 +6,13 @@ For general Go style, read in this order:
 2. **[Go Code Review Comments](https://go.dev/wiki/CodeReviewComments)** — the actual review checklist.
 3. **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** — covers things Google leaves out (mutex placement, error wrapping nuances).
 
-This file is **only** for patterns specific to aatu that the public guides don't address. Keep it short; add only when a pattern is repeated three+ times and a future contributor would need it spelled out.
+This file is **only** for patterns specific to reckon that the public guides don't address. Keep it short; add only when a pattern is repeated three+ times and a future contributor would need it spelled out.
 
 ---
 
 ## 1. Pure-function + transaction-wrapper layering
 
-Used in `aatu/aggregate/`. Pattern: split "what events does this command produce?" from "how do I atomically persist + project them?"
+Used in `reckon/aggregate/`. Pattern: split "what events does this command produce?" from "how do I atomically persist + project them?"
 
 ```go
 // command.go — pure, no DB
@@ -50,7 +50,7 @@ See `implementation/supervisor-design.md` for the full pattern document. **New c
 
 ## 3. Two-axis auth chain
 
-Used in `aatu/server/`. Pattern: compose `authz.RequireAuth` (Gate 1) before per-route `authz.RequireRole` or inline equivalents (still Gate 1, narrower).
+Used in `reckon/server/`. Pattern: compose `authz.RequireAuth` (Gate 1) before per-route `authz.RequireRole` or inline equivalents (still Gate 1, narrower).
 
 ```go
 // Gate 2 (action authorization, CEL-based) is a separate Phase C concern;
@@ -104,9 +104,9 @@ func Migrations() fs.FS {
 }
 ```
 
-The `supervisor.PostgresConfig.Databases` field takes `[]DatabaseSpec{Name, Migrations fs.FS}`. `cmd/aatu` injects the migrations; the supervisor calls `pgmigrate.Run` after database creation.
+The `supervisor.PostgresConfig.Databases` field takes `[]DatabaseSpec{Name, Migrations fs.FS}`. `cmd/reckon` injects the migrations; the supervisor calls `pgmigrate.Run` after database creation.
 
-**Why this shape:** supervisor stays unaware of what schemas any engine subpackage owns. Adding a new engine subpackage with its own migrations means adding one entry in `cmd/aatu`'s `Databases` slice — no supervisor changes.
+**Why this shape:** supervisor stays unaware of what schemas any engine subpackage owns. Adding a new engine subpackage with its own migrations means adding one entry in `cmd/reckon`'s `Databases` slice — no supervisor changes.
 
 ---
 

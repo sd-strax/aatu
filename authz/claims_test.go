@@ -15,7 +15,7 @@ func TestRawClaims_ToClaims_MergesRealmAndResourceRoles(t *testing.T) {
 		"exp": 1780000000,
 		"realm_access": { "roles": ["analyst", "viewer"] },
 		"resource_access": {
-			"aatu":    { "roles": ["approver", "viewer"] },
+			"reckon":    { "roles": ["approver", "viewer"] },
 			"account": { "roles": ["manage-account"] }
 		}
 	}`)
@@ -25,7 +25,7 @@ func TestRawClaims_ToClaims_MergesRealmAndResourceRoles(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	got := r.toClaims("aatu")
+	got := r.toClaims("reckon")
 	if got.Subject != "abc-123" {
 		t.Errorf("Subject = %q; want abc-123", got.Subject)
 	}
@@ -42,7 +42,7 @@ func TestRawClaims_ToClaims_MergesRealmAndResourceRoles(t *testing.T) {
 		t.Errorf("ExpiresAt = %d", got.ExpiresAt)
 	}
 
-	// Realm roles + the aatu resource_access roles merged, deduplicated.
+	// Realm roles + the reckon resource_access roles merged, deduplicated.
 	// The 'account' resource-access entry is intentionally ignored — it
 	// doesn't match our clientID.
 	wantRoles := []string{"analyst", "viewer", "approver"}
@@ -77,7 +77,7 @@ func TestClaims_HasAnyRole(t *testing.T) {
 func TestRawClaims_ToClaims_NoResourceAccess(t *testing.T) {
 	r := rawClaims{Subject: "x"}
 	r.RealmAccess.Roles = []string{"viewer"}
-	got := r.toClaims("aatu")
+	got := r.toClaims("reckon")
 	if !slices.Equal(got.Roles, []string{"viewer"}) {
 		t.Errorf("Roles = %v", got.Roles)
 	}

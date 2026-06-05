@@ -1,9 +1,9 @@
 # Built binaries
 /bin/
-/aatu
-/aatu-backend
-/cmd/aatu/aatu
-/cmd/aatu-backend/aatu-backend
+/reckon
+/reckon-backend
+/cmd/reckon/reckon
+/cmd/reckon-backend/reckon-backend
 
 # Go workspace files (local cross-repo dev only; see CLAUDE.md "Working across both repos")
 go.work

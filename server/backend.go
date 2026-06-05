@@ -4,7 +4,7 @@
 // satisfies supervisor.Component so the supervisor manages it alongside the
 // bundled subprocesses.
 //
-// See aatu/design/05-component-architecture.md §3 for the runtime topology.
+// See reckon/design/05-component-architecture.md §3 for the runtime topology.
 package server
 
 import (
@@ -21,12 +21,12 @@ import (
 
 	"go.temporal.io/sdk/client"
 
-	"github.com/sd-strax/aatu/aggregate"
-	"github.com/sd-strax/aatu/authz"
-	"github.com/sd-strax/aatu/supervisor"
+	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/supervisor"
 )
 
-// BackendConfig configures the in-process aatu HTTP backend.
+// BackendConfig configures the in-process reckon HTTP backend.
 //
 // Dependencies that travel as connection strings (Pg DSN, Temporal host:port,
 // Keycloak issuer URL) are passed by value — the Backend depends on
@@ -42,7 +42,7 @@ type BackendConfig struct {
 	HTTPPort int
 
 	// PgDSN is a libpq connection string for the aggregate's database
-	// (typically the result of supervisor.Postgres.DSN("aatu_main")).
+	// (typically the result of supervisor.Postgres.DSN("reckon_main")).
 	PgDSN string
 
 	// TemporalHostPort is host:port of the Temporal frontend gRPC.
@@ -179,7 +179,7 @@ type HealthStatus = supervisor.HealthStatus
 func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	mux := http.NewServeMux()
 
-	// Public — used by the supervisor + aatu status command.
+	// Public — used by the supervisor + reckon status command.
 	mux.HandleFunc("/healthz", b.handleHealthz)
 	mux.HandleFunc("/status", b.handleStatus)
 
@@ -210,7 +210,7 @@ func (b *Backend) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // StatusResponse is the JSON shape served by /status and consumed by
-// `aatu status`.
+// `reckon status`.
 type StatusResponse struct {
 	Overall    string                     `json:"overall"`
 	Components map[string]ComponentStatus `json:"components"`

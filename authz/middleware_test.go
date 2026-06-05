@@ -13,7 +13,7 @@ func TestRequireAuth_RejectsMissingHeader(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 
 	handler := RequireAuth(v)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -38,7 +38,7 @@ func TestRequireAuth_RejectsMalformedScheme(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 
 	handler := RequireAuth(v)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -59,7 +59,7 @@ func TestRequireAuth_AcceptsValidBearerToken(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 	raw := tk.mintToken(t, nil)
 
@@ -148,7 +148,7 @@ func TestRequireAuth_Then_RequireRole(t *testing.T) {
 	tk := newTestKeycloak(t)
 	v, _ := NewVerifier(context.Background(), VerifierConfig{
 		Issuer:   tk.srv.URL,
-		ClientID: "aatu",
+		ClientID: "reckon",
 	})
 
 	// Token has only `analyst` role (default mint). Endpoint requires

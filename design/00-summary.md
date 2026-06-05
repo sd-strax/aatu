@@ -1,16 +1,16 @@
-# aatu — Architecture Summary
+# reckon — Architecture Summary
 
 A starting point for new UX and implementation conversations. Seven detailed specs sit alongside this file; this summary is intentionally short and navigation-oriented. Read this first, then drop into the relevant spec when you need depth.
 
 ---
 
-## What aatu is
+## What reckon is
 
-"Cursor for SOC analysts" — an AI-native investigation environment that coexists with the customer's existing SIEM/SOAR rather than replacing them. The pitch: **capability-driven AI assembly conditioned on institutional tribal knowledge**, where state-changing actions dispatch through aatu's capability layer or delegate to existing SOAR playbooks (analyst's choice, same authorization gates), and every action is audit-traced from the byte of telemetry that justified it.
+"Cursor for SOC analysts" — an AI-native investigation environment that coexists with the customer's existing SIEM/SOAR rather than replacing them. The pitch: **capability-driven AI assembly conditioned on institutional tribal knowledge**, where state-changing actions dispatch through reckon's capability layer or delegate to existing SOAR playbooks (analyst's choice, same authorization gates), and every action is audit-traced from the byte of telemetry that justified it.
 
-aatu is built for **judgment-shaped work**: novel investigations, hunts, multi-source pivoting, response under uncertainty — where the steps aren't knowable in advance. Workflow-shaped work, where the steps are knowable, has well-established primitives elsewhere (SOAR playbooks, automation pipelines); aatu integrates with those via the SOAR_PLAYBOOK adapter class rather than reimplementing them.
+reckon is built for **judgment-shaped work**: novel investigations, hunts, multi-source pivoting, response under uncertainty — where the steps aren't knowable in advance. Workflow-shaped work, where the steps are knowable, has well-established primitives elsewhere (SOAR playbooks, automation pipelines); reckon integrates with those via the SOAR_PLAYBOOK adapter class rather than reimplementing them.
 
-Open-core: the engine, all connectors, and the reasoning loop are OSS. Two optional paid modules — **tenancy** (multi-tenant operation, multi-instance consolidation) and **governance** (SSO/RBAC tooling, signoff queues, compliance audit) — layer on top and run self-hosted on customer infra or aatu-hosted.
+Open-core: the engine, all connectors, and the reasoning loop are OSS. Two optional paid modules — **tenancy** (multi-tenant operation, multi-instance consolidation) and **governance** (SSO/RBAC tooling, signoff queues, compliance audit) — layer on top and run self-hosted on customer infra or reckon-hosted.
 
 Personas: threat hunters and IR responders (not T1/T2 triage).
 Workflows: investigation (entity-rooted) and hunting (hypothesis-rooted) — same loop, different entry points.
@@ -33,7 +33,7 @@ Differentiator vs. existing SOAR: investigation-engine-with-judgment-applied, no
 
 **Domain.** A single tenant-wide graph with two layers joined by typed edges. Telemetry layer = raw OCSF events, immutable. Interpretation layer = STIX 2.1-shaped objects (entities, observations, judgments, reasoning acts), mutable. An investigation is a STIX Grouping plus four extensions (Seed, Lifecycle, ReasoningThread, ConclusionSlot). Identity is deterministic UUIDv5 within a per-tenant namespace, so cross-tenant id collision is structurally impossible. Two genuinely invented primitives: `x-interpretation` (records reasoning) and `x-action` (state-changing operation). AI is always a delegate, never a principal — every event records a human principal who is responsible.
 
-**Runtime.** Go backend; bundled Postgres and bundled Temporal locally; managed equivalents in SaaS. Investigation aggregate is event-sourced (single Postgres events table, atomic event-append + projection-update). STIX object layer is CRUD with thin history. Capability layer is transport-neutral (MCP / native API / custom / fixture adapters), pure I/O + normalization, served as out-of-process JSON-RPC binaries. Knowledge service holds two corpora (SOPs and concluded-investigation summaries) with pgvector embeddings. **Two execution paths for the agent's reasoning, by design**: interactive synchronous turns run client-side in the VS Code extension with the analyst's BYOK LLM key (key never crosses to backend); async / long-running work (background hunts, scheduled re-runs, post-conclusion pipeline, summary generation, candidate-SOP drafting) runs server-side as Temporal workflows using tenant-scoped LLM credentials. Action dispatch, approval timers, reversal sagas, re-normalization, archive bundling, and the top-level `InvestigationLifecycleWorkflow` (v1+) all run on Temporal. Authentication is aatu-operated Keycloak with JWT-borne roles (no role mirroring in aatu's DB).
+**Runtime.** Go backend; bundled Postgres and bundled Temporal locally; managed equivalents in SaaS. Investigation aggregate is event-sourced (single Postgres events table, atomic event-append + projection-update). STIX object layer is CRUD with thin history. Capability layer is transport-neutral (MCP / native API / custom / fixture adapters), pure I/O + normalization, served as out-of-process JSON-RPC binaries. Knowledge service holds two corpora (SOPs and concluded-investigation summaries) with pgvector embeddings. **Two execution paths for the agent's reasoning, by design**: interactive synchronous turns run client-side in the VS Code extension with the analyst's BYOK LLM key (key never crosses to backend); async / long-running work (background hunts, scheduled re-runs, post-conclusion pipeline, summary generation, candidate-SOP drafting) runs server-side as Temporal workflows using tenant-scoped LLM credentials. Action dispatch, approval timers, reversal sagas, re-normalization, archive bundling, and the top-level `InvestigationLifecycleWorkflow` (v1+) all run on Temporal. Authentication is reckon-operated Keycloak with JWT-borne roles (no role mirroring in reckon's DB).
 
 ---
 
@@ -49,9 +49,9 @@ Differentiator vs. existing SOAR: investigation-engine-with-judgment-applied, no
 | Vendor credentials | `keychain://` (laptop) or `env://`/`vault://` (server) | `vault://` per tenant |
 | Knowledge service | pgvector on the chosen Pg | same |
 | Multi-analyst | yes, within the single tenant | yes, across tenants if tenancy on |
-| Operator | always customer | customer (self-hosted) OR aatu (aatu-hosted) — same Terraform |
+| Operator | always customer | customer (self-hosted) OR reckon (reckon-hosted) — same Terraform |
 
-OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-install); server-hosted multi-user is the same binary with different config. Paid runs as either a customer-operated deployment or an aatu-operated deployment — the binary, the Terraform, and the dependency set are identical. Lift sub-path A consolidates N OSS instances into one paid multi-tenant instance, preserving namespace UUIDs so STIX ids stay stable. Sub-path B (joining an existing tenant) defaults to "personal scratch alongside" the new shared tenant.
+OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-install); server-hosted multi-user is the same binary with different config. Paid runs as either a customer-operated deployment or an reckon-operated deployment — the binary, the Terraform, and the dependency set are identical. Lift sub-path A consolidates N OSS instances into one paid multi-tenant instance, preserving namespace UUIDs so STIX ids stay stable. Sub-path B (joining an existing tenant) defaults to "personal scratch alongside" the new shared tenant.
 
 ---
 
@@ -59,18 +59,18 @@ OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-in
 
 | Domain | Decision |
 |---|---|
-| Stack | Go everywhere; OSS binary from public `aatu` repo, paid binary from private `aatu-enterprise` repo; paid binary supersets OSS behaviorally |
+| Stack | Go everywhere; OSS binary from public `reckon` repo, paid binary from private `reckon-enterprise` repo; paid binary supersets OSS behaviorally |
 | Local Postgres | Bundled |
 | Local Temporal | Bundled (dev mode, sharing Pg) |
 | Identity | Keycloak is the trust root in every deployment; customer IdPs federate upstream via SAML/OIDC |
-| Roles | Live in IdP, carried in JWT; aatu does not cache or mirror roles |
+| Roles | Live in IdP, carried in JWT; reckon does not cache or mirror roles |
 | Token policy | No valid token, no operation (workflow-context exception for Temporal) |
 | LLM keys | BYOK; never seen by backend |
 | Agent loop | Client-side (VS Code extension); CLI is for domain ops at v0 |
 | Adapter packaging | Out-of-process JSON-RPC, MCP-compatible |
 | Open-core line | Gate operation and governance; never gate investigative capability or connectors |
 | OSS distribution | Engine + all adapter classes + reasoning loop + single-realm Keycloak/Pg/Temporal; runs anywhere |
-| Paid distribution | OSS engine + tenancy and/or governance modules; self-hosted or aatu-hosted (operator-orthogonal) |
+| Paid distribution | OSS engine + tenancy and/or governance modules; self-hosted or reckon-hosted (operator-orthogonal) |
 | Multi-tenant | A paid tenancy-module switch; tenant primitive is core (`tenant_id` always exists, defaults to 1 in OSS) |
 | Governance mode | `lightweight` (write-it-use-it) or `gated` (draft → in-review → published → retired); deployment config, both in engine |
 | SOAR delegation | `AdapterClass = SOAR_PLAYBOOK` alongside MCP/NATIVE_API/CUSTOM/FIXTURE; analyst's choice per action |
@@ -92,7 +92,7 @@ OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-in
 | 02 | [persistence](02-persistence.md) | How investigation state is stored — event taxonomy, projections, side stores, AI reasoning persistence |
 | 03 | [capability layer](03-capability-layer.md) | LLM↔tool surface — verb catalog, adapter classes, normalizers, identity computation, fixture mechanics |
 | 04 | [action authorization](04-action-authorization.md) | How actions are proposed, authorized, executed, audited, reversed — trust tiers, two-party, CEL policy engine |
-| 05 | [component architecture](05-component-architecture.md) | Component topology, deployment shapes, authn, the lift path, aatu-operated surface |
+| 05 | [component architecture](05-component-architecture.md) | Component topology, deployment shapes, authn, the lift path, reckon-operated surface |
 | 06 | [knowledge service](06-knowledge-service.md) | SOP corpus, concluded-investigation summary corpus, retrieval API, audit linkage, embedding model |
 | 07 | [post-conclusion outputs](07-post-conclusion-outputs.md) | Export bundle, IOC extraction, candidate-SOP generation, cross-investigation linkage, ticketing handoff, industry sharing |
 
@@ -127,7 +127,7 @@ The architecture is firm; the user-facing surfaces are wide open. UX conversatio
 - Similar-investigation drill-down (selected past case loads its concluded report + reasoning thread)
 
 **Lift / onboarding**
-- First-run flow (`aatu init` → Keycloak login → namespace UUID generation → fixture seeding → adapter registration)
+- First-run flow (`reckon init` → Keycloak login → namespace UUID generation → fixture seeding → adapter registration)
 - Lift-to-SaaS wizard (sub-path A primary; sub-path B as opt-in)
 - Tenant admin console (user/role management, adapter configuration, policy review, SOP signoff queues)
 
@@ -150,7 +150,7 @@ UX conversations should reference the relevant spec section for constraints. Mos
 The architectural decisions are settled; concrete implementation is wide open. Implementation conversations should focus on:
 
 **Backend skeleton (Go)**
-- Process supervisor for solo (Pg + Temporal + aatu-backend)
+- Process supervisor for solo (Pg + Temporal + reckon-backend)
 - HTTP + WebSocket server for IDE/CLI clients
 - Aggregate command-handler service (Postgres optimistic concurrency on `(aggregate_id, sequence_no)`)
 - Atomic event-append + projection-update pattern
@@ -201,7 +201,7 @@ The architectural decisions are settled; concrete implementation is wide open. I
 - Linkage suggestion step (calls knowledge service for similarity)
 - Templated ticket-creation step (rule engine + Jira/ServiceNow/Linear adapters)
 
-**Distribution / aatu-operated surface**
+**Distribution / reckon-operated surface**
 - CDN: signed binary releases, signed policy bundles, fixture corpus, MITRE corpus, adapter registry
 - Approval relay (small Go service: POST endpoint, queue, GET-pending for backends)
 - Transactional email integration
@@ -255,7 +255,7 @@ These are deliberate non-priorities. Don't engage with them in v0–v2 conversat
 |---|---|---|---|
 | **v0** | Solo localhost only | Read fixtures + write fixture stubs; agent loop functional; SOPs functional with keyword retrieval | No real integrations. Knowledge service has SOP CRUD and basic retrieval, no embeddings. |
 | **v1** | Solo localhost | Real read integrations across EDR, SIEM, IdP, TI, comms, ticketing, MDM; write-side adapter contract lands; T2/T3 actions live | Cross-cutting concerns actively exercised. Knowledge service adds embeddings + post-conclusion summaries. |
-| **v2** | OSS + paid distribution (self-hosted and aatu-hosted) | Paid tenancy and governance modules launch. Async approvals via relay. Vault-based vendor credentials. Customer IdPs federate upstream of Keycloak. | Paid distribution goes live in both operator modes. Lift sub-path A consolidates OSS instances into paid multi-tenant. SOC 2 / compliance work begins for aatu-hosted. |
+| **v2** | OSS + paid distribution (self-hosted and reckon-hosted) | Paid tenancy and governance modules launch. Async approvals via relay. Vault-based vendor credentials. Customer IdPs federate upstream of Keycloak. | Paid distribution goes live in both operator modes. Lift sub-path A consolidates OSS instances into paid multi-tenant. SOC 2 / compliance work begins for reckon-hosted. |
 | **v3+** | (deferred) | MSP / hierarchical tenancy; cross-tenant indicator pool; detection authoring tooling; signed offline-verifiable entitlement licensing | Each gated on real customer need. |
 
 ---

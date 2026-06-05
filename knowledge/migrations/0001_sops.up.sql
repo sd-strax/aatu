@@ -1,6 +1,6 @@
 -- 0001_sops: SOP repository
 --
--- Per design/06-knowledge-service.md. SOPs are aatu's runbook content —
+-- Per design/06-knowledge-service.md. SOPs are reckon's runbook content —
 -- procedural guidance the LLM consults during reasoning.
 --
 -- governance_mode (configured at the deployment level) selects which

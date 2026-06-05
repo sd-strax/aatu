@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/sd-strax/reckon/internal/branding"
 )
 
 func TestDefaults(t *testing.T) {
@@ -38,8 +40,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Keycloak.ManagementPort != 9543 {
 		t.Errorf("default keycloak management port = %d; want 9543", cfg.Keycloak.ManagementPort)
 	}
-	if cfg.Keycloak.Realm != "aatu" {
-		t.Errorf("default keycloak realm = %q; want %q", cfg.Keycloak.Realm, "aatu")
+	if cfg.Keycloak.Realm != branding.CLI {
+		t.Errorf("default keycloak realm = %q; want %q", cfg.Keycloak.Realm, branding.CLI)
 	}
 	if cfg.Backend.HTTPPort != 8080 {
 		t.Errorf("default backend port = %d; want 8080", cfg.Backend.HTTPPort)

@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
-	"github.com/sd-strax/aatu/internal/pgmigrate"
+	"github.com/sd-strax/reckon/internal/pgmigrate"
 )
 
 // testPg is a single embedded-postgres instance shared across all aggregate
@@ -53,15 +53,15 @@ func TestMain(m *testing.M) {
 		DataPath(filepath.Join(dir, "data")).
 		Username("test").
 		Password("test").
-		Database("aatu_test"))
+		Database("reckon_test"))
 
 	if err := testPg.Start(); err != nil {
 		cleanupDir()
 		log.Fatalf("embedded postgres start: %v", err)
 	}
 
-	dsn := "host=localhost port=15436 user=test password=test dbname=aatu_test sslmode=disable"
-	if err := pgmigrate.Run(dsn, Migrations(), "aatu_main"); err != nil {
+	dsn := "host=localhost port=15436 user=test password=test dbname=reckon_test sslmode=disable"
+	if err := pgmigrate.Run(dsn, Migrations(), "reckon_main"); err != nil {
 		_ = testPg.Stop()
 		cleanupDir()
 		log.Fatalf("migrate: %v", err)

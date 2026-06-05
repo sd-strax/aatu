@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.aatu.supervisor</string>
+    <string>com.reckon.supervisor</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/aatu</string>
+        <string>/usr/local/bin/reckon</string>
         <string>start</string>
     </array>
 
@@ -24,9 +24,9 @@
     <string>/tmp</string>
 
     <key>StandardOutPath</key>
-    <string>/tmp/aatu.log</string>
+    <string>/tmp/reckon.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/aatu.error.log</string>
+    <string>/tmp/reckon.error.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

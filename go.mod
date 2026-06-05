@@ -1,4 +1,4 @@
-module github.com/sd-strax/aatu
+module github.com/sd-strax/reckon
 
 go 1.25.0
 

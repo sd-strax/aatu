@@ -23,9 +23,9 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
-	"github.com/sd-strax/aatu/aggregate"
-	"github.com/sd-strax/aatu/authz"
-	"github.com/sd-strax/aatu/internal/pgmigrate"
+	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/internal/pgmigrate"
 )
 
 // Shared across all server integration tests in this package.
@@ -64,14 +64,14 @@ func TestMain(m *testing.M) {
 		DataPath(filepath.Join(dir, "data")).
 		Username("test").
 		Password("test").
-		Database("aatu_test"))
+		Database("reckon_test"))
 	if err := testPg.Start(); err != nil {
 		cleanupDir()
 		log.Fatalf("embedded postgres: %v", err)
 	}
 
-	dsn := "host=localhost port=15437 user=test password=test dbname=aatu_test sslmode=disable"
-	if err := pgmigrate.Run(dsn, aggregate.Migrations(), "aatu_main"); err != nil {
+	dsn := "host=localhost port=15437 user=test password=test dbname=reckon_test sslmode=disable"
+	if err := pgmigrate.Run(dsn, aggregate.Migrations(), "reckon_main"); err != nil {
 		_ = testPg.Stop()
 		cleanupDir()
 		log.Fatalf("migrate: %v", err)

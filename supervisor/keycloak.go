@@ -14,10 +14,12 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/sd-strax/reckon/internal/branding"
 )
 
 // jreVersion and keycloakVersion pin the bundled IdP distribution. Bumping
-// either is a deliberate decision — see D17 in aatu-enterprise/decisions.md.
+// either is a deliberate decision.
 const (
 	jreVersion      = "17.0.13+11"
 	keycloakVersion = "26.0.7"
@@ -42,7 +44,7 @@ type KeycloakConfig struct {
 	// ManagementPort is the Keycloak management/health endpoint. Default 9543.
 	ManagementPort int
 
-	// RealmName is the bootstrap realm imported on first start. Default "aatu".
+	// RealmName is the bootstrap realm imported on first start. Default branding.CLI.
 	RealmName string
 }
 
@@ -61,8 +63,8 @@ type Keycloak struct {
 }
 
 // NewKeycloak constructs the Keycloak component (not yet started).
-// Defaults: HTTPPort=8543, ManagementPort=9543, RealmName="aatu",
-// DataDir=~/.aatu/keycloak.
+// Defaults: HTTPPort=8543, ManagementPort=9543, RealmName=branding.CLI,
+// DataDir=$HOME/<branding.DataDir>/keycloak.
 func NewKeycloak(cfg KeycloakConfig) *Keycloak {
 	if cfg.HTTPPort == 0 {
 		cfg.HTTPPort = 8543
@@ -71,11 +73,11 @@ func NewKeycloak(cfg KeycloakConfig) *Keycloak {
 		cfg.ManagementPort = 9543
 	}
 	if cfg.RealmName == "" {
-		cfg.RealmName = "aatu"
+		cfg.RealmName = branding.CLI
 	}
 	if cfg.DataDir == "" {
 		home, _ := os.UserHomeDir()
-		cfg.DataDir = filepath.Join(home, ".aatu", "keycloak")
+		cfg.DataDir = filepath.Join(home, branding.DataDir, "keycloak")
 	}
 	return &Keycloak{cfg: cfg}
 }
@@ -237,14 +239,14 @@ func relativeJavaBin() string {
 // next to Keycloak's H2 database — if H2 is wiped, the marker goes with it
 // and bootstrap re-runs.
 //
-// The app-side `aatu-admin` user in keycloak_realm.json lives in the `aatu`
-// realm and is for OIDC token issuance against the aatu application, not for
-// the admin console — two distinct Keycloak authentication contexts.
+// The app-side `<cli>-admin` user in keycloak_realm.json lives in the
+// branding.CLI realm and is for OIDC token issuance against the application,
+// not for the admin console — two distinct Keycloak authentication contexts.
 //
 // "admin/admin" is a deliberate weak default for dev/OSS-solo. Production
 // deployments either re-bootstrap with stronger creds or rotate post-install.
 func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
-	markerFile := filepath.Join(k.serverDir(), "data", "h2", ".aatu-admin-bootstrapped")
+	markerFile := filepath.Join(k.serverDir(), "data", "h2", "."+branding.CLI+"-admin-bootstrapped")
 	if _, err := os.Stat(markerFile); err == nil {
 		return nil
 	}
@@ -278,7 +280,7 @@ func (k *Keycloak) installRealmFile() error {
 	if err := os.MkdirAll(importDir, 0o755); err != nil {
 		return fmt.Errorf("create import dir: %w", err)
 	}
-	target := filepath.Join(importDir, "aatu-realm.json")
+	target := filepath.Join(importDir, branding.CLI+"-realm.json")
 	if err := os.WriteFile(target, defaultRealmJSON, 0o644); err != nil {
 		return fmt.Errorf("write realm file: %w", err)
 	}

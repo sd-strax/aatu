@@ -215,7 +215,7 @@ after `query_external_cases` returns hits worth deep-diving.
 These verbs are the read-side of the "have we seen this before in our
 SoR?" question; the internal-similarity counterpart lives in the knowledge
 service (06-knowledge-service.md §4). The two surfaces are deliberately
-separate — internal similarity over aatu's own concluded investigations is
+separate — internal similarity over reckon's own concluded investigations is
 a sibling-of-LLM context retrieval, while external case lookup is a
 vendor-tool capability call producing telemetry like any other read-side
 adapter.
@@ -958,7 +958,7 @@ Why a distinct class rather than "another custom adapter":
 SOAR_PLAYBOOK adapters do not change the layer's pure-I/O property — invoking
 a playbook is one more outbound call shape, with normalization done on the
 orchestrator's response just like any other adapter. The orchestrator runs
-the playbook; aatu records its inputs and outcomes.
+the playbook; reckon records its inputs and outcomes.
 
 **Fixture adapters.** A special case of custom adapter for v0, replay, and
 testing. See §9. v0 ships fixture SOAR_PLAYBOOK bindings (a "fake Tines"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# .githooks/pre-commit — OSS-leak prevention for the public aatu repo.
+# .githooks/pre-commit — OSS-leak prevention for the public reckon repo.
 #
 # Greps the staged diff for keywords that should never appear in OSS-bound
 # content (commercial framing, team-shape context, customer/partner names,
@@ -82,7 +82,7 @@ if [ -n "$HITS" ]; then
 ✗ OSS-leak prevention: staged diff contains forbidden content.
 
   This repo is destined for public OSS — commercial framing, team-shape
-  context, and customer/partner-specific content belongs in aatu-enterprise.
+  context, and customer/partner-specific content belongs in reckon-enterprise.
 
   Matches:$HITS
 
@@ -92,7 +92,7 @@ if [ -n "$HITS" ]; then
       git commit --no-verify
 
   Better path: rephrase to avoid the keyword, or move the content to
-  aatu-enterprise. See CLAUDE.md "Public OSS posture" for the rationale.
+  reckon-enterprise. See CLAUDE.md "Public OSS posture" for the rationale.
 EOF
     exit 1
 fi

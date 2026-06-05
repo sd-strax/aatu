@@ -1,0 +1,20 @@
+[Unit]
+Description=reckon supervisor (bundled stack: Postgres + Temporal + Keycloak + backend)
+After=network.target
+Documentation=https://github.com/sd-strax/reckon
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/reckon start
+ExecStop=/usr/local/bin/reckon stop
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=60s
+
+# StandardOutput=append:%h/.reckon/logs/reckon.log
+# StandardError=append:%h/.reckon/logs/reckon.error.log
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

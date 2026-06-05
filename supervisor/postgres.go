@@ -13,7 +13,8 @@ import (
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 	_ "github.com/lib/pq"
 
-	"github.com/sd-strax/aatu/internal/pgmigrate"
+	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/internal/pgmigrate"
 )
 
 // PostgresConfig configures the bundled Postgres instance.
@@ -57,14 +58,14 @@ type Postgres struct {
 }
 
 // NewPostgres constructs the Postgres component (not yet started).
-// Defaults: Port=5435; DataDir=~/.aatu/pg.
+// Defaults: Port=5435; DataDir=$HOME/<branding.DataDir>/pg.
 func NewPostgres(cfg PostgresConfig) *Postgres {
 	if cfg.Port == 0 {
 		cfg.Port = 5435
 	}
 	if cfg.DataDir == "" {
 		home, _ := os.UserHomeDir()
-		cfg.DataDir = filepath.Join(home, ".aatu", "pg")
+		cfg.DataDir = filepath.Join(home, branding.DataDir, "pg")
 	}
 	return &Postgres{cfg: cfg}
 }
@@ -87,8 +88,8 @@ func (p *Postgres) Start(ctx context.Context) error {
 		RuntimePath(runtimePath).
 		DataPath(dataPath).
 		Database("postgres").
-		Username("aatu").
-		Password("aatu") // local-only credentials; for laptop / single-node use
+		Username("reckon").
+		Password("reckon") // local-only credentials; for laptop / single-node use
 
 	p.pg = embeddedpostgres.NewDatabase(cfg)
 	if err := p.pg.Start(); err != nil {
@@ -134,7 +135,7 @@ func (p *Postgres) Health(ctx context.Context) HealthStatus {
 // DSN returns a libpq connection string for a given database on this instance.
 // Downstream components (Temporal, knowledge service, etc.) consume this.
 func (p *Postgres) DSN(dbname string) string {
-	return fmt.Sprintf("host=localhost port=%d user=aatu password=aatu dbname=%s sslmode=disable",
+	return fmt.Sprintf("host=localhost port=%d user=reckon password=reckon dbname=%s sslmode=disable",
 		p.cfg.Port, dbname)
 }
 
@@ -169,17 +170,22 @@ func (p *Postgres) ensureDatabases(ctx context.Context) error {
 		}
 	}
 
-	// Clean up the aatu_temporal database from pre-D15 installs (Temporal
-	// now uses its own SQLite store; the Pg database is dead weight).
-	// Idempotent: no-op when the database is absent. Errors are non-fatal —
-	// drop failure shouldn't block startup.
-	if _, err := db.ExecContext(ctx, `DROP DATABASE IF EXISTS aatu_temporal`); err != nil {
-		log.Printf("postgres: could not drop legacy aatu_temporal database (non-fatal): %v", err)
+	// Clean up legacy databases that no longer correspond to an active
+	// component: aatu_temporal from pre-D15 installs (Temporal now uses
+	// its own SQLite store), and aatu_* databases from pre-rename installs
+	// (the project was previously named "aatu"). Idempotent: no-op when
+	// the database is absent. Errors are non-fatal — drop failure shouldn't
+	// block startup.
+	for _, legacy := range []string{"aatu_temporal", "aatu_main", "aatu_knowledge"} {
+		stmt := fmt.Sprintf(`DROP DATABASE IF EXISTS %q`, legacy)
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			log.Printf("postgres: could not drop legacy %s database (non-fatal): %v", legacy, err)
+		}
 	}
 
 	// Apply migrations for each spec that supplied them. golang-migrate
 	// tracks applied versions in schema_migrations inside each database;
-	// re-running aatu start is idempotent.
+	// re-running `reckon start` is idempotent.
 	for _, spec := range p.cfg.Databases {
 		if spec.Migrations == nil {
 			continue

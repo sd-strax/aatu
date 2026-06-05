@@ -4,10 +4,10 @@
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  %-12s %s\n", $$1, $$2}'
 
-build: ## Build aatu and aatu-backend binaries to bin/
+build: ## Build reckon and reckon-backend binaries to bin/
 	@mkdir -p bin
-	go build -o bin/aatu ./cmd/aatu
-	go build -o bin/aatu-backend ./cmd/aatu-backend
+	go build -o bin/reckon ./cmd/reckon
+	go build -o bin/reckon-backend ./cmd/reckon-backend
 
 test: ## Fast tests: unit + httptest integration. Race detector on. Skips slow embedded-Pg/Temporal/Keycloak lifecycle tests.
 	go test -race -short ./...
@@ -18,7 +18,7 @@ test-all: ## All tests including slow embedded-deps lifecycle tests. ~60s with b
 test-race: test ## Alias for `test` (race detector is always on now)
 
 run: ## Run the backend with the default config
-	go run ./cmd/aatu-backend
+	go run ./cmd/reckon-backend
 
 vet: ## Run go vet
 	go vet ./...

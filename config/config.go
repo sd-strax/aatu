@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/sd-strax/reckon/internal/branding"
 )
 
 // Config is the top-level deployment configuration.
@@ -26,9 +29,10 @@ type Deployment struct {
 	Mode string `yaml:"mode"`
 }
 
-// Data names the root directory aatu uses for state (Pg data, logs, etc.).
+// Data names the root directory the supervisor uses for state (Pg data,
+// logs, etc.).
 type Data struct {
-	// Dir defaults to ~/.aatu.
+	// Dir defaults to ~/<branding.DataDir> (e.g. ~/.reckon).
 	Dir string `yaml:"dir"`
 }
 
@@ -64,11 +68,11 @@ type Keycloak struct {
 	// Default 9543.
 	ManagementPort int `yaml:"management_port"`
 	// Realm is the bootstrap realm imported on first start.
-	// Default "aatu".
+	// Default branding.CLI (e.g. "reckon").
 	Realm string `yaml:"realm"`
 }
 
-// Backend configures the in-process aatu backend.
+// Backend configures the in-process backend.
 type Backend struct {
 	// HTTPPort is where the backend exposes /healthz and /status.
 	// Default 8080.
@@ -94,12 +98,12 @@ type PaidGovernance struct {
 }
 
 // Default returns the zero-value config with deployment.mode = "oss",
-// data.dir = ~/.aatu, postgres.port = 5435, and all paid modules disabled
-// (governance.mode = "lightweight").
+// data.dir = ~/<branding.DataDir>, postgres.port = 5435, and all paid
+// modules disabled (governance.mode = "lightweight").
 func Default() Config {
-	dataDir := "~/.aatu"
+	dataDir := "~/" + branding.DataDir
 	if home, err := os.UserHomeDir(); err == nil {
-		dataDir = filepath.Join(home, ".aatu")
+		dataDir = filepath.Join(home, branding.DataDir)
 	}
 	return Config{
 		Deployment: Deployment{Mode: "oss"},
@@ -114,7 +118,7 @@ func Default() Config {
 		Keycloak: Keycloak{
 			HTTPPort:       8543,
 			ManagementPort: 9543,
-			Realm:          "aatu",
+			Realm:          branding.CLI,
 		},
 		Backend: Backend{
 			HTTPPort: 8080,
@@ -125,16 +129,22 @@ func Default() Config {
 	}
 }
 
-// Load reads configuration from $AATU_CONFIG, ~/.aatu/config.yaml, or
-// returns Default() if neither exists. Errors only on malformed YAML.
+// configEnvVar returns the environment variable name users set to point
+// at a config file ("<UPPERCASE-CLI>_CONFIG", e.g. RECKON_CONFIG).
+func configEnvVar() string {
+	return strings.ToUpper(branding.CLI) + "_CONFIG"
+}
+
+// Load reads configuration from $<CLI>_CONFIG, ~/<branding.DataDir>/config.yaml,
+// or returns Default() if neither exists. Errors only on malformed YAML.
 func Load() (Config, error) {
-	path := os.Getenv("AATU_CONFIG")
+	path := os.Getenv(configEnvVar())
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return Default(), nil
 		}
-		path = filepath.Join(home, ".aatu", "config.yaml")
+		path = filepath.Join(home, branding.DataDir, "config.yaml")
 	}
 
 	data, err := os.ReadFile(path)

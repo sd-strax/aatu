@@ -1,5 +1,5 @@
 // Package module defines the interfaces between the OSS engine and paid
-// modules. Paid implementations live in github.com/sd-strax/aatu-enterprise
+// modules. Paid implementations live in github.com/sd-strax/reckon-enterprise
 // and never run inside the OSS binary — the OSS-default stubs in this
 // package (DisabledTenancy, DisabledGovernance) are always used in OSS
 // builds.

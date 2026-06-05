@@ -18,16 +18,17 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/sd-strax/aatu/aggregate"
-	"github.com/sd-strax/aatu/config"
-	"github.com/sd-strax/aatu/knowledge"
-	"github.com/sd-strax/aatu/server"
-	"github.com/sd-strax/aatu/supervisor"
+	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/config"
+	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/knowledge"
+	"github.com/sd-strax/reckon/server"
+	"github.com/sd-strax/reckon/supervisor"
 )
 
 // version is the OSS binary's version string. A build flag will stamp the
 // git SHA once a release process exists; today it's a static label.
-const version = "aatu OSS (dev)"
+var version = fmt.Sprintf("%s OSS (dev)", branding.CLI)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -39,15 +40,15 @@ func main() {
 		fmt.Println(version)
 	case "start":
 		if err := runStart(); err != nil {
-			log.Fatalf("aatu start: %v", err)
+			log.Fatalf("%s start: %v", branding.CLI, err)
 		}
 	case "stop":
 		if err := runStop(); err != nil {
-			log.Fatalf("aatu stop: %v", err)
+			log.Fatalf("%s stop: %v", branding.CLI, err)
 		}
 	case "status":
 		if err := runStatus(); err != nil {
-			log.Fatalf("aatu status: %v", err)
+			log.Fatalf("%s status: %v", branding.CLI, err)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
@@ -57,16 +58,16 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: aatu <command>")
+	fmt.Fprintf(os.Stderr, "usage: %s <command>\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  version    print the aatu version")
+	fmt.Fprintf(os.Stderr, "  version    print the %s version\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "  start      bring up the bundled stack (Pg + Temporal + Keycloak + backend)")
-	fmt.Fprintln(os.Stderr, "  stop       signal a running aatu supervisor to shut down")
-	fmt.Fprintln(os.Stderr, "  status     report supervisor health (queries a running aatu instance)")
+	fmt.Fprintf(os.Stderr, "  stop       signal a running %s supervisor to shut down\n", branding.CLI)
+	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
 }
 
 func pidFilePath(cfg config.Config) string {
-	return filepath.Join(cfg.Data.Dir, "supervisor.pid")
+	return filepath.Join(cfg.Data.Dir, branding.PidName)
 }
 
 // runStart builds the supervisor with all four components and calls Run,
@@ -90,10 +91,10 @@ func runStart() error {
 		DataDir: filepath.Join(cfg.Data.Dir, "pg"),
 		Port:    cfg.Postgres.Port,
 		// Temporal manages its own SQLite store (see D15) so there's no
-		// aatu_temporal database here today.
+		// reckon_temporal database here today.
 		Databases: []supervisor.DatabaseSpec{
-			{Name: "aatu_main", Migrations: aggregate.Migrations()},
-			{Name: "aatu_knowledge", Migrations: knowledge.Migrations()},
+			{Name: "reckon_main", Migrations: aggregate.Migrations()},
+			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
 		},
 	})
 	temp := supervisor.NewTemporal(supervisor.TemporalConfig{
@@ -119,7 +120,7 @@ func runStart() error {
 	// until first query, so it's safe to construct before Pg starts. The
 	// Backend's probe verifies reachability before the HTTP server accepts
 	// traffic.
-	aggDB, err := sql.Open("postgres", pg.DSN("aatu_main"))
+	aggDB, err := sql.Open("postgres", pg.DSN("reckon_main"))
 	if err != nil {
 		return fmt.Errorf("open aggregate db: %w", err)
 	}
@@ -130,7 +131,7 @@ func runStart() error {
 
 	backend := server.NewBackend(server.BackendConfig{
 		HTTPPort:         cfg.Backend.HTTPPort,
-		PgDSN:            pg.DSN("aatu_main"),
+		PgDSN:            pg.DSN("reckon_main"),
 		TemporalHostPort: fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
 		KeycloakIssuer: fmt.Sprintf("http://localhost:%d/realms/%s",
 			cfg.Keycloak.HTTPPort, cfg.Keycloak.Realm),
@@ -138,19 +139,19 @@ func runStart() error {
 	}, sup)
 	sup.Register(backend, supervisor.RestartOnExit)
 
-	log.Printf("aatu: pid %d; /status on http://localhost:%d/status; aatu stop to shut down",
-		os.Getpid(), cfg.Backend.HTTPPort)
+	log.Printf("%s: pid %d; /status on http://localhost:%d/status; %s stop to shut down",
+		branding.CLI, os.Getpid(), cfg.Backend.HTTPPort, branding.CLI)
 
 	if err := sup.Run(ctx); err != nil {
 		return fmt.Errorf("supervisor: %w", err)
 	}
-	log.Println("aatu: stopped")
+	log.Printf("%s: stopped", branding.CLI)
 	return nil
 }
 
-// runStatus queries the running aatu instance's /status endpoint and prints
-// a human-readable rollup. Exits non-zero if the instance is unreachable or
-// any component reports degraded.
+// runStatus queries the running supervisor's /status endpoint and prints
+// a human-readable rollup. Exits non-zero if the instance is unreachable
+// or any component reports degraded.
 func runStatus() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -161,7 +162,7 @@ func runStatus() error {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	resp, err := httpClient.Get(url)
 	if err != nil {
-		return fmt.Errorf("aatu not reachable at %s — is the supervisor running?", url)
+		return fmt.Errorf("%s not reachable at %s — is the supervisor running?", branding.CLI, url)
 	}
 	var status server.StatusResponse
 	decErr := json.NewDecoder(resp.Body).Decode(&status)
@@ -170,7 +171,7 @@ func runStatus() error {
 		return fmt.Errorf("parse /status response: %w", decErr)
 	}
 
-	fmt.Printf("aatu: %s\n", status.Overall)
+	fmt.Printf("%s: %s\n", branding.CLI, status.Overall)
 	for _, name := range orderedComponentNames(status.Components) {
 		c := status.Components[name]
 		mark := "✓"
@@ -215,12 +216,12 @@ func runStop() error {
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		return fmt.Errorf("send SIGTERM to %d: %w", pid, err)
 	}
-	fmt.Printf("aatu: sent SIGTERM to supervisor pid %d; waiting for shutdown\n", pid)
+	fmt.Printf("%s: sent SIGTERM to supervisor pid %d; waiting for shutdown\n", branding.CLI, pid)
 
 	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			fmt.Println("aatu: stopped")
+			fmt.Printf("%s: stopped\n", branding.CLI)
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -249,14 +250,14 @@ func orderedComponentNames(m map[string]server.ComponentStatus) []string {
 	return out
 }
 
-// writePIDFile records this process's PID for `aatu stop` to find. If an
-// existing PID file points at a process that's still alive, refuses to
-// overwrite — protects against accidentally running two supervisors.
+// writePIDFile records this process's PID so `<cli> stop` can find it. If
+// an existing PID file points at a live process, refuses to overwrite —
+// protects against accidentally running two supervisors.
 func writePIDFile(path string) error {
 	if data, err := os.ReadFile(path); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && isProcessAlive(pid) {
-			return fmt.Errorf("another supervisor (pid %d) is running; stop it first with `aatu stop`, or remove %s if you know it's stale",
-				pid, path)
+			return fmt.Errorf("another supervisor (pid %d) is running; stop it first with `%s stop`, or remove %s if you know it's stale",
+				pid, branding.CLI, path)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

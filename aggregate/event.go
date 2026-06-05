@@ -5,7 +5,7 @@
 // concurrency on (aggregate_id, sequence_no) ensures concurrent writers
 // to the same aggregate serialize cleanly.
 //
-// See aatu/design/02-persistence.md for the canonical event taxonomy and
+// See reckon/design/02-persistence.md for the canonical event taxonomy and
 // projection model.
 package aggregate
 
@@ -20,7 +20,7 @@ import (
 type AggregateID = uuid.UUID
 
 // Event is a single thing that happened to an aggregate. Persisted in
-// aatu_main.events.
+// reckon_main.events.
 type Event struct {
 	AggregateID AggregateID     `json:"aggregate_id"`
 	SequenceNo  int64           `json:"sequence_no"`
@@ -41,7 +41,7 @@ type Envelope struct {
 // captured separately — every event records a human principal per the
 // architectural commitment "AI is a delegate, never a principal."
 //
-// See aatu/design/01-domain-model.md and aatu/CLAUDE.md "Architectural
+// See reckon/design/01-domain-model.md and reckon/CLAUDE.md "Architectural
 // commitments" → "AI is a delegate, never a principal."
 type Actor struct {
 	PrincipalID string      `json:"principal_id"`

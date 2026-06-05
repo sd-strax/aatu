@@ -1,4 +1,4 @@
-// Package supervisor manages the lifecycle of aatu's bundled-deps stack:
+// Package supervisor manages the lifecycle of reckon's bundled-deps stack:
 // Postgres, Temporal, Keycloak, and the in-process backend. A Supervisor
 // holds a list of Components and starts them in declaration order, stops
 // them in reverse order, and rolls up health checks across all of them.

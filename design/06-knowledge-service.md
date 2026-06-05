@@ -115,7 +115,7 @@ Edits to a PUBLISHED SOP create a new version (incrementing the version field) i
 
 ### 2.3 Storage
 
-CRUD table per tenant in `aatu_knowledge.sops`. Embeddings live in `aatu_knowledge.sop_embeddings` keyed by `(sop_id, sop_version, model, model_version)`. Body content is stored as text on the row; large bodies (>1MB, edge case) overflow to side store with a content-hash reference, same pattern as Layer B for transcripts.
+CRUD table per tenant in `reckon_knowledge.sops`. Embeddings live in `reckon_knowledge.sop_embeddings` keyed by `(sop_id, sop_version, model, model_version)`. Body content is stored as text on the row; large bodies (>1MB, edge case) overflow to side store with a content-hash reference, same pattern as Layer B for transcripts.
 
 ### 2.4 Authoring
 
@@ -194,7 +194,7 @@ Optional. When enabled, active investigations are indexed at coarser granularity
 
 ### 3.4 Storage
 
-CRUD table `aatu_knowledge.investigation_summaries`. Embeddings in `aatu_knowledge.summary_embeddings`. Summary text fits in the row; it is bounded by design.
+CRUD table `reckon_knowledge.investigation_summaries`. Embeddings in `reckon_knowledge.summary_embeddings`. Summary text fits in the row; it is bounded by design.
 
 ### 3.5 Retention
 
@@ -316,7 +316,7 @@ These fields are queryable. "Show me every Interpretation that cited SOP-RANSOMW
 
 ### 6.2 Layer B — retrieved snippets in side store
 
-The actual retrieved SOP excerpts and summary snippets land in a Layer B side store (`aatu_main.knowledge_retrievals` table, structurally identical to `ai_tool_calls`). Each row is keyed by content hash; multiple Interpretations citing the same SOP version share the same row.
+The actual retrieved SOP excerpts and summary snippets land in a Layer B side store (`reckon_main.knowledge_retrievals` table, structurally identical to `ai_tool_calls`). Each row is keyed by content hash; multiple Interpretations citing the same SOP version share the same row.
 
 Tamper evidence: the hash recorded on the Interpretation event verifies the bytes the LLM actually saw at retrieval time. If an SOP is later edited (creating a new version), the original version's content remains retrievable via its hash; the bytes the LLM cited are still inspectable.
 
@@ -330,7 +330,7 @@ The `producer_version` field (01-domain-model.md PROVENANCE) on Interpretation o
 
 ### 7.1 Bundled local model
 
-The aatu binary ships with a small ONNX embedding model (low hundreds of MB, e.g., a quantized BGE-small or equivalent). Default for solo subscribers. Embedding generation happens in the backend process; no network calls for embedding.
+The reckon binary ships with a small ONNX embedding model (low hundreds of MB, e.g., a quantized BGE-small or equivalent). Default for solo subscribers. Embedding generation happens in the backend process; no network calls for embedding.
 
 The bundled model is versioned. Updates ship via the CDN. Tenants pin to specific versions; updating triggers re-embedding of the corpus.
 
@@ -362,7 +362,7 @@ Both corpora are tenant-scoped at every level:
 
 - **Storage rows** carry `tenant_id`; queries filter on it; row-level security policies in SaaS provide defense-in-depth.
 - **Embeddings** are stored in tenant-partitioned indexes; vector queries cannot cross tenants.
-- **Retrieval API** requires JWT authentication; the JWT's `tenant_id` claim scopes all queries. There is no admin-level "search all tenants" affordance for SaaS staff (and aatu staff have no read access to tenant content under any role).
+- **Retrieval API** requires JWT authentication; the JWT's `tenant_id` claim scopes all queries. There is no admin-level "search all tenants" affordance for SaaS staff (and reckon staff have no read access to tenant content under any role).
 - **Lift path** (05 §9) preserves SOPs and summaries during Sub-path A (tenant of one). For Sub-path B (joining existing tenant), local SOPs do not auto-merge into the shared tenant; the subscriber's local SOPs remain in their personal-scratch tenant unless explicitly imported (with tenant admin signoff).
 - **Cross-tenant federation** is not expressible. A future "shared SOP library" (deferred indefinitely) would be a separate corpus with its own publication and signing model, never silent merge.
 

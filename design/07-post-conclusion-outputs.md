@@ -6,7 +6,7 @@ An investigation reaching CONCLUDED produces more than a Report. The reasoning t
 
 This spec defines what happens after CONCLUDED. The architectural property is that **post-conclusion is just more workflow, not more domain machinery**. The Temporal worker that handles action dispatch handles post-conclusion outputs the same way: triggered by an event in the aggregate, executing a multi-step workflow, calling capability adapters and the knowledge service, recording its work as new events on the same aggregate.
 
-Nothing about the domain model changes for post-conclusion. The same `x-action` primitive that carries containment-class actions during the investigation carries ticketing actions after it. The same `x-interpretation` records the agent's decision to extract IOCs. The same Temporal infrastructure (05) runs the workflows. The product surface this enables — closing the loop from investigation to remediation to learning — is what justifies aatu as a SOAR successor rather than a focused investigation tool.
+Nothing about the domain model changes for post-conclusion. The same `x-action` primitive that carries containment-class actions during the investigation carries ticketing actions after it. The same `x-interpretation` records the agent's decision to extract IOCs. The same Temporal infrastructure (05) runs the workflows. The product surface this enables — closing the loop from investigation to remediation to learning — is what justifies reckon as a SOAR successor rather than a focused investigation tool.
 
 ## Thread scope
 
@@ -43,13 +43,13 @@ Nothing about the domain model changes for post-conclusion. The same `x-action` 
 
 **4. Reuse, not duplicate.** Ticketing is an `x-action`. IOC publication is an `x-action`. Document storage is an export action. None of these get bespoke pipelines; they share the existing action authorization, dispatch, audit, and reversal machinery (04-action-authorization.md). What this spec adds is the *trigger* (post-conclusion, automatic where policy permits) and the *templating* (sourcing the action's parameters from the investigation's content).
 
-**5. Customer choice on every path.** Every post-conclusion path is configurable per-tenant. Customers can disable IOC extraction, disable candidate SOP generation, disable ticketing handoff, disable any specific TI integration. Customers may also configure aatu to defer entirely to their existing SoR — aatu produces the export bundle, drops it into the SoR, and the org's existing post-incident processes take over from there. The architecture supports the full spectrum from "aatu is the SoR" to "aatu hands off everything at conclusion."
+**5. Customer choice on every path.** Every post-conclusion path is configurable per-tenant. Customers can disable IOC extraction, disable candidate SOP generation, disable ticketing handoff, disable any specific TI integration. Customers may also configure reckon to defer entirely to their existing SoR — reckon produces the export bundle, drops it into the SoR, and the org's existing post-incident processes take over from there. The architecture supports the full spectrum from "reckon is the SoR" to "reckon hands off everything at conclusion."
 
 ---
 
 ## 2. The export bundle
 
-The fundamental post-conclusion output. Self-contained, signed, archive-ready, importable back into aatu.
+The fundamental post-conclusion output. Self-contained, signed, archive-ready, importable back into reckon.
 
 ### 2.1 Contents
 
@@ -89,9 +89,9 @@ investigation-<grouping-id>-<timestamp>.tar.gz
 
 ### 2.2 Properties
 
-- **Self-contained.** The bundle can be read by any tool that understands STIX 2.1 + JSON Lines + Markdown. No aatu-specific decoder required for the primary content.
-- **Signed.** The whole bundle's content hash is signed at conclusion time. The signing key is the tenant's signing key (held in the tenant's vault path in SaaS, or generated and stored in OS keychain for solo). Verification is independent of aatu.
-- **Reimportable.** A bundle exported from one aatu deployment can be imported into another (with the matching tenant namespace UUID, otherwise as a personal-scratch import). This is the same mechanism the lift path (05 §9) uses internally.
+- **Self-contained.** The bundle can be read by any tool that understands STIX 2.1 + JSON Lines + Markdown. No reckon-specific decoder required for the primary content.
+- **Signed.** The whole bundle's content hash is signed at conclusion time. The signing key is the tenant's signing key (held in the tenant's vault path in SaaS, or generated and stored in OS keychain for solo). Verification is independent of reckon.
+- **Reimportable.** A bundle exported from one reckon deployment can be imported into another (with the matching tenant namespace UUID, otherwise as a personal-scratch import). This is the same mechanism the lift path (05 §9) uses internally.
 - **Optionally redacted.** Tenants may configure Layer B transcripts to be omitted or hash-only-stubs in exports. Useful for compliance scenarios where prompt content cannot leave the production system.
 
 ### 2.3 Bundle generation workflow
@@ -108,14 +108,14 @@ investigation-<grouping-id>-<timestamp>.tar.gz
 8. Sign with tenant signing key
 9. Write to the archive target (S3 in SaaS, configurable bucket per tenant; local filesystem in solo by default, configurable to S3-compatible target)
 
-Triggered automatically on `InvestigationConcluded` (configurable per tenant; default on) and on-demand via `aatu investigation export <grouping-id>`.
+Triggered automatically on `InvestigationConcluded` (configurable per tenant; default on) and on-demand via `reckon investigation export <grouping-id>`.
 
 ### 2.4 Archive target
 
-- **Solo default.** `~/.aatu/archive/<tenant-namespace>/<grouping-id>-<timestamp>.tar.gz`
+- **Solo default.** `~/.reckon/archive/<tenant-namespace>/<grouping-id>-<timestamp>.tar.gz`
 - **Solo configurable.** Any S3-compatible target the analyst configures (their org's archival bucket, MinIO instance, etc.)
-- **SaaS default.** Per-tenant S3 prefix in aatu-managed storage, with tenant-controlled retention policy
-- **SaaS configurable.** Customer's own S3 bucket via cross-account role; aatu writes, customer owns the bytes
+- **SaaS default.** Per-tenant S3 prefix in reckon-managed storage, with tenant-controlled retention policy
+- **SaaS configurable.** Customer's own S3 bucket via cross-account role; reckon writes, customer owns the bytes
 
 The archive target is *separate from* the operational side stores. Operational stores hold active-investigation transcripts and tool-call data; the archive target holds finalized signed bundles for long-term retention and external consumption.
 
@@ -187,7 +187,7 @@ Quality improves over operation: rejection signals tune the generator's prompts;
 
 ### 4.3 The learning loop
 
-This is what makes aatu compounding rather than one-shot:
+This is what makes reckon compounding rather than one-shot:
 
 1. Investigation runs → reasoning thread captured
 2. Investigation concludes → `GenerateCandidateSOPs` proposes drafts
@@ -274,7 +274,7 @@ Generated documents are retained alongside the export bundle. Each is versioned 
 
 ## 7. Ticketing handoff
 
-For tenants that maintain a separate operational system (Jira, ServiceNow SOC, Linear, custom), aatu opens tickets at conclusion to drive longer-tail remediation, recovery, and post-incident work that lives in the org's existing system.
+For tenants that maintain a separate operational system (Jira, ServiceNow SOC, Linear, custom), reckon opens tickets at conclusion to drive longer-tail remediation, recovery, and post-incident work that lives in the org's existing system.
 
 ### 7.1 Ticketing as `x-action`
 
@@ -343,9 +343,9 @@ The sharing workflow applies the per-IOC `share_scope` filtering from §3.4. IOC
 
 Where sharing requires anonymization (e.g., redacting org-identifying entity values), the action's parameters include the redaction transform applied. The published payload's content hash is recorded on the action for audit.
 
-### 8.4 Cross-tenant within aatu
+### 8.4 Cross-tenant within reckon
 
-A future federated indicator pool (deferred per 01 §5) is a special case of industry sharing: aatu hosts the pool as a separate tenant-of-tenants construct, with explicit publish-and-subscribe semantics. This is v3+ at earliest and requires its own thread.
+A future federated indicator pool (deferred per 01 §5) is a special case of industry sharing: reckon hosts the pool as a separate tenant-of-tenants construct, with explicit publish-and-subscribe semantics. This is v3+ at earliest and requires its own thread.
 
 ---
 

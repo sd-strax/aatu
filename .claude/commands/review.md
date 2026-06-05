@@ -26,9 +26,9 @@ Review against the canonical references (in order of authority):
    - `context.Context` as first arg
 3. **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** — supplementary. Especially mutex placement (next to field it protects), error wrapping nuances, channel sizes, table-driven tests.
 
-## Step 2: aatu-specific patterns
+## Step 2: reckon-specific patterns
 
-See `implementation/aatu-patterns.md`. Verify the change conforms to whichever applies:
+See `implementation/reckon-patterns.md`. Verify the change conforms to whichever applies:
 
 - **Pure function + transaction wrapper** layering for command handlers
 - **`supervisor.Component` lifecycle contract** for new components (Start blocks until ready; Stop idempotent; Health concurrency-safe)
@@ -39,10 +39,10 @@ See `implementation/aatu-patterns.md`. Verify the change conforms to whichever a
 
 ## Step 3: architectural boundaries
 
-- OSS code must not import `github.com/sd-strax/aatu-enterprise/...`. The `module/` package is the only seam between OSS and paid.
-- `aatu/internal/` packages can only be imported by `aatu/` subpackages.
+- OSS code must not import `github.com/sd-strax/reckon-enterprise/...`. The `module/` package is the only seam between OSS and paid.
+- `reckon/internal/` packages can only be imported by `reckon/` subpackages.
 - The `server/` package may import `aggregate/` and `authz/`; `supervisor/` may not.
-- `aatu/cmd/aatu` wires everything together; engine subpackages should not import from `cmd/` (the dependency direction is the other way).
+- `reckon/cmd/reckon` wires everything together; engine subpackages should not import from `cmd/` (the dependency direction is the other way).
 
 ## Step 4: public OSS posture
 
@@ -69,8 +69,8 @@ If the change adds new functionality without a test, that's a `[BLOCKING]` findi
 
 ## Step 6: changelog & doc
 
-- Updated `aatu-enterprise/decisions.md` if an architectural decision landed?
-- Updated `implementation/aatu-patterns.md` if a new pattern emerged that will be used 3+ times?
+- Updated `reckon-enterprise/decisions.md` if an architectural decision landed?
+- Updated `implementation/reckon-patterns.md` if a new pattern emerged that will be used 3+ times?
 - Updated `CLAUDE.md` if a load-bearing convention changed?
 
 ---

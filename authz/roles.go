@@ -1,20 +1,20 @@
-// Package authz holds aatu's JWT validation, claim extraction, and the
+// Package authz holds reckon's JWT validation, claim extraction, and the
 // two-axis authorization evaluation skeleton.
 //
 // Gate 1 (RBAC) — covered by middleware in this package.
 // Gate 2 (action authorization, CEL-based) — stubbed here; the real engine
-// lands in Phase C (see aatu/action/).
+// lands in Phase C (see reckon/action/).
 //
-// See aatu/design/05-component-architecture.md §5 for the architectural
+// See reckon/design/05-component-architecture.md §5 for the architectural
 // commitments this package implements.
 package authz
 
-// Role names registered in the bundled Keycloak `aatu` realm (see
+// Role names registered in the bundled Keycloak `reckon` realm (see
 // supervisor/keycloak_realm.json). The constants exist so callers
 // reference role strings via a typed name rather than re-typing strings.
 //
-// Roles live in the IdP and travel in JWTs; aatu does not cache or mirror
-// them. See aatu/CLAUDE.md "Architectural commitments".
+// Roles live in the IdP and travel in JWTs; reckon does not cache or mirror
+// them. See reckon/CLAUDE.md "Architectural commitments".
 const (
 	RoleViewer         = "viewer"
 	RoleAnalyst        = "analyst"

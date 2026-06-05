@@ -8,6 +8,8 @@ import (
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/testsuite"
+
+	"github.com/sd-strax/reckon/internal/branding"
 )
 
 // TemporalConfig configures the bundled Temporal dev server.
@@ -34,10 +36,10 @@ type TemporalConfig struct {
 }
 
 // Temporal wraps the Temporal CLI dev server. The dev server is SQLite-backed
-// — a deliberate deviation from the spec's "Postgres-backed dev mode" framing
-// (recorded as D15 in aatu-enterprise/decisions.md). SQLite is fine for OSS
-// solo / dev; paid deployments use managed Temporal Cloud or a self-hosted
-// cluster and don't bring up Temporal via this supervisor at all.
+// — a deliberate deviation from the spec's "Postgres-backed dev mode" framing.
+// SQLite is fine for OSS solo / dev; deployments that need scale use managed
+// Temporal Cloud or a self-hosted cluster and don't bring up Temporal via
+// this supervisor at all.
 type Temporal struct {
 	cfg    TemporalConfig
 	server *testsuite.DevServer
@@ -45,7 +47,7 @@ type Temporal struct {
 
 // NewTemporal constructs the Temporal component (not yet started).
 // Defaults: FrontendPort=7233, EnableUI=true, UIPort=8233, Namespace="default",
-// DataDir=~/.aatu/temporal.
+// DataDir=$HOME/<branding.DataDir>/temporal.
 func NewTemporal(cfg TemporalConfig) *Temporal {
 	if cfg.FrontendPort == 0 {
 		cfg.FrontendPort = 7233
@@ -58,7 +60,7 @@ func NewTemporal(cfg TemporalConfig) *Temporal {
 	}
 	if cfg.DataDir == "" {
 		home, _ := os.UserHomeDir()
-		cfg.DataDir = filepath.Join(home, ".aatu", "temporal")
+		cfg.DataDir = filepath.Join(home, branding.DataDir, "temporal")
 	}
 	return &Temporal{cfg: cfg}
 }
@@ -132,7 +134,7 @@ func (t *Temporal) Health(_ context.Context) HealthStatus {
 
 // FrontendHostPort returns the host:port string of the dev server's frontend
 // (e.g., "localhost:7233"). Useful for downstream consumers (workers, the
-// aatu-backend) to construct Temporal clients without re-deriving from config.
+// reckon-backend) to construct Temporal clients without re-deriving from config.
 func (t *Temporal) FrontendHostPort() string {
 	if t.server == nil {
 		return ""

@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/sd-strax/aatu/config"
-	"github.com/sd-strax/aatu/module"
+	"github.com/sd-strax/reckon/config"
+	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/module"
 )
 
 // Config is the runtime configuration passed to a ModuleBuilder. Today it
@@ -44,7 +45,7 @@ func Run(build ModuleBuilder) error {
 		log.Println("WARN: paid.governance.enabled set but no paid governance module loaded (OSS binary)")
 	}
 
-	log.Printf("aatu engine ready, tenancy=%v governance=%v",
-		reg.Tenancy.Enabled(), reg.Governance.Enabled())
+	log.Printf("%s engine ready, tenancy=%v governance=%v",
+		branding.CLI, reg.Tenancy.Enabled(), reg.Governance.Enabled())
 	return nil
 }

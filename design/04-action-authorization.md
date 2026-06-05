@@ -425,20 +425,20 @@ Importantly, the AI can never construct an `Authorization` record or set `status
 
 ### 5.7 Approval gate ownership for SOAR-delegated actions
 
-When an action dispatches through a SOAR_PLAYBOOK binding, the downstream orchestrator (Tines, Torq, etc.) may have its own approval step inside the playbook — that's how the customer's pre-aatu workflow was designed. To avoid a hidden assumption, the binding declares who owns the gate.
+When an action dispatches through a SOAR_PLAYBOOK binding, the downstream orchestrator (Tines, Torq, etc.) may have its own approval step inside the playbook — that's how the customer's pre-reckon workflow was designed. To avoid a hidden assumption, the binding declares who owns the gate.
 
 ```text
 Binding (on a SOAR_PLAYBOOK adapter):
-  external_approval_substitutes_aatu   bool (default: false)
+  external_approval_substitutes_reckon   bool (default: false)
 ```
 
-- **Default (`false`)** — aatu's authorization gate fires as it would for any action: policy evaluates, analyst approves (or auto-approves), only then does the SOAR playbook get invoked. Any approval step inside the playbook is the customer's choice; aatu doesn't know about it and doesn't try to coordinate with it. If the customer leaves a Slack-approval step in the playbook, the analyst will see two approval surfaces — that's the customer's call to remove the redundant gate.
+- **Default (`false`)** — reckon's authorization gate fires as it would for any action: policy evaluates, analyst approves (or auto-approves), only then does the SOAR playbook get invoked. Any approval step inside the playbook is the customer's choice; reckon doesn't know about it and doesn't try to coordinate with it. If the customer leaves a Slack-approval step in the playbook, the analyst will see two approval surfaces — that's the customer's call to remove the redundant gate.
 
-- **Opt-in (`true`)** — the customer explicitly delegates the gate. aatu skips its `ActionLifecycle` approval state, dispatches immediately on AI proposal, and the playbook's own approval flow becomes the source of truth. The `Authorization` sub-record records `mode: EXTERNAL_DELEGATED` and `primary_approver_ref` is populated from the SOAR's callback once the orchestrator confirms approval. The `audit_depth: EXTERNAL` on the Execution record makes the delegated gate visible to reviewers.
+- **Opt-in (`true`)** — the customer explicitly delegates the gate. reckon skips its `ActionLifecycle` approval state, dispatches immediately on AI proposal, and the playbook's own approval flow becomes the source of truth. The `Authorization` sub-record records `mode: EXTERNAL_DELEGATED` and `primary_approver_ref` is populated from the SOAR's callback once the orchestrator confirms approval. The `audit_depth: EXTERNAL` on the Execution record makes the delegated gate visible to reviewers.
 
-Default-safe posture: most bindings double-gate naturally (aatu's gate + whatever the playbook does internally). Friction is recoverable; an unauthorized state-changing action isn't. The opt-out is per binding and requires `policy_signer` sign-off (governance-module concern in `gated` mode).
+Default-safe posture: most bindings double-gate naturally (reckon's gate + whatever the playbook does internally). Friction is recoverable; an unauthorized state-changing action isn't. The opt-out is per binding and requires `policy_signer` sign-off (governance-module concern in `gated` mode).
 
-The `mode: EXTERNAL_DELEGATED` value is a sixth `Authorization.mode` value alongside `MANUAL`, `AUTO_POLICY`, `TWO_PARTY` — it indicates the gate was held outside aatu and trades audit detail for delegation flexibility.
+The `mode: EXTERNAL_DELEGATED` value is a sixth `Authorization.mode` value alongside `MANUAL`, `AUTO_POLICY`, `TWO_PARTY` — it indicates the gate was held outside reckon and trades audit detail for delegation flexibility.
 
 ---
 
@@ -458,10 +458,10 @@ Execution:
                          was taken; DIRECT = native vendor API call,
                          SOAR_PLAYBOOK = delegated to an external playbook
                          orchestrator. See 03 for the adapter-class enum.)
-  audit_depth            FULL | EXTERNAL (FULL = aatu observed every step
+  audit_depth            FULL | EXTERNAL (FULL = reckon observed every step
                          of the outbound call chain; EXTERNAL = the
                          downstream system's internal steps are opaque to
-                         aatu — reviewers needing the full chain pull
+                         reckon — reviewers needing the full chain pull
                          from that system's own logs. Defaults: FULL for
                          DIRECT, EXTERNAL for SOAR_PLAYBOOK.)
   attempts               list<Attempt>
@@ -478,7 +478,7 @@ Attempt:
   error_detail           optional string
 ```
 
-**`audit_depth` and the SOAR boundary.** When an action dispatches through a SOAR_PLAYBOOK binding, aatu can record the call to the orchestrator (inputs, the playbook id, the final outcome the orchestrator returns) but not the orchestrator's internal steps. `audit_depth: EXTERNAL` marks the audit chain as truncated at the orchestrator boundary so compliance reviewers know they need to pull the SOAR's own logs to complete the chain. Direct vendor-API dispatch records `audit_depth: FULL` — aatu observed the whole call.
+**`audit_depth` and the SOAR boundary.** When an action dispatches through a SOAR_PLAYBOOK binding, reckon can record the call to the orchestrator (inputs, the playbook id, the final outcome the orchestrator returns) but not the orchestrator's internal steps. `audit_depth: EXTERNAL` marks the audit chain as truncated at the orchestrator boundary so compliance reviewers know they need to pull the SOAR's own logs to complete the chain. Direct vendor-API dispatch records `audit_depth: FULL` — reckon observed the whole call.
 
 ### 6.2 The categories
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# scripts/build-bundle.sh — produce an air-gap-able aatu distribution tarball
+# scripts/build-bundle.sh — produce an air-gap-able reckon distribution tarball
 # for the current OS/arch.
 #
-# Strategy: run `aatu start` once against a temporary data dir so the supervisor
+# Strategy: run `reckon start` once against a temporary data dir so the supervisor
 # downloads + extracts every bundled binary (Pg, Temporal CLI, Temurin JRE,
 # Keycloak). Then strip transient state (Pg cluster data, Temporal SQLite,
 # Keycloak runtime data, logs) so the tarball contains only the binaries +
-# the aatu launcher itself + an INSTALL.md. An air-gapped customer untars
-# this anywhere, points AATU_CONFIG at it, and runs `bin/aatu start`.
+# the reckon launcher itself + an INSTALL.md. An air-gapped customer untars
+# this anywhere, points RECKON_CONFIG at it, and runs `bin/reckon start`.
 #
 # Run via `make bundle` from the repo root.
 
@@ -15,8 +15,8 @@ set -euo pipefail
 
 OS=$(go env GOOS)
 ARCH=$(go env GOARCH)
-STAGE="${BUNDLE_STAGE:-/tmp/aatu-bundle-stage}"
-OUT="bin/aatu-bundle-${OS}-${ARCH}.tar.gz"
+STAGE="${BUNDLE_STAGE:-/tmp/reckon-bundle-stage}"
+OUT="bin/reckon-bundle-${OS}-${ARCH}.tar.gz"
 
 echo "==> Cleaning stage directory: $STAGE"
 rm -rf "$STAGE"
@@ -37,9 +37,9 @@ keycloak:
   management_port: 19599
 EOF
 
-echo "==> Priming binaries — running aatu start until ready (may take 1–5 min cold)"
+echo "==> Priming binaries — running reckon start until ready (may take 1–5 min cold)"
 LOGFILE=$(mktemp)
-AATU_CONFIG="$TMP_CFG" ./bin/aatu start > "$LOGFILE" 2>&1 &
+RECKON_CONFIG="$TMP_CFG" ./bin/reckon start > "$LOGFILE" 2>&1 &
 SUP_PID=$!
 
 ready=0
@@ -49,7 +49,7 @@ for i in $(seq 1 96); do  # up to 8 minutes
         ready=1
         break
     fi
-    if grep -q "aatu start: supervisor" "$LOGFILE" 2>/dev/null; then
+    if grep -q "reckon start: supervisor" "$LOGFILE" 2>/dev/null; then
         break
     fi
     sleep 5
@@ -79,42 +79,42 @@ rm -rf "$STAGE/keycloak/data"
 # Logs — transient
 find "$STAGE" -name "logs" -type d -prune -exec rm -rf {} +
 
-echo "==> Copying aatu binaries"
+echo "==> Copying reckon binaries"
 mkdir -p "$STAGE/bin"
-cp bin/aatu bin/aatu-backend "$STAGE/bin/"
+cp bin/reckon bin/reckon-backend "$STAGE/bin/"
 
 echo "==> Writing INSTALL.md"
 cat > "$STAGE/INSTALL.md" <<EOF
-# aatu air-gap bundle ($OS/$ARCH)
+# reckon air-gap bundle ($OS/$ARCH)
 
-This tarball contains everything aatu needs to run, with no network
+This tarball contains everything reckon needs to run, with no network
 calls required. The binaries inside (Postgres, Temporal CLI, Temurin
 JRE, Keycloak) were pre-downloaded and pre-extracted at build time.
 
 ## Install
 
-Extract somewhere persistent — \`/opt/aatu\` is a typical choice:
+Extract somewhere persistent — \`/opt/reckon\` is a typical choice:
 
-    sudo mkdir -p /opt/aatu
-    sudo tar -xzf aatu-bundle-${OS}-${ARCH}.tar.gz --strip-components=1 -C /opt/aatu
-    sudo chown -R \$(whoami) /opt/aatu
+    sudo mkdir -p /opt/reckon
+    sudo tar -xzf reckon-bundle-${OS}-${ARCH}.tar.gz --strip-components=1 -C /opt/reckon
+    sudo chown -R \$(whoami) /opt/reckon
 
 ## Configure
 
 Create a config that points \`data.dir\` at the install location:
 
-    mkdir -p ~/.aatu
-    cat > ~/.aatu/config.yaml <<CFG
+    mkdir -p ~/.reckon
+    cat > ~/.reckon/config.yaml <<CFG
     data:
-      dir: /opt/aatu
+      dir: /opt/reckon
     CFG
 
 ## Run
 
-    AATU_CONFIG=~/.aatu/config.yaml /opt/aatu/bin/aatu start
+    RECKON_CONFIG=~/.reckon/config.yaml /opt/reckon/bin/reckon start
 
 The supervisor finds Postgres, Temporal, the JRE, and Keycloak under
-\`/opt/aatu/\` instead of downloading them. \`aatu start\` runs with
+\`/opt/reckon/\` instead of downloading them. \`reckon start\` runs with
 **zero network calls** — air-gap compatible by construction.
 
 ## Verify
@@ -122,7 +122,7 @@ The supervisor finds Postgres, Temporal, the JRE, and Keycloak under
     # In another terminal:
     curl http://localhost:9543/health/ready              # Keycloak
     nc -z localhost 7233                                  # Temporal gRPC
-    psql "host=localhost port=5435 user=aatu password=aatu dbname=postgres sslmode=disable" -c "\l"
+    psql "host=localhost port=5435 user=reckon password=reckon dbname=postgres sslmode=disable" -c "\l"
 EOF
 
 echo "==> Tarring bundle"
@@ -139,7 +139,7 @@ echo ""
 echo "==> Bundle: $OUT_ABS ($SIZE)"
 echo ""
 echo "    Test extract:"
-echo "      mkdir /tmp/aatu-extract && tar -xzf $OUT_ABS -C /tmp/aatu-extract --strip-components=1 && ls /tmp/aatu-extract/bin/"
+echo "      mkdir /tmp/reckon-extract && tar -xzf $OUT_ABS -C /tmp/reckon-extract --strip-components=1 && ls /tmp/reckon-extract/bin/"
 
 rm -f "$TMP_CFG" "$LOGFILE"
 rm -rf "$STAGE"

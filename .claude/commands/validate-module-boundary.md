@@ -1,8 +1,8 @@
 ---
-description: Confirm OSS code does not import from aatu-enterprise
+description: Confirm OSS code does not import from reckon-enterprise
 ---
 
-Grep all Go files under this repo (excluding `vendor/`) for import paths matching `github.com/sd-strax/aatu-enterprise`. If any are found, list them with `file:line` — this is an architectural violation of the open-core seam.
+Grep all Go files under this repo (excluding `vendor/`) for import paths matching `github.com/sd-strax/reckon-enterprise`. If any are found, list them with `file:line` — this is an architectural violation of the open-core seam.
 
 The contract:
 - Paid layers on OSS. OSS has zero awareness of paid.

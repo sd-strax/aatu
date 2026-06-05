@@ -1,7 +1,7 @@
 {
-  "realm": "aatu",
+  "realm": "reckon",
   "enabled": true,
-  "displayName": "aatu",
+  "displayName": "reckon",
   "registrationAllowed": false,
   "rememberMe": true,
   "verifyEmail": false,
@@ -26,8 +26,8 @@
   },
   "clients": [
     {
-      "clientId": "aatu",
-      "name": "aatu CLI / VS Code extension",
+      "clientId": "reckon",
+      "name": "reckon CLI / VS Code extension",
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
@@ -41,13 +41,13 @@
   ],
   "users": [
     {
-      "username": "aatu-admin",
+      "username": "reckon-admin",
       "enabled": true,
       "emailVerified": true,
-      "firstName": "aatu",
+      "firstName": "reckon",
       "lastName": "Admin",
       "credentials": [
-        {"type": "password", "value": "aatu", "temporary": true}
+        {"type": "password", "value": "reckon", "temporary": true}
       ],
       "realmRoles": ["tenant_admin", "analyst", "approver", "senior_approver"]
     }

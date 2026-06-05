@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/sd-strax/aatu/aggregate"
-	"github.com/sd-strax/aatu/authz"
+	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/authz"
 )
 
 // InvestigationView is the JSON shape returned to clients.

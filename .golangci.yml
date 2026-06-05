@@ -2,7 +2,7 @@
 #
 # Conventions we lint against: Google Go Style Guide, Go Code Review
 # Comments, Uber Go Style Guide. Project-specific patterns live in
-# implementation/aatu-patterns.md. See `make lint`.
+# implementation/reckon-patterns.md. See `make lint`.
 #
 # Schema: golangci-lint v2.x.
 
@@ -86,7 +86,7 @@ linters:
         # strict for non-secret files.
         - G302
         - G306
-        # G301: directory mode 0o755 (vs 0o750). aatu's data dirs live in
+        # G301: directory mode 0o755 (vs 0o750). reckon's data dirs live in
         # the user's home dir; 0o755 lets the user inspect them with the
         # tools they expect.
         - G301

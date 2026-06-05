@@ -27,7 +27,7 @@ func TestTemporalLifecycle(t *testing.T) {
 		DataDir:      dir,
 		FrontendPort: 17233, // non-default to avoid colliding with a real Temporal
 		EnableUI:     false,
-		Namespace:    "aatu-test",
+		Namespace:    "reckon-test",
 	}
 	tp := NewTemporal(cfg)
 
@@ -47,7 +47,7 @@ func TestTemporalLifecycle(t *testing.T) {
 	// serving.
 	c, err := client.Dial(client.Options{
 		HostPort:  tp.FrontendHostPort(),
-		Namespace: "aatu-test",
+		Namespace: "reckon-test",
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -78,7 +78,7 @@ func TestTemporalLifecycle(t *testing.T) {
 
 	c2, err := client.Dial(client.Options{
 		HostPort:  tp2.FrontendHostPort(),
-		Namespace: "aatu-test",
+		Namespace: "reckon-test",
 	})
 	if err != nil {
 		t.Fatalf("dial after restart: %v", err)

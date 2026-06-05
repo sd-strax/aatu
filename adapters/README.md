@@ -1,6 +1,6 @@
 # adapters/
 
-First-party adapter binaries. Each subdirectory is its own Go-buildable adapter binary that aatu's capability layer spawns as a separate process and communicates with over JSON-RPC (MCP-compatible transport).
+First-party adapter binaries. Each subdirectory is its own Go-buildable adapter binary that reckon's capability layer spawns as a separate process and communicates with over JSON-RPC (MCP-compatible transport).
 
 See `design/03-capability-layer.md §5.4` for the adapter contract and class taxonomy (`MCP`, `NATIVE_API`, `CUSTOM`, `FIXTURE`, `SOAR_PLAYBOOK`).
 

@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository nature
 
-This repo is the **aatu OSS engine** — design specifications today, code starting Week 1 of Phase A. Currently private on GitHub; goes public at Phase H. **Treat every edit as if it's already public.**
+This repo is the **reckon OSS engine** — design specifications today, code starting Week 1 of Phase A. Currently private on GitHub; goes public at Phase H. **Treat every edit as if it's already public.**
 
-Paid modules and commercial strategy live in the separate private repo `aatu-enterprise` (`github.com/sd-strax/aatu-enterprise`). That repo depends on this one as a Go module and implements the `module/` interfaces; this repo has zero awareness of it. The repo boundary is the architectural enforcement of the open-core split.
+Paid modules and commercial strategy live in the separate private repo `reckon-enterprise` (`github.com/sd-strax/reckon-enterprise`). That repo depends on this one as a Go module and implements the `module/` interfaces; this repo has zero awareness of it. The repo boundary is the architectural enforcement of the open-core split.
 
 See "Public OSS posture" below — it is load-bearing for every edit.
 
-## The product (aatu)
+## The product (reckon)
 
 "Cursor for SOC analysts" — an AI-native investigation environment for threat hunters and IR responders (not T1/T2 triage). Substrate: **VS Code extension (primary), CLI (secondary), Go backend, transport-neutral capability layer for tool federation** (adapter classes: MCP, NATIVE_API, CUSTOM, FIXTURE, SOAR_PLAYBOOK; see `design/03-capability-layer.md` §5.4). v0 prototype runs against OCSF fixtures via the fixture adapter, not real tenants.
 
@@ -42,11 +42,11 @@ These are decisions that have been ruled out of re-litigation in `01-domain-mode
 - **AI is a delegate, never a principal.** Every event records a human principal; `actor.delegate` captures the AI. Authorization is the *intersection* of principal permissions and delegate policy.
 - **Capability layer is pure I/O + normalization.** It does not reason, never produces `x-interpretation`, always emits `derivation_mode = DIRECT`. Only exception: detection_finding normalizer (`03-capability-layer.md` §4.12).
 - **Blast radius, not action verb, drives the trust tier.** T2→T3 escalator at >10 distinct targets is non-negotiable in code, only adjustable.
-- **Open core: paid layers on OSS, no overlap.** OSS engine lives in `aatu` (public-bound); paid modules live in a separate private `aatu-enterprise` repo that depends on `aatu` as a Go module and implements its `module/` interfaces. OSS has zero awareness of paid; the repo boundary enforces this. See `implementation/module-layout.md`.
+- **Open core: paid layers on OSS, no overlap.** OSS engine lives in `reckon` (public-bound); paid modules live in a separate private `reckon-enterprise` repo that depends on `reckon` as a Go module and implements its `module/` interfaces. OSS has zero awareness of paid; the repo boundary enforces this. See `implementation/module-layout.md`.
 
 ## Public OSS posture
 
-This repo is destined to be public OSS. Every edit must respect that. The following kinds of content do **not** belong here — they belong in `aatu-enterprise`:
+This repo is destined to be public OSS. Every edit must respect that. The following kinds of content do **not** belong here — they belong in `reckon-enterprise`:
 
 - **Buyer profiles** ("MSSP," "in-house SOC," "the buyer pays per...")
 - **Conversion economics** (revenue framing, conversion events, pricing/licensing terms beyond "licensing is bolt-on")
@@ -57,9 +57,9 @@ This repo is destined to be public OSS. Every edit must respect that. The follow
 
 What stays here: architectural facts — what the codebase does, how it's structured, the rationale for the tradeoffs a contributor would need to understand.
 
-**When in doubt, write the sentence in `aatu-enterprise`** and surface only the architectural distillation here, if any survives.
+**When in doubt, write the sentence in `reckon-enterprise`** and surface only the architectural distillation here, if any survives.
 
-A pre-commit hook lands in Week 1 alongside Claude Code workflow setup (per `aatu-enterprise/30-day-plan.md` item 1) to catch obvious commercial keywords on commit. It is a backstop; the discipline lives here.
+A pre-commit hook lands in Week 1 alongside Claude Code workflow setup (per `reckon-enterprise/30-day-plan.md` item 1) to catch obvious commercial keywords on commit. It is a backstop; the discipline lives here.
 
 ## Conventions in the prose
 
@@ -71,8 +71,8 @@ A pre-commit hook lands in Week 1 alongside Claude Code workflow setup (per `aat
 ## Working in this repo
 
 - When adding a new spec, follow the existing structure: framing/scope → out-of-scope → numbered sections → end-of-spec marker. Cross-reference other specs with section numbers (e.g., "see §4.3"), not page numbers.
-- Engineering planning (roadmap, 30-day plan, decisions log, risk register, phase-by-phase scope) lives in `aatu-enterprise` because it's framed around team shape, calendar, and commercial context. Architectural seam docs (`implementation/module-layout.md`) live here because they describe the codebase any contributor would see.
-- Cross-references go OSS → OSS only. **Do not reference `aatu-enterprise` paths from any file in this repo.** If you find yourself wanting to, the content you're describing probably belongs over there, and what's in this repo should stand on its own architectural merit.
+- Engineering planning (roadmap, 30-day plan, decisions log, risk register, phase-by-phase scope) lives in `reckon-enterprise` because it's framed around team shape, calendar, and commercial context. Architectural seam docs (`implementation/module-layout.md`) live here because they describe the codebase any contributor would see.
+- Cross-references go OSS → OSS only. **Do not reference `reckon-enterprise` paths from any file in this repo.** If you find yourself wanting to, the content you're describing probably belongs over there, and what's in this repo should stand on its own architectural merit.
 
 ## Go conventions
 
@@ -81,8 +81,8 @@ We adopt industry-standard public Go conventions rather than maintaining our own
 1. **[Google Go Style Guide](https://google.github.io/styleguide/go/)** — canonical reference. Style Guide + Style Decisions + Best Practices.
 2. **[Go Code Review Comments](https://go.dev/wiki/CodeReviewComments)** — the actual review checklist.
 3. **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** — supplementary; especially the mutex placement and error wrapping sections.
-4. **`implementation/aatu-patterns.md`** — the small set of patterns specific to this codebase that the public guides don't address. ~5–6 patterns total. Read once; cite from new code as needed.
+4. **`implementation/reckon-patterns.md`** — the small set of patterns specific to this codebase that the public guides don't address. ~5–6 patterns total. Read once; cite from new code as needed.
 
 `make lint` runs `golangci-lint` with a config (`.golangci.yml`) tuned to enforce most of the above mechanically — `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `govet`, `bodyclose`, `errorlint`, `unused`. `make ci` (lint + test + build) is the pre-commit / pre-PR check.
 
-When extending the code, prefer references to the public guides over re-arguing style locally. When a project-specific pattern emerges three+ times, add it to `aatu-patterns.md`.
+When extending the code, prefer references to the public guides over re-arguing style locally. When a project-specific pattern emerges three+ times, add it to `reckon-patterns.md`.

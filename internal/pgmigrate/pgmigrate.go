@@ -27,7 +27,7 @@ import (
 // databases (the source is reused otherwise).
 //
 // Returns nil if there are no pending migrations (migrate.ErrNoChange is
-// swallowed — re-running aatu start should be a no-op for already-applied
+// swallowed — re-running reckon start should be a no-op for already-applied
 // schemas).
 func Run(dsn string, migrationsFS fs.FS, instanceName string) error {
 	db, err := sql.Open("postgres", dsn)
