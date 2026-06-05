@@ -151,6 +151,14 @@ func (p *Postgres) ensureDatabases(ctx context.Context) error {
 			return fmt.Errorf("create database %s: %w", name, err)
 		}
 	}
+
+	// Clean up the aatu_temporal database from pre-D15 installs (Temporal
+	// now uses its own SQLite store; the Pg database is dead weight).
+	// Idempotent: no-op when the database is absent. Errors are non-fatal —
+	// drop failure shouldn't block startup.
+	if _, err := db.ExecContext(ctx, `DROP DATABASE IF EXISTS aatu_temporal`); err != nil {
+		log.Printf("postgres: could not drop legacy aatu_temporal database (non-fatal): %v", err)
+	}
 	return nil
 }
 

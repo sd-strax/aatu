@@ -141,7 +141,9 @@ func (s *Supervisor) Health(ctx context.Context) map[string]HealthStatus {
 // restart cascade), 3 restarts in a rolling 5-minute window before escalating
 // to fatal. Aggressive enough to catch real outages, lenient enough not to
 // fight with normal startup jitter.
-const (
+//
+// These are vars (not consts) so tests can override them via t.Cleanup.
+var (
 	watchInterval          = 5 * time.Second
 	watchConsecutiveMisses = 2
 	watchMaxRestarts       = 3
