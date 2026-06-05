@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 	_ "github.com/lib/pq"
+
+	"github.com/sd-strax/aatu/internal/pgmigrate"
 )
 
 // PostgresConfig configures the bundled Postgres instance.
@@ -23,9 +26,23 @@ type PostgresConfig struct {
 	// with a system Pg on the default 5432.
 	Port uint32
 
-	// Databases to create on first start, in addition to the default
-	// "postgres" maintenance database.
-	Databases []string
+	// Databases to create + migrate on first start. Each spec names a
+	// database and (optionally) an embedded fs.FS of SQL migrations.
+	// Database creation is idempotent; migrations run on every start
+	// (golang-migrate tracks applied versions in schema_migrations).
+	Databases []DatabaseSpec
+}
+
+// DatabaseSpec is one database the supervisor's Postgres manages.
+type DatabaseSpec struct {
+	// Name is the Postgres database name. Created on first start; safe to
+	// re-list on subsequent starts (CREATE DATABASE is gated on existence).
+	Name string
+
+	// Migrations is an optional fs.FS rooted at a directory of golang-migrate
+	// SQL files (NNNN_label.up.sql + NNNN_label.down.sql). nil means no
+	// migrations — the database is just created and left empty.
+	Migrations fs.FS
 }
 
 // Postgres is a Component wrapping fergusstrange/embedded-postgres.
@@ -128,27 +145,27 @@ func (p *Postgres) ensureDatabases(ctx context.Context) error {
 	}
 	defer db.Close()
 
-	for _, name := range p.cfg.Databases {
+	for _, spec := range p.cfg.Databases {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var exists bool
 		err := db.QueryRowContext(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", name,
+			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", spec.Name,
 		).Scan(&exists)
 		if err != nil {
-			return fmt.Errorf("query database %s: %w", name, err)
+			return fmt.Errorf("query database %s: %w", spec.Name, err)
 		}
 		if exists {
 			continue
 		}
-		log.Printf("postgres: creating database %s", name)
+		log.Printf("postgres: creating database %s", spec.Name)
 		// CREATE DATABASE doesn't accept parameterized identifiers; the name
 		// comes from our config (not user input) so the formatted statement
 		// is safe.
-		stmt := fmt.Sprintf(`CREATE DATABASE %q`, name)
+		stmt := fmt.Sprintf(`CREATE DATABASE %q`, spec.Name)
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("create database %s: %w", name, err)
+			return fmt.Errorf("create database %s: %w", spec.Name, err)
 		}
 	}
 
@@ -158,6 +175,22 @@ func (p *Postgres) ensureDatabases(ctx context.Context) error {
 	// drop failure shouldn't block startup.
 	if _, err := db.ExecContext(ctx, `DROP DATABASE IF EXISTS aatu_temporal`); err != nil {
 		log.Printf("postgres: could not drop legacy aatu_temporal database (non-fatal): %v", err)
+	}
+
+	// Apply migrations for each spec that supplied them. golang-migrate
+	// tracks applied versions in schema_migrations inside each database;
+	// re-running aatu start is idempotent.
+	for _, spec := range p.cfg.Databases {
+		if spec.Migrations == nil {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		log.Printf("postgres: applying migrations to %s", spec.Name)
+		if err := pgmigrate.Run(p.DSN(spec.Name), spec.Migrations, spec.Name); err != nil {
+			return fmt.Errorf("migrate %s: %w", spec.Name, err)
+		}
 	}
 	return nil
 }

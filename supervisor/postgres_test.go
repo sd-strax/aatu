@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sd-strax/aatu/aggregate"
+	"github.com/sd-strax/aatu/knowledge"
 )
 
 // TestPostgresLifecycle exercises the full Postgres component lifecycle:
@@ -21,9 +24,12 @@ func TestPostgresLifecycle(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "pg")
 	pg := NewPostgres(PostgresConfig{
-		DataDir:   dir,
-		Port:      0, // use default 5435
-		Databases: []string{"aatu_main", "aatu_knowledge"},
+		DataDir: dir,
+		Port:    0, // use default 5435
+		Databases: []DatabaseSpec{
+			{Name: "aatu_main"},
+			{Name: "aatu_knowledge"},
+		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -81,8 +87,11 @@ func TestPostgresLifecycle(t *testing.T) {
 
 	// Restart against the same data directory; existing data should be visible
 	pg2 := NewPostgres(PostgresConfig{
-		DataDir:   dir,
-		Databases: []string{"aatu_main", "aatu_knowledge"},
+		DataDir: dir,
+		Databases: []DatabaseSpec{
+			{Name: "aatu_main"},
+			{Name: "aatu_knowledge"},
+		},
 	})
 	if err := pg2.Start(ctx); err != nil {
 		t.Fatalf("restart: %v", err)
@@ -106,5 +115,139 @@ func TestPostgresLifecycle(t *testing.T) {
 	}
 	if val != "hello" {
 		t.Errorf("persisted value = %q; want %q", val, "hello")
+	}
+}
+
+// TestPostgresMigrations applies the real aggregate + knowledge migrations
+// and verifies the expected tables exist + idempotent re-application.
+// Same slow-test caveat as TestPostgresLifecycle: skipped under -short,
+// shares the embedded-postgres binary cache.
+func TestPostgresMigrations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow Postgres migrations test in short mode")
+	}
+
+	dir := filepath.Join(t.TempDir(), "pg")
+	pg := NewPostgres(PostgresConfig{
+		DataDir: dir,
+		Port:    0,
+		Databases: []DatabaseSpec{
+			{Name: "aatu_main", Migrations: aggregate.Migrations()},
+			{Name: "aatu_knowledge", Migrations: knowledge.Migrations()},
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	if err := pg.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, c := context.WithTimeout(context.Background(), 30*time.Second)
+		defer c()
+		_ = pg.Stop(stopCtx)
+	})
+
+	// aatu_main: events, stix_objects, stix_relationships, ai_tool_calls, ai_transcripts
+	mainDB, err := pg.open(ctx, "aatu_main")
+	if err != nil {
+		t.Fatalf("open aatu_main: %v", err)
+	}
+	defer mainDB.Close()
+
+	for _, table := range []string{"events", "stix_objects", "stix_relationships", "ai_tool_calls", "ai_transcripts"} {
+		var exists bool
+		err := mainDB.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+			table,
+		).Scan(&exists)
+		if err != nil {
+			t.Errorf("query table %s: %v", table, err)
+			continue
+		}
+		if !exists {
+			t.Errorf("aatu_main: table %s was not created by aggregate migrations", table)
+		}
+	}
+
+	// aatu_knowledge: sops, investigation_summaries
+	knowDB, err := pg.open(ctx, "aatu_knowledge")
+	if err != nil {
+		t.Fatalf("open aatu_knowledge: %v", err)
+	}
+	defer knowDB.Close()
+
+	for _, table := range []string{"sops", "investigation_summaries"} {
+		var exists bool
+		err := knowDB.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+			table,
+		).Scan(&exists)
+		if err != nil {
+			t.Errorf("query table %s: %v", table, err)
+			continue
+		}
+		if !exists {
+			t.Errorf("aatu_knowledge: table %s was not created by knowledge migrations", table)
+		}
+	}
+
+	// Verify schema_migrations records the right version in each database.
+	var mainVersion int
+	if err := mainDB.QueryRowContext(ctx,
+		"SELECT version FROM schema_migrations",
+	).Scan(&mainVersion); err != nil {
+		t.Errorf("aatu_main schema_migrations: %v", err)
+	}
+	if mainVersion != 3 {
+		t.Errorf("aatu_main version = %d; want 3 (three aggregate migrations)", mainVersion)
+	}
+
+	var knowVersion int
+	if err := knowDB.QueryRowContext(ctx,
+		"SELECT version FROM schema_migrations",
+	).Scan(&knowVersion); err != nil {
+		t.Errorf("aatu_knowledge schema_migrations: %v", err)
+	}
+	if knowVersion != 2 {
+		t.Errorf("aatu_knowledge version = %d; want 2 (two knowledge migrations)", knowVersion)
+	}
+
+	// Restart against the same data dir; migrations should be a no-op.
+	if err := pg.Stop(ctx); err != nil {
+		t.Errorf("stop: %v", err)
+	}
+
+	pg2 := NewPostgres(PostgresConfig{
+		DataDir: dir,
+		Databases: []DatabaseSpec{
+			{Name: "aatu_main", Migrations: aggregate.Migrations()},
+			{Name: "aatu_knowledge", Migrations: knowledge.Migrations()},
+		},
+	})
+	if err := pg2.Start(ctx); err != nil {
+		t.Fatalf("restart with same dir: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, c := context.WithTimeout(context.Background(), 30*time.Second)
+		defer c()
+		_ = pg2.Stop(stopCtx)
+	})
+
+	// Schema versions unchanged
+	mainDB2, err := pg2.open(ctx, "aatu_main")
+	if err != nil {
+		t.Fatalf("open aatu_main after restart: %v", err)
+	}
+	defer mainDB2.Close()
+	var mainVersion2 int
+	if err := mainDB2.QueryRowContext(ctx,
+		"SELECT version FROM schema_migrations",
+	).Scan(&mainVersion2); err != nil {
+		t.Errorf("aatu_main schema_migrations after restart: %v", err)
+	}
+	if mainVersion2 != mainVersion {
+		t.Errorf("version changed after restart: was %d, now %d", mainVersion, mainVersion2)
 	}
 }

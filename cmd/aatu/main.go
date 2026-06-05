@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sd-strax/aatu/aggregate"
 	"github.com/sd-strax/aatu/config"
+	"github.com/sd-strax/aatu/knowledge"
 	"github.com/sd-strax/aatu/supervisor"
 )
 
@@ -85,7 +87,10 @@ func runStart() error {
 		Port:    cfg.Postgres.Port,
 		// Temporal manages its own SQLite store (see D15) so there's no
 		// aatu_temporal database here today.
-		Databases: []string{"aatu_main", "aatu_knowledge"},
+		Databases: []supervisor.DatabaseSpec{
+			{Name: "aatu_main", Migrations: aggregate.Migrations()},
+			{Name: "aatu_knowledge", Migrations: knowledge.Migrations()},
+		},
 	})
 	temp := supervisor.NewTemporal(supervisor.TemporalConfig{
 		DataDir:      filepath.Join(cfg.Data.Dir, "temporal"),
