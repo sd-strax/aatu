@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 // Command is anything that produces zero or more Events when applied to
@@ -31,6 +33,9 @@ func (CreateInvestigation) Kind() string { return "CreateInvestigation" }
 func (c CreateInvestigation) Validate(env Envelope) error {
 	if env.AggregateID == (AggregateID{}) {
 		return ErrEnvelope("AggregateID is zero")
+	}
+	if env.TenantID == (uuid.UUID{}) {
+		return ErrEnvelope("TenantID is zero")
 	}
 	if env.Actor.PrincipalID == "" {
 		return ErrEnvelope("Actor.PrincipalID is empty")
@@ -78,6 +83,7 @@ func applyCommand(env Envelope, cmd Command, currentSeq int64) ([]Event, error) 
 			{
 				AggregateID: env.AggregateID,
 				SequenceNo:  currentSeq + 1,
+				TenantID:    env.TenantID,
 				Type:        EventTypeCreated,
 				Payload:     payload,
 				Actor:       env.Actor,

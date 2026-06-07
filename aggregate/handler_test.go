@@ -100,9 +100,14 @@ func newTestHandler() *Handler {
 	return NewHandler(NewStore(testDB), InvestigationCurrentProjector{})
 }
 
+// testTenantID is the tenant stamped on envelopes built by the aggregate
+// tests. Any non-zero UUID exercises the tenant-aware write path identically.
+var testTenantID = uuid.New()
+
 func newTestEnvelope(actorID string) Envelope {
 	return Envelope{
 		AggregateID: uuid.New(),
+		TenantID:    testTenantID,
 		Actor:       Actor{PrincipalID: actorID},
 		OccurredAt:  time.Now().UTC().Truncate(time.Microsecond),
 	}
@@ -195,12 +200,12 @@ func TestStoreConcurrentInsert(t *testing.T) {
 	actor := Actor{PrincipalID: "alice"}
 
 	evt1 := Event{
-		AggregateID: aggID, SequenceNo: 1, Type: "test.event",
+		AggregateID: aggID, SequenceNo: 1, TenantID: testTenantID, Type: "test.event",
 		Payload:    []byte(`{"n":1}`),
 		Actor:      actor, OccurredAt: now,
 	}
 	evt2 := Event{
-		AggregateID: aggID, SequenceNo: 1, Type: "test.event",
+		AggregateID: aggID, SequenceNo: 1, TenantID: testTenantID, Type: "test.event",
 		Payload:    []byte(`{"n":2}`),
 		Actor:      actor, OccurredAt: now,
 	}
@@ -334,6 +339,7 @@ func TestLoadStream(t *testing.T) {
 func TestApplyCommand_CreateInvestigationOnExistingAggregate(t *testing.T) {
 	env := Envelope{
 		AggregateID: uuid.New(),
+		TenantID:    testTenantID,
 		Actor:       Actor{PrincipalID: "alice"},
 		OccurredAt:  time.Now(),
 	}
@@ -347,15 +353,27 @@ func TestApplyCommand_ValidatesEnvelope(t *testing.T) {
 	// Missing principal
 	_, err := applyCommand(Envelope{
 		AggregateID: uuid.New(),
+		TenantID:    testTenantID,
 		OccurredAt:  time.Now(),
 	}, CreateInvestigation{Title: "x"}, 0)
 	if err == nil {
 		t.Error("expected envelope validation failure for missing PrincipalID")
 	}
 
+	// Missing tenant
+	_, err = applyCommand(Envelope{
+		AggregateID: uuid.New(),
+		Actor:       Actor{PrincipalID: "alice"},
+		OccurredAt:  time.Now(),
+	}, CreateInvestigation{Title: "x"}, 0)
+	if err == nil {
+		t.Error("expected envelope validation failure for missing TenantID")
+	}
+
 	// Empty title
 	_, err = applyCommand(Envelope{
 		AggregateID: uuid.New(),
+		TenantID:    testTenantID,
 		Actor:       Actor{PrincipalID: "alice"},
 		OccurredAt:  time.Now(),
 	}, CreateInvestigation{Title: ""}, 0)

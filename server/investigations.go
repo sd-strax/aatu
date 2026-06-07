@@ -11,6 +11,7 @@ import (
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/module"
 )
 
 // InvestigationView is the JSON shape returned to clients.
@@ -117,8 +118,13 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TenantID is the single OSS tenant. When the paid tenancy module is wired
+	// into the Backend, this becomes module.TenancyModule.ResolveTenant(ctx)
+	// (resolved from the JWT / claim routing); the schema and write path are
+	// already tenant-aware, so only this line changes.
 	env := aggregate.Envelope{
 		AggregateID: uuid.New(),
+		TenantID:    module.SingleTenantUUID,
 		Actor: aggregate.Actor{
 			PrincipalID: claims.Subject,
 		},
