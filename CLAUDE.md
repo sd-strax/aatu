@@ -25,9 +25,11 @@ The specs are not independent — they reference each other and each declares it
 | `design/01-domain-model.md` | What an investigation IS | — (foundational) | Defines all primitives the others build on |
 | `design/02-persistence.md` | How investigation state is stored | domain model (authoritative) | Event taxonomy, AI reasoning persistence layers |
 | `design/04-action-authorization.md` | Action authorization, trust tiers | domain model | Adds 7 values to `interpretation_type` enum; new `x-action` primitive; new `reverses` edge type |
-| `design/03-capability-layer.md` | LLM↔tool surface (verbs, adapters, normalization) | domain model | Identity computation rules; deviates from strict STIX 2.1 for `process`, `email-addr`, `user-account` |
+| `design/03-capability-layer.md` | LLM↔tool **read** surface (verbs, adapters, normalization) | domain model | Identity computation rules; deviates from strict STIX 2.1 for `process`, `email-addr`, `user-account` |
 
-When changing one spec, scan the others for cross-references. `04-action-authorization.md` §10 explicitly lists what it adds back to the domain model; `03-capability-layer.md` §7 explicitly notes its STIX deviations. These are the seams.
+The other specs (`05` component architecture, `06` knowledge service, `07` post-conclusion outputs, `08` write-side actions) build on these four. **`08-write-side-actions.md` is the write-side twin of `03`** — it owns the `request_action` tool, action descriptors/bindings, the write adapter contract, and the idempotency model; `03` is read-only. `02`/`04`/`05`/`07` reference `08` for action dispatch.
+
+When changing one spec, scan the others for cross-references. `04-action-authorization.md` §10 explicitly lists what it adds back to the domain model; `03-capability-layer.md` §7 explicitly notes its STIX deviations; `08-write-side-actions.md` §0 lists what it owns vs. what `04`/`02`/`05` keep. These are the seams.
 
 ## Architectural commitments (load-bearing across specs)
 

@@ -850,7 +850,7 @@ class; a one-off enrichment script probably doesn't.
 
 Three artifacts:
 
-1. A `CapabilityDescriptor` (Java interface implementation) declaring the verb
+1. A `CapabilityDescriptor` (Go interface implementation) declaring the verb
    name, input schema, output type, and intent description for the LLM.
 2. At least one binding in tenant config mapping it to an existing adapter
    operation (or a new one).
@@ -879,33 +879,37 @@ adapters and what makes vendor swap a config change.
 
 ### 5.3 SDK shape
 
-Java backend, so:
+Go backend, so:
 
-```java
-public interface Adapter {
-    String name();
-    AdapterClass adapterClass();              // MCP | NATIVE_API | CUSTOM | SOAR_PLAYBOOK | FIXTURE
-    Set<String> supportedOperations();
-    AdapterResponse invoke(String operation, Map<String, Object> params);
-    HealthStatus health();
+```go
+type Adapter interface {
+    Name() string
+    Class() AdapterClass // MCP | NATIVE_API | CUSTOM | SOAR_PLAYBOOK | FIXTURE
+    SupportedOperations() []string
+    Invoke(ctx context.Context, operation string, params map[string]any) (AdapterResponse, error)
+    Health() HealthStatus
 }
 
-public interface CapabilityDescriptor {
-    String verb();
-    InputSchema inputs();
-    OutputType output();
-    String intent();
+type CapabilityDescriptor interface {
+    Verb() string
+    Inputs() InputSchema
+    Output() OutputType
+    Intent() string
 }
 
-public interface Normalizer {
-    int classUid();
-    int version();
-    NormalizationResult normalize(OcsfEvent event);
+type Normalizer interface {
+    ClassUID() int
+    Version() int
+    Normalize(event OcsfEvent) (NormalizationResult, error)
 }
 ```
 
-All three are discovered via Java's `ServiceLoader` so an extension is a JAR
-drop, not a code change.
+All three are registered with the capability registry rather than discovered by
+reflection — Go has no `ServiceLoader`/JAR equivalent. In-tree adapters
+self-register from their package `init`; out-of-process adapters (the
+transport-neutral path, see §5.4) are declared in tenant config and reached over
+their protocol. Either way an extension is a new package or a config entry, not
+a change to the core dispatch.
 
 ### 5.4 Adapter classes
 
@@ -1506,25 +1510,24 @@ vendor detections genuinely are inferences, just not ours — but it warrants
 review if the boundary between observation and interpretation needs to be
 re-litigated.
 
-**Action dispatch / write-side adapter contract is deferred to a v0+1
-thread.** This spec covers the read side: 22 query verbs (plus the §2.9
-external case lookup verbs), the binding / resolver / normalizer pipeline,
-and the `CapabilityResult` envelope. The write side — the agent-facing
-`request_action` tool, write-side adapter operations, the
+**Action dispatch / write-side adapter contract lives in
+08-write-side-actions.md.** This spec covers the read side: 22 query verbs
+(plus the §2.9 external case lookup verbs), the binding / resolver / normalizer
+pipeline, and the `CapabilityResult` envelope. The write side — the agent-facing
+`request_action` tool, write-side adapter operations, the idempotency model, the
 `adapter_request_id` correlation contract that 04-action-authorization.md §6.1
 and 02-persistence.md §3 `ActionDispatched` reference, and the action fixtures
-that mirror §9 read fixtures — is referenced by the auth and persistence
-specs but not designed here. It is the next thread to spawn before code,
-not a v0-time omission to paper over. The action-type taxonomy this
-contract serves is broader than containment-class actions: ticketing
-(`ticket.create`, `ticket.update`), TI publication (`ioc.publish_to_misp`,
-`ioc.publish_to_isac`, `ti.contribute_to_attack`), document delivery
-(`document.deliver`), comms (`comm.post`, `comm.page`), and IT-operations
-(`host.reimage`, `credential.reset`) all use the same contract — see
-07-post-conclusion-outputs.md §7 and §8 for the post-conclusion action
-categories and 04-action-authorization.md §2 for the consolidated
-categorization table. Until the contract lands, action dispatch in v0
-prototype runs against fixture stubs only.
+that mirror §9 read fixtures — is specified in 08 as the symmetric twin of this
+spec. The action-type taxonomy that contract serves is broader than
+containment-class actions: ticketing (`ticket.create`, `ticket.update`), TI
+publication (`ioc.publish_to_misp`, `ioc.publish_to_isac`,
+`ti.contribute_to_attack`), document delivery (`document.deliver`), comms
+(`comm.post`, `comm.page`), and IT-operations (`host.reimage`,
+`credential.reset`) all use the same contract — see 07-post-conclusion-outputs.md
+§7 and §8 for the post-conclusion action categories and
+04-action-authorization.md §2 for the consolidated categorization table. Until
+that contract is implemented, action dispatch in v0 prototype runs against
+fixture stubs only (08 §9).
 
 ---
 

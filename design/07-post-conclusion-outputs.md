@@ -432,7 +432,7 @@ Add `InvestigationLinked` to the v0+ event types in §3 (was deferred under "Cro
 
 ### 11.3 03-capability-layer.md
 
-Action manifest extension in §10 (or its successor write-side adapter contract thread): include the post-conclusion action types — `ticket.create`, `ticket.update`, `ioc.publish_to_*`, `ti.contribute_to_*`, `document.deliver` — as standard categories. Adapters for common SoRs and TI platforms ship as first-party.
+Action manifest extension in the write-side adapter contract (08-write-side-actions.md §3, §8): include the post-conclusion action types — `ticket.create`, `ticket.update`, `ioc.publish_to_*`, `ti.contribute_to_*`, `document.deliver` — as standard categories. Adapters for common SoRs and TI platforms ship as first-party.
 
 ### 11.4 04-action-authorization.md
 
@@ -459,8 +459,9 @@ Note the post-conclusion pipeline as the producer of investigation summaries and
 
 - **01-domain-model.md** — investigation lifecycle, Interpretation types, the Report in ConclusionSlot, the actor model (post-conclusion principals)
 - **02-persistence.md** — event taxonomy, projections, the same-aggregate guarantees the pipeline depends on
-- **03-capability-layer.md** — action types, adapter contract, the deferred write-side thread
+- **03-capability-layer.md** — read-side capability surface the write side mirrors
 - **04-action-authorization.md** — authorization machinery for post-conclusion actions, reversal model, T1/T2/T3 tier mapping
+- **08-write-side-actions.md** — write-side adapter contract: how ticketing/IOC/document/comms action types dispatch
 - **05-component-architecture.md** — Temporal worker for `PostConclusionPipeline`, component-level deployment of post-conclusion machinery
 - **06-knowledge-service.md** — summary corpus this pipeline populates, candidate SOP submission, similarity recall used in linkage suggestion
 

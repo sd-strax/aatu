@@ -84,20 +84,20 @@ OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-in
 
 ---
 
-## The seven specs
+## The eight specs
 
 | # | Spec | Owns |
 |---|---|---|
 | 01 | [domain model](01-domain-model.md) | What an investigation IS — primitives, identity, lifecycle, edge types, the actor model |
 | 02 | [persistence](02-persistence.md) | How investigation state is stored — event taxonomy, projections, side stores, AI reasoning persistence |
-| 03 | [capability layer](03-capability-layer.md) | LLM↔tool surface — verb catalog, adapter classes, normalizers, identity computation, fixture mechanics |
+| 03 | [capability layer](03-capability-layer.md) | LLM↔tool **read** surface — verb catalog, adapter classes, normalizers, identity computation, fixture mechanics |
 | 04 | [action authorization](04-action-authorization.md) | How actions are proposed, authorized, executed, audited, reversed — trust tiers, two-party, CEL policy engine |
 | 05 | [component architecture](05-component-architecture.md) | Component topology, deployment shapes, authn, the lift path, reckon-operated surface |
 | 06 | [knowledge service](06-knowledge-service.md) | SOP corpus, concluded-investigation summary corpus, retrieval API, audit linkage, embedding model |
 | 07 | [post-conclusion outputs](07-post-conclusion-outputs.md) | Export bundle, IOC extraction, candidate-SOP generation, cross-investigation linkage, ticketing handoff, industry sharing |
+| 08 | [write-side actions](08-write-side-actions.md) | LLM↔tool **write** surface — `request_action`, action descriptors/bindings, the write adapter contract, idempotency, action fixtures. Symmetric twin of 03 |
 
-Two threads explicitly deferred:
-- **Write-side adapter contract** — referenced from 03 §10, 04 §6.1, 02 §3 (`ActionDispatched`); needs to land before any v1 action dispatch code. Symmetric to the read-side contract.
+One thread explicitly deferred:
 - **Detection authoring tooling** — v2+; data model accommodates it, no new domain primitive needed.
 
 ---
@@ -235,7 +235,6 @@ These are present in the architecture but only become important in v1+ when real
 
 These are deliberate non-priorities. Don't engage with them in v0–v2 conversations:
 
-- Write-side adapter contract (its own thread, but blocks v1 actions)
 - Detection authoring as a feature (v2+)
 - Multi-analyst on the laptop (v3+ if ever)
 - MSP / hierarchical tenancy (v3+ on customer demand)
@@ -254,7 +253,7 @@ These are deliberate non-priorities. Don't engage with them in v0–v2 conversat
 | Stage | Deployment | Capability surface | Notes |
 |---|---|---|---|
 | **v0** | Solo localhost only | Read fixtures + write fixture stubs; agent loop functional; SOPs functional with keyword retrieval | No real integrations. Knowledge service has SOP CRUD and basic retrieval, no embeddings. |
-| **v1** | Solo localhost | Real read integrations across EDR, SIEM, IdP, TI, comms, ticketing, MDM; write-side adapter contract lands; T2/T3 actions live | Cross-cutting concerns actively exercised. Knowledge service adds embeddings + post-conclusion summaries. |
+| **v1** | Solo localhost | Real read integrations across EDR, SIEM, IdP, TI, comms, ticketing, MDM; write-side adapter contract (08) implemented; T2/T3 actions live | Cross-cutting concerns actively exercised. Knowledge service adds embeddings + post-conclusion summaries. |
 | **v2** | OSS + paid distribution (self-hosted and reckon-hosted) | Paid tenancy and governance modules launch. Async approvals via relay. Vault-based vendor credentials. Customer IdPs federate upstream of Keycloak. | Paid distribution goes live in both operator modes. Lift sub-path A consolidates OSS instances into paid multi-tenant. SOC 2 / compliance work begins for reckon-hosted. |
 | **v3+** | (deferred) | MSP / hierarchical tenancy; cross-tenant indicator pool; detection authoring tooling; signed offline-verifiable entitlement licensing | Each gated on real customer need. |
 
