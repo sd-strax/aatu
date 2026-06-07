@@ -1,8 +1,8 @@
-// Package server holds the HTTP server: router, auth middleware, projection-
-// delta subscriptions (forthcoming), and the dependency-probe gate that runs
-// before traffic is accepted. The actual lifecycle (Start / Stop / Health)
-// satisfies supervisor.Component so the supervisor manages it alongside the
-// bundled subprocesses.
+// Package server holds the HTTP server: router, auth middleware, the
+// projection-delta WebSocket (handshake-authenticated, dropped on token
+// expiry), and the dependency-probe gate that runs before traffic is accepted.
+// The actual lifecycle (Start / Stop / Health) satisfies supervisor.Component
+// so the supervisor manages it alongside the bundled subprocesses.
 //
 // See reckon/design/05-component-architecture.md §3 for the runtime topology.
 package server
@@ -75,6 +75,10 @@ type Backend struct {
 	srv      *http.Server
 	started  bool
 	verifier *authz.Verifier
+
+	// hub fans projection deltas out to subscribed WebSocket clients. Set at
+	// construction so it outlives individual Start/Stop cycles.
+	hub *hub
 }
 
 // NewBackend constructs the Backend (not yet started). The supervisor
@@ -84,7 +88,7 @@ func NewBackend(cfg BackendConfig, sup *supervisor.Supervisor) *Backend {
 	if cfg.HTTPPort == 0 {
 		cfg.HTTPPort = 8080
 	}
-	return &Backend{cfg: cfg, sup: sup}
+	return &Backend{cfg: cfg, sup: sup, hub: newHub()}
 }
 
 // Name returns "backend" — same identifier the supervisor knew it by when
@@ -196,6 +200,16 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	api.Handle("/investigations/", authz.RequireAuth(verifier)(
 		http.HandlerFunc(b.investigationsItem),
 	))
+
+	// /stream — projection-delta WebSocket. Authenticated at the handshake
+	// inside the handler (a WS upgrade can't go through RequireAuth, which
+	// would write a non-WS error after the upgrade), not by middleware.
+	if b.hub == nil {
+		b.hub = newHub()
+	}
+	api.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+		b.handleStream(w, r, verifier)
+	})
 
 	mux.Handle("/api/", http.StripPrefix("/api", api))
 

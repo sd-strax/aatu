@@ -86,3 +86,37 @@ We adopt industry-standard public Go conventions rather than maintaining our own
 `make lint` runs `golangci-lint` with a config (`.golangci.yml`) tuned to enforce most of the above mechanically — `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `govet`, `bodyclose`, `errorlint`, `unused`. `make ci` (lint + test + build) is the pre-commit / pre-PR check.
 
 When extending the code, prefer references to the public guides over re-arguing style locally. When a project-specific pattern emerges three+ times, add it to `reckon-patterns.md`.
+
+## Commands
+
+`make help` lists everything. The ones you'll reach for:
+
+- `make build` — builds both binaries to `bin/`: `reckon` (CLI/supervisor) and `reckon-backend`.
+- `make test` — fast suite: `go test -race -short ./...`. The `-short` flag skips the slow embedded-Postgres/Temporal/Keycloak lifecycle tests (those download and boot real subprocess binaries). Use this loop while developing.
+- `make test-all` — full suite including the embedded-deps lifecycle tests (`go test -race -count=1 ./...`); ~60s warm, several minutes cold. Run before a PR that touches `supervisor/`.
+- `make lint` — `golangci-lint run ./...` (requires `brew install golangci-lint`).
+- `make ci` — lint + fast tests + build. The pre-commit / pre-PR gate.
+- `make ci-full` — lint + full tests + build. Pre-release.
+- `make hooks` — installs the OSS-leak pre-commit hook (`git config core.hooksPath .githooks/`). Run once after clone.
+
+Run a single test: `go test -race -run TestName ./aggregate/` (drop `-short` if it's a lifecycle test guarded by `testing.Short()`).
+
+The repo is the `reckon` module (Go 1.25). There is no README; `AGENTS.md` just points back here.
+
+## Code architecture (Phase A)
+
+The code is younger than the specs — most packages are skeletons with a `doc.go` stating which phase fills them in (`capability/` Phase B, `action/` Phase C, `knowledge/` Phase C/G, `identity/` Phase B). The wired-up spine today is the supervisor, the runtime/module seam, the event-sourced aggregate, and the auth gates.
+
+**Two binaries, one shared runtime.** `cmd/reckon` is the CLI/supervisor (`start`/`stop`/`status`/`version`); `runStart` is where the whole stack is assembled by hand. `cmd/reckon-backend` is a ~20-line `main` that injects an OSS `module.Registry` (disabled stubs) into `runtime.Run`. **`runtime.Run` + a `ModuleBuilder` closure is the only place OSS and paid binaries diverge** — this is the architectural enforcement of the open-core split. The paid binary (in `reckon-enterprise`) mirrors `cmd/reckon-backend` with a builder that returns real `module.Tenancy`/`module.Governance` implementations. OSS always uses `module.DisabledTenancy`/`DisabledGovernance`; if a config sets `paid.*` keys against an OSS binary, `runtime.Run` warns and continues.
+
+**Supervisor (`supervisor/`).** Manages the bundled-deps stack as ordered `Component`s: Postgres → Temporal → Keycloak → Backend. Each implements the `Component` interface (`Name`/`Start`/`Stop`/`Health`). Start in registration order, stop in reverse. `RestartPolicy` is `FatalOnExit` (Postgres — unclean exit risks corruption) or `RestartOnExit` (everything else). The per-component crash watcher that *acts* on the policy is still a stub (lands A.2.5); today the policy records intent. Postgres/Temporal/Keycloak are real embedded subprocess binaries downloaded on first run — this is why the lifecycle tests are slow and `-short`-gated.
+
+**Event-sourced aggregate (`aggregate/`).** The investigation aggregate is the *only* event-sourced thing; everything else is CRUD + thin history (an architectural commitment, see above). No ES framework — a single Postgres `events` table. The core invariant: `Handler.Handle` runs command→events translation, event-append, and every projector's `Apply` **inside one transaction** (`handler.go`). `applyCommand` is a pure function (envelope + command + current sequence → events); the Handler wraps it in the tx. Optimistic concurrency via a unique `(aggregate_id, sequence_no)` — a lost race returns `ErrConcurrent` and callers reload+retry. `Projector`s apply in-tx so the read model can never disagree with the event log; `Reset`+replay rebuilds projections from scratch.
+
+**Auth: two gates (`authz/`).** Gate 1 (RBAC) is live — `authz.Verifier` validates Keycloak JWTs against the realm's JWKS (discovered via OIDC `.well-known`), `RequireAuth` middleware extracts `Claims` into request context (`FromContext`). Gate 2 (action authorization) is a stub that auto-approves; the real CEL-based engine lands in `action/` at Phase C. Roles live in the IdP and travel in JWTs — reckon never caches or mirrors them. The `authz/action.go` stub is deliberately call-site-stable so inserting the real engine later only changes the constructor and decision shape.
+
+**Server (`server/`).** `Backend` is the in-process HTTP server and itself a `supervisor.Component`. Dependencies arrive as connection strings (Pg DSN, Temporal host:port, Keycloak issuer URL) plus an injected `*aggregate.Handler` — it depends on *reachable services*, not on the components that brought them up, so it can be repointed at managed deps without touching the supervisor seam. `Start` runs a dependency probe (e.g. fetches Keycloak's OIDC discovery and asserts the issuer) before accepting traffic.
+
+**Migrations** live next to their owning package as embedded `fs.FS` (`aggregate/migrations/`, `knowledge/migrations/`) and are handed to the supervisor's Postgres component per-database (`reckon_main`, `reckon_knowledge`). Config schema is `config/config.go` (YAML; both binaries read the same schema).
+
+`implementation/reckon-patterns.md` is the canonical short list of these patterns (pure-function + tx-wrapper, `Component` contract, two-axis auth chain, DI-by-connection-string, embedded-fs migrations, per-package `TestMain` with shared Pg). Read it once before writing new code in these packages.
