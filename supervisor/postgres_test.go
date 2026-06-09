@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"io/fs"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,20 @@ import (
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/knowledge"
 )
+
+// countUpMigrations returns the number of up-migrations in a migration FS.
+// golang-migrate records the highest applied version in schema_migrations,
+// which for sequential 0001..NNNN migrations equals the up-migration count.
+// Deriving the expectation here keeps the version assertions from drifting
+// every time a migration is added (which is what broke this test at 0004).
+func countUpMigrations(t *testing.T, mfs fs.FS) int {
+	t.Helper()
+	ups, err := fs.Glob(mfs, "*.up.sql")
+	if err != nil {
+		t.Fatalf("glob migrations: %v", err)
+	}
+	return len(ups)
+}
 
 // TestPostgresLifecycle exercises the full Postgres component lifecycle:
 // start, database creation, health, persistence across restart, stop.
@@ -149,14 +164,14 @@ func TestPostgresMigrations(t *testing.T) {
 		_ = pg.Stop(stopCtx)
 	})
 
-	// reckon_main: events, stix_objects, stix_relationships, ai_tool_calls, ai_transcripts
+	// reckon_main: tenants, events, stix_objects, stix_edges, ai_tool_calls, ai_transcripts, investigation_current
 	mainDB, err := pg.open(ctx, "reckon_main")
 	if err != nil {
 		t.Fatalf("open reckon_main: %v", err)
 	}
 	defer mainDB.Close()
 
-	for _, table := range []string{"events", "stix_objects", "stix_relationships", "ai_tool_calls", "ai_transcripts"} {
+	for _, table := range []string{"tenants", "events", "stix_objects", "stix_edges", "ai_tool_calls", "ai_transcripts", "investigation_current"} {
 		var exists bool
 		err := mainDB.QueryRowContext(ctx,
 			`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
@@ -200,8 +215,8 @@ func TestPostgresMigrations(t *testing.T) {
 	).Scan(&mainVersion); err != nil {
 		t.Errorf("reckon_main schema_migrations: %v", err)
 	}
-	if mainVersion != 3 {
-		t.Errorf("reckon_main version = %d; want 3 (three aggregate migrations)", mainVersion)
+	if want := countUpMigrations(t, aggregate.Migrations()); mainVersion != want {
+		t.Errorf("reckon_main version = %d; want %d (aggregate up-migrations)", mainVersion, want)
 	}
 
 	var knowVersion int
@@ -210,8 +225,8 @@ func TestPostgresMigrations(t *testing.T) {
 	).Scan(&knowVersion); err != nil {
 		t.Errorf("reckon_knowledge schema_migrations: %v", err)
 	}
-	if knowVersion != 2 {
-		t.Errorf("reckon_knowledge version = %d; want 2 (two knowledge migrations)", knowVersion)
+	if want := countUpMigrations(t, knowledge.Migrations()); knowVersion != want {
+		t.Errorf("reckon_knowledge version = %d; want %d (knowledge up-migrations)", knowVersion, want)
 	}
 
 	// Restart against the same data dir; migrations should be a no-op.

@@ -121,7 +121,7 @@ func (h *Handler) Replay(ctx context.Context) error {
 	// exposes via LoadAll, but we run it inside the replay tx for snapshot
 	// consistency with the projection writes.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, event_type, payload, actor, occurred_at
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at
 		FROM events
 		ORDER BY occurred_at, aggregate_id, sequence_no
 	`)

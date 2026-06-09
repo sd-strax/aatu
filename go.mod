@@ -3,6 +3,7 @@ module github.com/sd-strax/reckon
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/golang-jwt/jwt/v5 v5.3.1

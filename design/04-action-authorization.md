@@ -216,11 +216,11 @@ This is the load-bearing tie between the authorization model here and the actor 
 
 ### 4.1 Mechanism
 
-Policy-as-code, expressed in **CEL** (Common Expression Language), evaluated by the Java backend. Reasons:
+Policy-as-code, expressed in **CEL** (Common Expression Language), evaluated by the Go backend. Reasons:
 
 - **Rego/OPA** is the most powerful option but is overkill: SOC policies don't need package hierarchies or full Datalog. The mental cost on analysts authoring policies in Rego is real.
 - **YAML-only configs** can't express the conditional logic this needs ("evidence weight STRONG and derivation DIRECT and asset class not in {prod-critical}"). The moment you start adding YAML conditional DSLs you've reinvented a worse policy language.
-- **CEL** is an expression language, not a programming language; it's already used by Kubernetes admission, GCP IAM conditions, and Envoy. There are mature Java CEL evaluators (cel-java). Authors write predicates over a typed context object. Side-effect-free by construction.
+- **CEL** is an expression language, not a programming language; it's already used by Kubernetes admission, GCP IAM conditions, and Envoy. There are mature Go CEL evaluators (cel-go). Authors write predicates over a typed context object. Side-effect-free by construction.
 
 A policy is a versioned object:
 
@@ -245,7 +245,7 @@ policy:
   content_hash             sha256 of canonical form
 ```
 
-Policies are stored in a versioned repo (git is fine for v0; the path doesn't matter for this thread) and loaded into the backend at startup and on signal. Any change requires a signed config commit. The Java backend evaluates policies in priority order: any matching `DENY` wins; else any matching `REQUIRE_TWO_PARTY`; else any matching `AUTO_APPROVE`; else fall through to the default tier flow.
+Policies are stored in a versioned repo (git is fine for v0; the path doesn't matter for this thread) and loaded into the backend at startup and on signal. Any change requires a signed config commit. The Go backend evaluates policies in priority order: any matching `DENY` wins; else any matching `REQUIRE_TWO_PARTY`; else any matching `AUTO_APPROVE`; else fall through to the default tier flow.
 
 ### 4.2 The CEL evaluation context
 
@@ -307,7 +307,7 @@ ctx.time.utc                     timestamp
 ctx.time.business_hours          bool (org-configured)
 ```
 
-The fields are intentionally *projections* — flattened views of the domain model — not raw STIX. Policy authors shouldn't have to navigate STIX edges by hand; that's a footgun. The Java backend builds the context from the actual graph at evaluation time.
+The fields are intentionally *projections* — flattened views of the domain model — not raw STIX. Policy authors shouldn't have to navigate STIX edges by hand; that's a footgun. The Go backend builds the context from the actual graph at evaluation time.
 
 ### 4.3 Concrete policy examples
 
@@ -402,7 +402,7 @@ Out of scope to fully build in v0, but the mechanic is: the same `REQUESTED` act
 
 ### 5.4 Multiple analysts watching
 
-Each `x-action` row has an `assignee_ref` (set when an analyst opens the review panel and clicks "I'll handle this") and a `pending_approvers` set. The first analyst to approve/reject wins; the others see the panel update in real time (web socket from the Java backend). This avoids two analysts approving the same isolation simultaneously.
+Each `x-action` row has an `assignee_ref` (set when an analyst opens the review panel and clicks "I'll handle this") and a `pending_approvers` set. The first analyst to approve/reject wins; the others see the panel update in real time (web socket from the Go backend). This avoids two analysts approving the same isolation simultaneously.
 
 For T3 two-party: the primary's identity is captured at primary-approve time and that analyst is *excluded* from the secondary pool to enforce two-person integrity.
 
@@ -417,7 +417,7 @@ For T3 two-party: the primary's identity is captured at primary-approve time and
 
 ### 5.6 The AI/analyst boundary in the request itself
 
-The AI agent emits an action request by calling a single tool, `request_action`, with: `action_type`, `targets`, `parameters`, `evidence_refs`, `rationale`, and `investigation_ref`. The Java backend constructs the `x-action` (in `REQUESTED`), creates the producing `x-interpretation` of type `action-request`, runs policy evaluation, and either advances state (`AUTO_APPROVE`) or surfaces in the analyst's review queue.
+The AI agent emits an action request by calling a single tool, `request_action`, with: `action_type`, `targets`, `parameters`, `evidence_refs`, `rationale`, and `investigation_ref` (canonical tool schema in 08-write-side-actions.md §2). The Go backend constructs the `x-action` (in `REQUESTED`), creates the producing `x-interpretation` of type `action-request`, runs policy evaluation, and either advances state (`AUTO_APPROVE`) or surfaces in the analyst's review queue.
 
 The AI does *not* know whether a policy auto-approved; from its perspective the call returns an action id and (if policy auto-approved) a synchronous result, otherwise pending status. This keeps AI prompts simple and means you can change policy without re-prompting the AI.
 
@@ -621,7 +621,7 @@ Properties this graph has:
 - The `x-action` custom STIX object is a new domain primitive, sibling to `x-hypothesis` and `x-prediction`. It needs to land in the domain model section listing custom STIX objects.
 - A new edge type, `reverses`, between two `x-action`s — though this is also expressible via the `reversal_of_ref` field, the edge form is useful for graph queries.
 - An assumed dependency on an "Asset Classification" thread for `asset_criticality`.
-- An assumed dependency on the capability layer for the actual tool dispatch and the contract for `adapter_request_id` correlation. The capability spec covers the read side; the write-side / action-dispatch contract is explicitly deferred to a follow-on thread (03-capability-layer.md §10). Until that thread lands, action dispatch in v0 prototype runs against fixture stubs only.
+- A dependency on the capability layer for the actual tool dispatch and the contract for `adapter_request_id` correlation. The capability spec (03-capability-layer.md) covers the read side; the write-side / action-dispatch contract — operation declaration, idempotency, `adapter_request_id` correlation — is specified in 08-write-side-actions.md. Until it is implemented, action dispatch in v0 prototype runs against fixture stubs only (08 §9).
 
 ---
 

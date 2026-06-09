@@ -11,6 +11,7 @@ import (
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/module"
 )
 
 // InvestigationView is the JSON shape returned to clients.
@@ -117,8 +118,13 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TenantID is the single OSS tenant. When the paid tenancy module is wired
+	// into the Backend, this becomes module.TenancyModule.ResolveTenant(ctx)
+	// (resolved from the JWT / claim routing); the schema and write path are
+	// already tenant-aware, so only this line changes.
 	env := aggregate.Envelope{
 		AggregateID: uuid.New(),
+		TenantID:    module.SingleTenantUUID,
 		Actor: aggregate.Actor{
 			PrincipalID: claims.Subject,
 		},
@@ -129,6 +135,7 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "create investigation: "+err.Error())
 		return
 	}
+	b.publishDeltas(res)
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(CreateInvestigationResponse{
@@ -140,6 +147,27 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		},
 		NewSequenceNo: res.NewSequenceNo,
 	})
+}
+
+// publishDeltas fans a command's committed events out to subscribed WebSocket
+// clients. Called after a successful Handle on the client-initiated write path
+// (design/05-component-architecture.md §9). System-emitted events from Temporal
+// workflows reach subscribers via the Postgres LISTEN/NOTIFY path (deferred to
+// v1); see the hub doc comment.
+func (b *Backend) publishDeltas(res aggregate.Result) {
+	if b.hub == nil {
+		return
+	}
+	for _, e := range res.AppliedEvents {
+		b.hub.publish(Delta{
+			Type:        "event",
+			AggregateID: e.AggregateID.String(),
+			EventType:   e.Type,
+			SequenceNo:  e.SequenceNo,
+			OccurredAt:  e.OccurredAt,
+			Payload:     e.Payload,
+		})
+	}
 }
 
 // investigationIDFromPath parses the UUID out of `/investigations/{id}`.

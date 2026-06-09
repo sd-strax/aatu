@@ -21,18 +21,27 @@ type AggregateID = uuid.UUID
 
 // Event is a single thing that happened to an aggregate. Persisted in
 // reckon_main.events.
+//
+// TenantID is the partition the event belongs to. Every node and event belongs
+// to exactly one tenant (01-domain-model.md §5); it is carried explicitly
+// rather than left to the column DEFAULT so the value is meaningful in the
+// read path and ready for per-tenant routing.
 type Event struct {
 	AggregateID AggregateID     `json:"aggregate_id"`
 	SequenceNo  int64           `json:"sequence_no"`
+	TenantID    uuid.UUID       `json:"tenant_id"`
 	Type        string          `json:"type"`
 	Payload     json.RawMessage `json:"payload"`
 	Actor       Actor           `json:"actor"`
 	OccurredAt  time.Time       `json:"occurred_at"`
 }
 
-// Envelope is the request-time metadata accompanying every command.
+// Envelope is the request-time metadata accompanying every command. TenantID is
+// resolved at the request boundary (module.TenancyModule.ResolveTenant; the OSS
+// default is module.SingleTenantUUID) and stamped onto every produced event.
 type Envelope struct {
 	AggregateID AggregateID
+	TenantID    uuid.UUID
 	Actor       Actor
 	OccurredAt  time.Time
 }

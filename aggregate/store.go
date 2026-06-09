@@ -36,10 +36,10 @@ func (s *Store) AppendEventTx(ctx context.Context, tx *sql.Tx, evt Event) error 
 		return fmt.Errorf("marshal actor: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO events (aggregate_id, sequence_no, event_type, payload, actor, occurred_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO events (aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`,
-		evt.AggregateID, evt.SequenceNo, evt.Type, []byte(evt.Payload), actorJSON, evt.OccurredAt,
+		evt.AggregateID, evt.SequenceNo, evt.TenantID, evt.Type, []byte(evt.Payload), actorJSON, evt.OccurredAt,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -71,7 +71,7 @@ func (s *Store) LatestSequenceTx(ctx context.Context, tx *sql.Tx, aggID Aggregat
 // Used by Replay and by callers wanting to materialize aggregate state.
 func (s *Store) LoadStream(ctx context.Context, aggID AggregateID) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, event_type, payload, actor, occurred_at
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at
 		FROM events
 		WHERE aggregate_id = $1
 		ORDER BY sequence_no
@@ -88,7 +88,7 @@ func (s *Store) LoadStream(ctx context.Context, aggID AggregateID) ([]Event, err
 // projections from cold.
 func (s *Store) LoadAll(ctx context.Context) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, event_type, payload, actor, occurred_at
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at
 		FROM events
 		ORDER BY occurred_at, aggregate_id, sequence_no
 	`)
@@ -107,7 +107,7 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 			payloadBytes []byte
 			actorBytes   []byte
 		)
-		if err := rows.Scan(&e.AggregateID, &e.SequenceNo, &e.Type, &payloadBytes, &actorBytes, &e.OccurredAt); err != nil {
+		if err := rows.Scan(&e.AggregateID, &e.SequenceNo, &e.TenantID, &e.Type, &payloadBytes, &actorBytes, &e.OccurredAt); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		e.Payload = json.RawMessage(payloadBytes)

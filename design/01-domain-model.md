@@ -6,7 +6,7 @@ PROJECT CONTEXT
   Product         "Cursor for SOC analysts" — an AI-native investigation
                   environment for threat hunters and IR responders.
 
-  Substrate       VS Code extension (primary), CLI (secondary), Java backend,
+  Substrate       VS Code extension (primary), CLI (secondary), Go backend,
                   Next.js frontend for collaboration views, and a transport-
                   neutral capability layer for tool federation (adapters:
                   MCP, native vendor APIs, custom integrations; see

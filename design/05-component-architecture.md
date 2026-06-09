@@ -24,7 +24,7 @@ This spec defines the component topology, deployment shapes, authentication, the
 - Action authorization machinery (04-action-authorization.md)
 - The knowledge service internals — corpora, embeddings, retrieval mechanics, authoring (06-knowledge-service.md)
 - Post-conclusion outputs — export bundle, IOC extraction, candidate SOPs, ticketing handoff (07-post-conclusion-outputs.md)
-- The write-side adapter contract — referenced where it matters; full design is its own deferred thread (03-capability-layer.md §10)
+- The write-side adapter contract — referenced where it matters; full design in 08-write-side-actions.md (symmetric twin of the read-side capability contract)
 - Detection authoring as a feature (deferred to v2+; data model accommodates it)
 - UI rendering specifics
 
@@ -65,7 +65,7 @@ These follow from the upstream specs and the decisions above. They are load-bear
 
 **4. Authorization is two-axis.** Per-request authorization runs in two gates: an RBAC gate evaluated against JWT claims (does this principal hold the role required to attempt this kind of operation?), and an action-authorization gate per 04-action-authorization.md (given that the principal can attempt it, does policy auto-approve, require two-party, or deny?). Solo subscribers collapse Gate 1 trivially because they hold every role in their personal tenant; Gate 2 still applies and the AI delegate constraints remain in force.
 
-**5. The capability layer is symmetric across reads and writes.** Read-side verbs and write-side action types share the same binding/adapter/parameter-mapping structure. An adapter is one or more JSON-RPC operations served by an out-of-process binary that reckon spawns. Adding a remediation tool — EDR, MDM, IdP, ticketing, comms, TI platform, or anything else — is "register an adapter, add bindings, declare an action descriptor." No structural change. The write-side contract is its own deferred thread (03-capability-layer.md §10) but the architecture is symmetric and known.
+**5. The capability layer is symmetric across reads and writes.** Read-side verbs and write-side action types share the same binding/adapter/parameter-mapping structure. An adapter is one or more JSON-RPC operations served by an out-of-process binary that reckon spawns. Adding a remediation tool — EDR, MDM, IdP, ticketing, comms, TI platform, or anything else — is "register an adapter, add bindings, declare an action descriptor." No structural change. The write-side contract is specified in 08-write-side-actions.md; the architecture is symmetric and known.
 
 **6. Knowledge service is a sibling, not a member, of the capability layer.** Capability layer outputs are world-facing observations: OcsfEvents and STIX nodes with telemetry provenance. Knowledge service outputs are internal context: SOPs the LLM consults during reasoning, similar past investigations the LLM cites in rationale. Keeping them separate preserves the capability layer's pure-I/O property and gives the knowledge service its own retention, privacy, and audit story.
 
@@ -181,7 +181,7 @@ The reckon-backend process does not require outbound network for normal investig
 
 ### 3.7 Tenant model
 
-The tenant primitive is always present in the data model. In OSS, `tenant_id` defaults to 1 — a single tenant whose namespace UUID is generated at `reckon init` and persisted in `reckon_main.tenants`. Immutable thereafter. The principal recorded on every event is the Keycloak-issued user id, carried in the JWT.
+The tenant primitive is always present in the data model: every tenant-scoped row carries a `tenant_id UUID NOT NULL`, defaulting to the single OSS tenant (`00000000-0000-0000-0000-000000000001`, "tenant 1"). That single tenant's namespace UUID is generated when its row is seeded into `reckon_main.tenants` and is immutable thereafter — `tenant_id` is the partition key; `namespace_uuid` is the per-tenant identity namespace (01-domain-model.md §3) and is a distinct value. The principal recorded on every event is the Keycloak-issued user id, carried in the JWT.
 
 When the paid tenancy module is on, the schema is unchanged; what activates is RLS enforcement, multi-realm or claim-routed Keycloak configuration, per-tenant vault paths, and the tenant lifecycle workflows. See §4.
 
@@ -204,7 +204,7 @@ The §6 read/write deployment shape gains a per-tenant config dimension:
 
 - **Read-side: analyst host.** Default. Per-analyst vendor credentials resolved locally; the backend never sees the credentials. Same shape as the OSS single-tenant case.
 - **Read-side: backend-side workers.** For tenants that require vendor credentials off analyst hosts (governance, IP allowlisting on vendor APIs, rate-limit pooling across analysts). Adapter binaries run as backend-side workers; analyst's extension calls the backend, which dispatches to the worker fleet. Vendor credentials live in vault, accessed only by the worker.
-- **Write-side: always backend-side at v0–v2.** Action dispatch runs as a Temporal workflow on the backend worker fleet. Vendor write credentials live in vault, accessed only during the workflow's execute step. The `adapter_request_id` correlated in `ActionDispatched` events (02-persistence.md §3) is the Temporal workflow id. The write-side adapter contract is its own deferred thread (03 §10).
+- **Write-side: always backend-side at v0–v2.** Action dispatch runs as a Temporal workflow on the backend worker fleet. Vendor write credentials live in vault, accessed only during the workflow's execute step. The `adapter_request_id` correlated in `ActionDispatched` events (02-persistence.md §3) is the Temporal workflow id. The write-side adapter contract is specified in 08-write-side-actions.md.
 
 "Backend-side" means the same backend that runs the aggregate. In reckon-hosted paid this is reckon's cloud; in self-hosted paid this is the customer's cloud. Either way the binary is the same.
 
@@ -344,7 +344,7 @@ Write actions execute as Temporal workflows (`ActionLifecycle`), which:
 4. Emit `ActionDispatched` and `ActionResulted` events with workflow context as the principal carrier
 5. On reversal request, instantiate a `ReversalSaga` workflow
 
-The write-side adapter contract (operation declaration, idempotency key, `adapter_request_id` correlation) is the subject of its own deferred thread (03 §10). This spec assumes its eventual landing without specifying it.
+The write-side adapter contract (operation declaration, idempotency key, `adapter_request_id` correlation) is specified in 08-write-side-actions.md. This spec owns only the dispatch topology — the `ActionLifecycle` workflow that invokes it.
 
 ### 6.3 Adapter discovery
 
@@ -723,8 +723,9 @@ These are deliberate non-decisions; the architecture accommodates either resolut
 
 - **01-domain-model.md** — every primitive this architecture instantiates: aggregate boundary, actor model, identity, lifecycle, edge types, custom STIX objects
 - **02-persistence.md** — event taxonomy, projections, side store mechanics, the optimistic-concurrency property the shared-investigation flow relies on
-- **03-capability-layer.md** — verbs, adapter classes, normalizers, identity computation, coverage classification, fixture mechanics, the deferred write-side adapter contract
+- **03-capability-layer.md** — read-side verbs, adapter classes, normalizers, identity computation, coverage classification, fixture mechanics
 - **04-action-authorization.md** — trust tiers, action types, policy machinery, two-axis evaluation, approval flows, the reversal model
+- **08-write-side-actions.md** — the write-side adapter contract this section's `ActionLifecycle` workflow dispatches through
 - **06-knowledge-service.md** — SOP corpus and concluded-investigation summary corpus, retrieval API, audit linkage
 - **07-post-conclusion-outputs.md** — export bundle, IOC extraction, candidate SOP generation, ticketing handoff, document generation, the post-conclusion Temporal workflow
 
