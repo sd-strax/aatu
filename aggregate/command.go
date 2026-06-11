@@ -169,6 +169,12 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return reopenEvents(env, state, c)
 	case ArchiveInvestigation:
 		return archiveEvents(env, state, c)
+	case AddMember:
+		return membershipEvent(env, state, EventTypeMemberAdded, MemberAdded(c))
+	case RemoveMember:
+		return membershipEvent(env, state, EventTypeMemberRemoved, MemberRemoved(c))
+	case AttachEvidence:
+		return membershipEvent(env, state, EventTypeEvidenceAttached, EvidenceAttached(c))
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd.Kind())
 	}

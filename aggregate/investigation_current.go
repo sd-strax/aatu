@@ -71,10 +71,12 @@ func (InvestigationCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt 
 	case EventTypeArchived:
 		return setStatus(ctx, tx, evt, StatusArchived)
 
-	case EventTypeInterpretationRecorded:
-		// The reasoning thread is a separate projection (later); here we only
-		// advance the cursor so last_event_sequence reflects the true latest
-		// event after a paired transition.
+	case EventTypeInterpretationRecorded,
+		EventTypeMemberAdded, EventTypeMemberRemoved, EventTypeEvidenceAttached:
+		// These don't change basic state (the reasoning thread and membership
+		// projections land separately); advance the cursor so
+		// last_event_sequence reflects the true latest event — important after a
+		// paired transition, whose interpretation is the last event written.
 		_, err := tx.ExecContext(ctx, `
 			UPDATE investigation_current
 			SET last_event_sequence = $2, updated_at = $3
