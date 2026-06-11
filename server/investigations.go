@@ -123,8 +123,9 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 	// (resolved from the JWT / claim routing); the schema and write path are
 	// already tenant-aware, so only this line changes.
 	env := aggregate.Envelope{
-		AggregateID: uuid.New(),
-		TenantID:    module.SingleTenantUUID,
+		AggregateID:   uuid.New(),
+		TenantID:      module.SingleTenantUUID,
+		CorrelationID: uuid.New(),
 		Actor: aggregate.Actor{
 			PrincipalID: claims.Subject,
 		},

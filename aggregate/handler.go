@@ -53,12 +53,18 @@ func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (Result
 		}
 	}()
 
-	currentSeq, err := h.store.LatestSequenceTx(ctx, tx, env.AggregateID)
+	// Fold the stream in-transaction so transition legality is checked against
+	// authoritative state under the same snapshot as the subsequent append.
+	stream, err := h.store.LoadStreamTx(ctx, tx, env.AggregateID)
+	if err != nil {
+		return Result{}, err
+	}
+	state, err := foldState(stream)
 	if err != nil {
 		return Result{}, err
 	}
 
-	events, err := applyCommand(env, cmd, currentSeq)
+	events, err := applyCommand(env, cmd, state)
 	if err != nil {
 		return Result{}, err
 	}
@@ -79,7 +85,7 @@ func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (Result
 	}
 	committed = true
 
-	newSeq := currentSeq
+	newSeq := state.Seq
 	if n := len(events); n > 0 {
 		newSeq = events[n-1].SequenceNo
 	}
@@ -121,7 +127,7 @@ func (h *Handler) Replay(ctx context.Context) error {
 	// exposes via LoadAll, but we run it inside the replay tx for snapshot
 	// consistency with the projection writes.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id
 		FROM events
 		ORDER BY occurred_at, aggregate_id, sequence_no
 	`)

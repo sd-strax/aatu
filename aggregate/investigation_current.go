@@ -15,6 +15,7 @@ type InvestigationCurrent struct {
 	AggregateID       AggregateID
 	Title             string
 	Status            string
+	ConclusionRef     string // empty unless concluded
 	LastEventSequence int64
 }
 
@@ -49,11 +50,75 @@ func (InvestigationCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt 
 			return fmt.Errorf("upsert investigation_current: %w", err)
 		}
 		return nil
+
+	case EventTypeStatusChanged:
+		var p InvestigationStatusChanged
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal InvestigationStatusChanged payload: %w", err)
+		}
+		return setStatus(ctx, tx, evt, p.To)
+
+	case EventTypeConcluded:
+		var p InvestigationConcluded
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal InvestigationConcluded payload: %w", err)
+		}
+		return setStatusAndConclusion(ctx, tx, evt, StatusConcluded, sql.NullString{String: p.ReportRef, Valid: true})
+
+	case EventTypeReopened:
+		return setStatusAndConclusion(ctx, tx, evt, StatusActive, sql.NullString{}) // clears conclusion_ref
+
+	case EventTypeArchived:
+		return setStatus(ctx, tx, evt, StatusArchived)
+
+	case EventTypeInterpretationRecorded:
+		// The reasoning thread is a separate projection (later); here we only
+		// advance the cursor so last_event_sequence reflects the true latest
+		// event after a paired transition.
+		_, err := tx.ExecContext(ctx, `
+			UPDATE investigation_current
+			SET last_event_sequence = $2, updated_at = $3
+			WHERE aggregate_id = $1
+		`, evt.AggregateID, evt.SequenceNo, evt.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("advance investigation_current cursor: %w", err)
+		}
+		return nil
+
 	default:
 		// Unknown event type for this projection — no-op. Other projections
 		// may consume it.
 		return nil
 	}
+}
+
+// setStatus updates status + the last-event cursor, leaving conclusion_ref
+// untouched (used by transitions that don't change the conclusion).
+func setStatus(ctx context.Context, tx *sql.Tx, evt Event, status string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE investigation_current
+		SET status = $2, last_event_sequence = $3, updated_at = $4
+		WHERE aggregate_id = $1
+	`, evt.AggregateID, status, evt.SequenceNo, evt.OccurredAt)
+	if err != nil {
+		return fmt.Errorf("update investigation_current status: %w", err)
+	}
+	return nil
+}
+
+// setStatusAndConclusion updates status, conclusion_ref, and the cursor. A Valid
+// conclusion sets the ref (on conclude); an invalid one clears it to NULL (on
+// reopen).
+func setStatusAndConclusion(ctx context.Context, tx *sql.Tx, evt Event, status string, conclusion sql.NullString) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE investigation_current
+		SET status = $2, conclusion_ref = $3, last_event_sequence = $4, updated_at = $5
+		WHERE aggregate_id = $1
+	`, evt.AggregateID, status, conclusion, evt.SequenceNo, evt.OccurredAt)
+	if err != nil {
+		return fmt.Errorf("update investigation_current status+conclusion: %w", err)
+	}
+	return nil
 }
 
 // Reset truncates the projection table. Used by Replay before re-applying.
@@ -69,10 +134,12 @@ func (InvestigationCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) erro
 // aggregate, or sql.ErrNoRows if no event has yet been projected.
 func LoadInvestigationCurrent(ctx context.Context, db *sql.DB, aggID AggregateID) (InvestigationCurrent, error) {
 	var ic InvestigationCurrent
+	var conclusionRef sql.NullString
 	err := db.QueryRowContext(ctx, `
-		SELECT aggregate_id, title, status, last_event_sequence
+		SELECT aggregate_id, title, status, conclusion_ref, last_event_sequence
 		FROM investigation_current
 		WHERE aggregate_id = $1
-	`, aggID).Scan(&ic.AggregateID, &ic.Title, &ic.Status, &ic.LastEventSequence)
+	`, aggID).Scan(&ic.AggregateID, &ic.Title, &ic.Status, &conclusionRef, &ic.LastEventSequence)
+	ic.ConclusionRef = conclusionRef.String
 	return ic, err
 }
