@@ -39,12 +39,12 @@ func (InvestigationCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt 
 			INSERT INTO investigation_current (
 				aggregate_id, tenant_id, title, status, created_at,
 				last_event_sequence, updated_at
-			) VALUES ($1, $2, $3, 'open', $4, $5, $4)
+			) VALUES ($1, $2, $3, $6, $4, $5, $4)
 			ON CONFLICT (aggregate_id) DO UPDATE SET
 				title               = EXCLUDED.title,
 				last_event_sequence = EXCLUDED.last_event_sequence,
 				updated_at          = EXCLUDED.updated_at
-		`, evt.AggregateID, evt.TenantID, p.Title, evt.OccurredAt, evt.SequenceNo)
+		`, evt.AggregateID, evt.TenantID, p.Title, evt.OccurredAt, evt.SequenceNo, StatusDraft)
 		if err != nil {
 			return fmt.Errorf("upsert investigation_current: %w", err)
 		}

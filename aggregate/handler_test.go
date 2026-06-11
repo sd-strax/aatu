@@ -149,8 +149,8 @@ func TestHandleCreateInvestigation(t *testing.T) {
 	if ic.Title != "PHISH-2026-0042" {
 		t.Errorf("projection Title = %q; want %q", ic.Title, "PHISH-2026-0042")
 	}
-	if ic.Status != "open" {
-		t.Errorf("projection Status = %q; want %q", ic.Status, "open")
+	if ic.Status != StatusDraft {
+		t.Errorf("projection Status = %q; want %q", ic.Status, StatusDraft)
 	}
 	if ic.LastEventSequence != 1 {
 		t.Errorf("LastEventSequence = %d; want 1", ic.LastEventSequence)

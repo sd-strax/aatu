@@ -142,7 +142,7 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		InvestigationView: InvestigationView{
 			AggregateID:       res.AggregateID.String(),
 			Title:             req.Title,
-			Status:            "open",
+			Status:            aggregate.StatusDraft,
 			LastEventSequence: res.NewSequenceNo,
 		},
 		NewSequenceNo: res.NewSequenceNo,
