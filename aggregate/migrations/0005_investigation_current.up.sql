@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS investigation_current (
     aggregate_id        UUID PRIMARY KEY,
     tenant_id           UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     title               TEXT NOT NULL,
-    status              TEXT NOT NULL DEFAULT 'open',
+    status              TEXT NOT NULL DEFAULT 'draft',
     created_at          TIMESTAMP WITH TIME ZONE NOT NULL,
     last_event_sequence BIGINT NOT NULL,
     updated_at          TIMESTAMP WITH TIME ZONE NOT NULL

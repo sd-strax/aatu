@@ -273,6 +273,8 @@ A status state machine.
 
 **States:** `DRAFT`, `ACTIVE`, `PAUSED`, `CONCLUDED`, `ARCHIVED`.
 
+`DRAFT` is the entry state: the investigation has a seed and can be reasoned over freely — hypotheses, evidence, notes, the whole interpretation layer — but is **not yet cleared to act on the outside world**. External (T2+) action requests are refused until it is activated (04-action-authorization.md §T1). This makes activation an explicit, auditable step rather than a side effect of creation — relevant when the agent proposes an investigation off an alert and it awaits a human picking it up. `ACTIVE` is the working state; `PAUSED` is a reversible hold; `CONCLUDED` carries a Report; `ARCHIVED` is terminal.
+
 **Transitions:**
 
 ```

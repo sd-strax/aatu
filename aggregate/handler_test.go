@@ -106,10 +106,11 @@ var testTenantID = uuid.New()
 
 func newTestEnvelope(actorID string) Envelope {
 	return Envelope{
-		AggregateID: uuid.New(),
-		TenantID:    testTenantID,
-		Actor:       Actor{PrincipalID: actorID},
-		OccurredAt:  time.Now().UTC().Truncate(time.Microsecond),
+		AggregateID:   uuid.New(),
+		TenantID:      testTenantID,
+		CorrelationID: uuid.New(),
+		Actor:         Actor{PrincipalID: actorID},
+		OccurredAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 }
 
@@ -149,8 +150,8 @@ func TestHandleCreateInvestigation(t *testing.T) {
 	if ic.Title != "PHISH-2026-0042" {
 		t.Errorf("projection Title = %q; want %q", ic.Title, "PHISH-2026-0042")
 	}
-	if ic.Status != "open" {
-		t.Errorf("projection Status = %q; want %q", ic.Status, "open")
+	if ic.Status != StatusDraft {
+		t.Errorf("projection Status = %q; want %q", ic.Status, StatusDraft)
 	}
 	if ic.LastEventSequence != 1 {
 		t.Errorf("LastEventSequence = %d; want 1", ic.LastEventSequence)
@@ -338,45 +339,63 @@ func TestLoadStream(t *testing.T) {
 // Pure unit-test on the applyCommand layer (no DB, no -short skip).
 func TestApplyCommand_CreateInvestigationOnExistingAggregate(t *testing.T) {
 	env := Envelope{
-		AggregateID: uuid.New(),
-		TenantID:    testTenantID,
-		Actor:       Actor{PrincipalID: "alice"},
-		OccurredAt:  time.Now(),
+		AggregateID:   uuid.New(),
+		TenantID:      testTenantID,
+		CorrelationID: uuid.New(),
+		Actor:         Actor{PrincipalID: "alice"},
+		OccurredAt:    time.Now(),
 	}
-	_, err := applyCommand(env, CreateInvestigation{Title: "x"}, 5)
+	existing := aggregateState{Seq: 5, Exists: true, Status: StatusActive}
+	_, err := applyCommand(env, CreateInvestigation{Title: "x"}, existing)
 	if err == nil {
 		t.Fatal("expected error for CreateInvestigation on existing aggregate")
 	}
 }
 
 func TestApplyCommand_ValidatesEnvelope(t *testing.T) {
+	fresh := aggregateState{}
+
 	// Missing principal
 	_, err := applyCommand(Envelope{
-		AggregateID: uuid.New(),
-		TenantID:    testTenantID,
-		OccurredAt:  time.Now(),
-	}, CreateInvestigation{Title: "x"}, 0)
+		AggregateID:   uuid.New(),
+		TenantID:      testTenantID,
+		CorrelationID: uuid.New(),
+		OccurredAt:    time.Now(),
+	}, CreateInvestigation{Title: "x"}, fresh)
 	if err == nil {
 		t.Error("expected envelope validation failure for missing PrincipalID")
 	}
 
 	// Missing tenant
 	_, err = applyCommand(Envelope{
-		AggregateID: uuid.New(),
-		Actor:       Actor{PrincipalID: "alice"},
-		OccurredAt:  time.Now(),
-	}, CreateInvestigation{Title: "x"}, 0)
+		AggregateID:   uuid.New(),
+		CorrelationID: uuid.New(),
+		Actor:         Actor{PrincipalID: "alice"},
+		OccurredAt:    time.Now(),
+	}, CreateInvestigation{Title: "x"}, fresh)
 	if err == nil {
 		t.Error("expected envelope validation failure for missing TenantID")
 	}
 
-	// Empty title
+	// Missing correlation id
 	_, err = applyCommand(Envelope{
 		AggregateID: uuid.New(),
 		TenantID:    testTenantID,
 		Actor:       Actor{PrincipalID: "alice"},
 		OccurredAt:  time.Now(),
-	}, CreateInvestigation{Title: ""}, 0)
+	}, CreateInvestigation{Title: "x"}, fresh)
+	if err == nil {
+		t.Error("expected envelope validation failure for missing CorrelationID")
+	}
+
+	// Empty title
+	_, err = applyCommand(Envelope{
+		AggregateID:   uuid.New(),
+		TenantID:      testTenantID,
+		CorrelationID: uuid.New(),
+		Actor:         Actor{PrincipalID: "alice"},
+		OccurredAt:    time.Now(),
+	}, CreateInvestigation{Title: ""}, fresh)
 	if err == nil {
 		t.Error("expected command validation failure for empty title")
 	}

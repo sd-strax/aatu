@@ -36,10 +36,10 @@ func (s *Store) AppendEventTx(ctx context.Context, tx *sql.Tx, evt Event) error 
 		return fmt.Errorf("marshal actor: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO events (aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO events (aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`,
-		evt.AggregateID, evt.SequenceNo, evt.TenantID, evt.Type, []byte(evt.Payload), actorJSON, evt.OccurredAt,
+		evt.AggregateID, evt.SequenceNo, evt.TenantID, evt.Type, []byte(evt.Payload), actorJSON, evt.OccurredAt, evt.CorrelationID,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -71,7 +71,7 @@ func (s *Store) LatestSequenceTx(ctx context.Context, tx *sql.Tx, aggID Aggregat
 // Used by Replay and by callers wanting to materialize aggregate state.
 func (s *Store) LoadStream(ctx context.Context, aggID AggregateID) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id
 		FROM events
 		WHERE aggregate_id = $1
 		ORDER BY sequence_no
@@ -83,12 +83,30 @@ func (s *Store) LoadStream(ctx context.Context, aggID AggregateID) ([]Event, err
 	return scanEvents(rows)
 }
 
+// LoadStreamTx returns all events for the given aggregate in sequence order,
+// reading inside the supplied transaction. The Handler uses it to fold current
+// aggregate state (status, conclusion) for command validation under the same
+// snapshot as the subsequent append.
+func (s *Store) LoadStreamTx(ctx context.Context, tx *sql.Tx, aggID AggregateID) ([]Event, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id
+		FROM events
+		WHERE aggregate_id = $1
+		ORDER BY sequence_no
+	`, aggID)
+	if err != nil {
+		return nil, fmt.Errorf("query stream (tx): %w", err)
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
 // LoadAll returns every event across every aggregate, ordered by
 // occurred_at then (aggregate_id, sequence_no). Used by Replay to rebuild
 // projections from cold.
 func (s *Store) LoadAll(ctx context.Context) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id
 		FROM events
 		ORDER BY occurred_at, aggregate_id, sequence_no
 	`)
@@ -107,7 +125,7 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 			payloadBytes []byte
 			actorBytes   []byte
 		)
-		if err := rows.Scan(&e.AggregateID, &e.SequenceNo, &e.TenantID, &e.Type, &payloadBytes, &actorBytes, &e.OccurredAt); err != nil {
+		if err := rows.Scan(&e.AggregateID, &e.SequenceNo, &e.TenantID, &e.Type, &payloadBytes, &actorBytes, &e.OccurredAt, &e.CorrelationID); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		e.Payload = json.RawMessage(payloadBytes)
