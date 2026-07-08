@@ -96,7 +96,10 @@ func (b *Backend) handleStream(w http.ResponseWriter, r *http.Request, verifier 
 			return
 		case d, ok := <-sub.ch:
 			if !ok {
-				_ = conn.Close(websocket.StatusNormalClosure, "hub closed")
+				// Backend.Stop closed the hub (server shutting down) — the
+				// GoingAway code tells well-behaved clients to reconnect
+				// later rather than treat it as an auth failure.
+				_ = conn.Close(websocket.StatusGoingAway, "server shutting down")
 				return
 			}
 			if werr := writeFrame(ctx, conn, d); werr != nil {

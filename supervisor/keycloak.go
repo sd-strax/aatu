@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,10 +58,18 @@ type KeycloakConfig struct {
 // or a delivered tarball), no downloads happen. The supervisor's behavior is
 // the same; only the source of the binaries differs.
 type Keycloak struct {
-	cfg  KeycloakConfig
+	cfg KeycloakConfig
+
+	mu   sync.Mutex // guards cmd/logF; Health runs concurrently with watcher Stop/Start
 	cmd  *exec.Cmd
 	logF *os.File
 }
+
+// healthHTTPClient bounds every Keycloak health/readiness probe. Probes run
+// on the watcher goroutine and in /status requests, where an unbounded
+// http.DefaultClient call against a wedged management port would hang the
+// caller indefinitely.
+var healthHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // NewKeycloak constructs the Keycloak component (not yet started).
 // Defaults: HTTPPort=8543, ManagementPort=9543, RealmName=branding.CLI,
@@ -112,15 +121,18 @@ func (k *Keycloak) Start(ctx context.Context) error {
 // Stop sends SIGTERM, waits up to ctx's deadline (or 30s default) for clean
 // exit, then SIGKILLs. Idempotent.
 func (k *Keycloak) Stop(ctx context.Context) error {
-	if k.cmd == nil {
+	k.mu.Lock()
+	cmd := k.cmd
+	logF := k.logF
+	k.cmd = nil
+	k.logF = nil
+	k.mu.Unlock()
+	if cmd == nil {
 		return nil
 	}
-	cmd := k.cmd
-	k.cmd = nil
 	defer func() {
-		if k.logF != nil {
-			_ = k.logF.Close()
-			k.logF = nil
+		if logF != nil {
+			_ = logF.Close()
 		}
 	}()
 
@@ -152,7 +164,10 @@ func (k *Keycloak) Stop(ctx context.Context) error {
 
 // Health probes the management /health/ready endpoint.
 func (k *Keycloak) Health(ctx context.Context) HealthStatus {
-	if k.cmd == nil {
+	k.mu.Lock()
+	cmd := k.cmd
+	k.mu.Unlock()
+	if cmd == nil {
 		return HealthStatus{Ready: false, Message: "not started"}
 	}
 	url := fmt.Sprintf("http://localhost:%d/health/ready", k.cfg.ManagementPort)
@@ -160,7 +175,7 @@ func (k *Keycloak) Health(ctx context.Context) HealthStatus {
 	if err != nil {
 		return HealthStatus{Ready: false, Message: err.Error()}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := healthHTTPClient.Do(req)
 	if err != nil {
 		return HealthStatus{Ready: false, Message: err.Error()}
 	}
@@ -317,8 +332,10 @@ func (k *Keycloak) spawn() error {
 		_ = logF.Close()
 		return fmt.Errorf("spawn keycloak: %w", err)
 	}
+	k.mu.Lock()
 	k.cmd = cmd
 	k.logF = logF
+	k.mu.Unlock()
 	return nil
 }
 
@@ -335,7 +352,7 @@ func (k *Keycloak) waitForReady(ctx context.Context) error {
 			return err
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := healthHTTPClient.Do(req)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
@@ -352,17 +369,21 @@ func (k *Keycloak) waitForReady(ctx context.Context) error {
 }
 
 func (k *Keycloak) kill() error {
-	if k.cmd == nil || k.cmd.Process == nil {
+	k.mu.Lock()
+	cmd := k.cmd
+	logF := k.logF
+	k.cmd = nil
+	k.logF = nil
+	k.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	if err := k.cmd.Process.Kill(); err != nil {
+	if err := cmd.Process.Kill(); err != nil {
 		return err
 	}
-	_, _ = k.cmd.Process.Wait()
-	k.cmd = nil
-	if k.logF != nil {
-		_ = k.logF.Close()
-		k.logF = nil
+	_, _ = cmd.Process.Wait()
+	if logF != nil {
+		_ = logF.Close()
 	}
 	return nil
 }

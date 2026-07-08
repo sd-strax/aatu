@@ -70,6 +70,13 @@ type Keycloak struct {
 	// Realm is the bootstrap realm imported on first start.
 	// Default branding.CLI (e.g. "reckon").
 	Realm string `yaml:"realm"`
+	// ClientID, when set, locks the backend's JWT audience check to this
+	// client: tokens whose aud claim does not include it are rejected.
+	// Default empty = audience check off (dev/OSS-solo). The bundled realm's
+	// "reckon" client carries an audience mapper so `client_id: reckon` works
+	// out of the box on fresh installs; realms imported before the mapper
+	// existed need the mapper added in the Keycloak admin console first.
+	ClientID string `yaml:"client_id"`
 }
 
 // Backend configures the in-process backend.
@@ -136,10 +143,18 @@ func configEnvVar() string {
 }
 
 // Load reads configuration from $<CLI>_CONFIG, ~/<branding.DataDir>/config.yaml,
-// or returns Default() if neither exists. Errors only on malformed YAML.
+// or returns Default() if neither exists.
+//
+// A missing file at the *default* path means "not configured" and yields
+// Default(). A missing file at an *explicitly set* $<CLI>_CONFIG path is an
+// error — a typo'd path silently booting defaults is exactly the failure a
+// user can't see.
 func Load() (Config, error) {
+	explicit := false
 	path := os.Getenv(configEnvVar())
-	if path == "" {
+	if path != "" {
+		explicit = true
+	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return Default(), nil
@@ -149,6 +164,9 @@ func Load() (Config, error) {
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		if explicit {
+			return Config{}, fmt.Errorf("%s points at %s, which does not exist", configEnvVar(), path)
+		}
 		return Default(), nil
 	}
 	if err != nil {

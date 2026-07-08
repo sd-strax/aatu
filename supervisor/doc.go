@@ -4,8 +4,9 @@
 // them in reverse order, and rolls up health checks across all of them.
 //
 // Cascading restart rules are configured per Component via RestartPolicy.
-// Today this records the intent; the per-component watcher that observes
-// unexpected exits and applies the policy lands in Phase A.2.5.
+// Run starts a per-component watcher goroutine that polls health and applies
+// the policy: restart with a budgeted sliding window (RestartOnExit) or
+// terminate the supervisor (FatalOnExit).
 //
 // See design/05-component-architecture.md §3.1 for the runtime topology
 // this implements, and implementation/phase-a-backbone.md §A.2 for the

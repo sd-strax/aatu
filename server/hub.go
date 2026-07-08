@@ -74,6 +74,22 @@ func (h *hub) unsubscribe(s *subscription) {
 	h.mu.Unlock()
 }
 
+// closeAll removes and closes every subscription. Called by Backend.Stop:
+// WebSocket connections are hijacked from the http.Server, so Shutdown
+// neither closes them nor cancels their request contexts — without this,
+// active streams (and their goroutines) would outlive the backend across
+// watcher-driven restarts. Each stream handler observes its channel close
+// and tears the connection down. The hub itself stays usable; connections
+// accepted after a restart subscribe as normal.
+func (h *hub) closeAll() {
+	h.mu.Lock()
+	for s := range h.subs {
+		delete(h.subs, s)
+		close(s.ch)
+	}
+	h.mu.Unlock()
+}
+
 // publish fans a delta out to every matching subscriber. A subscriber whose
 // buffer is full is skipped rather than blocking the hub: the dropped frame is
 // recoverable because the client rehydrates from the projection on reconnect

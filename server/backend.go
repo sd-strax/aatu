@@ -146,7 +146,9 @@ func (b *Backend) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts the HTTP server down within ctx's deadline.
+// Stop gracefully shuts the HTTP server down within ctx's deadline. Active
+// WebSocket streams are torn down explicitly via the hub — they are hijacked
+// connections, which http.Server.Shutdown neither closes nor waits for.
 func (b *Backend) Stop(ctx context.Context) error {
 	b.mu.Lock()
 	srv := b.srv
@@ -157,6 +159,9 @@ func (b *Backend) Stop(ctx context.Context) error {
 
 	if srv == nil {
 		return nil
+	}
+	if b.hub != nil {
+		b.hub.closeAll()
 	}
 	return srv.Shutdown(ctx)
 }

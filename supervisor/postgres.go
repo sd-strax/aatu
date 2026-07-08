@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
@@ -48,13 +49,15 @@ type DatabaseSpec struct {
 
 // Postgres is a Component wrapping fergusstrange/embedded-postgres.
 //
-// pgvector availability is a deferred concern (D14): the vanilla embedded
+// pgvector availability is a deferred concern: the vanilla embedded
 // distribution does not ship pgvector. Phase G (embeddings) bundles a
 // pgvector-enabled Pg or installs the .so files at first run. Until then
 // the embedding-bearing tables use TEXT placeholders.
 type Postgres struct {
 	cfg PostgresConfig
-	pg  *embeddedpostgres.EmbeddedPostgres
+
+	mu sync.Mutex // guards pg; Health runs concurrently with watcher Stop/Start
+	pg *embeddedpostgres.EmbeddedPostgres
 }
 
 // NewPostgres constructs the Postgres component (not yet started).
@@ -91,25 +94,34 @@ func (p *Postgres) Start(ctx context.Context) error {
 		Username("reckon").
 		Password("reckon") // local-only credentials; for laptop / single-node use
 
-	p.pg = embeddedpostgres.NewDatabase(cfg)
-	if err := p.pg.Start(); err != nil {
+	// Build + start on a local before publishing, so Health never observes a
+	// half-started instance and a failed Start leaves the component cleanly
+	// "not started".
+	pg := embeddedpostgres.NewDatabase(cfg)
+	if err := pg.Start(); err != nil {
 		return fmt.Errorf("start postgres: %w", err)
 	}
 
 	if err := p.ensureDatabases(ctx); err != nil {
-		_ = p.pg.Stop()
+		_ = pg.Stop()
 		return fmt.Errorf("ensure databases: %w", err)
 	}
+
+	p.mu.Lock()
+	p.pg = pg
+	p.mu.Unlock()
 	return nil
 }
 
 // Stop the embedded Pg process. Idempotent — multiple calls return nil.
 func (p *Postgres) Stop(_ context.Context) error {
-	if p.pg == nil {
-		return nil
-	}
+	p.mu.Lock()
 	pg := p.pg
 	p.pg = nil
+	p.mu.Unlock()
+	if pg == nil {
+		return nil
+	}
 	if err := pg.Stop(); err != nil {
 		return fmt.Errorf("stop postgres: %w", err)
 	}
@@ -118,7 +130,10 @@ func (p *Postgres) Stop(_ context.Context) error {
 
 // Health returns Ready=true when the maintenance database accepts a ping.
 func (p *Postgres) Health(ctx context.Context) HealthStatus {
-	if p.pg == nil {
+	p.mu.Lock()
+	pg := p.pg
+	p.mu.Unlock()
+	if pg == nil {
 		return HealthStatus{Ready: false, Message: "not started"}
 	}
 	db, err := p.open(ctx, "postgres")
@@ -171,8 +186,8 @@ func (p *Postgres) ensureDatabases(ctx context.Context) error {
 	}
 
 	// Clean up legacy databases that no longer correspond to an active
-	// component: aatu_temporal from pre-D15 installs (Temporal now uses
-	// its own SQLite store), and aatu_* databases from pre-rename installs
+	// component: aatu_temporal from installs that predate Temporal moving to
+	// its own SQLite store, and aatu_* databases from pre-rename installs
 	// (the project was previously named "aatu"). Idempotent: no-op when
 	// the database is absent. Errors are non-fatal — drop failure shouldn't
 	// block startup.

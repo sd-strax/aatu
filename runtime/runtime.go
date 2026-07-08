@@ -152,7 +152,8 @@ func serve(cfg config.Config) error {
 		TemporalHostPort: fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
 		KeycloakIssuer: fmt.Sprintf("http://localhost:%d/realms/%s",
 			cfg.Keycloak.HTTPPort, cfg.Keycloak.Realm),
-		Handler: handler,
+		KeycloakClientID: cfg.Keycloak.ClientID,
+		Handler:          handler,
 	}, sup)
 	sup.Register(backend, supervisor.RestartOnExit)
 

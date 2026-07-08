@@ -36,7 +36,20 @@
       "serviceAccountsEnabled": false,
       "redirectUris": ["http://localhost:*", "vscode://*"],
       "webOrigins": ["+"],
-      "protocol": "openid-connect"
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "reckon-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "reckon",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "users": [

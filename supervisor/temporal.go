@@ -3,8 +3,11 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/testsuite"
@@ -41,7 +44,9 @@ type TemporalConfig struct {
 // Temporal Cloud or a self-hosted cluster and don't bring up Temporal via
 // this supervisor at all.
 type Temporal struct {
-	cfg    TemporalConfig
+	cfg TemporalConfig
+
+	mu     sync.Mutex // guards server; Health runs concurrently with watcher Stop/Start
 	server *testsuite.DevServer
 }
 
@@ -101,41 +106,54 @@ func (t *Temporal) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("start temporal dev server: %w", err)
 	}
+	t.mu.Lock()
 	t.server = server
+	t.mu.Unlock()
 	return nil
 }
 
 // Stop the dev server. Idempotent — multiple calls return nil.
 func (t *Temporal) Stop(_ context.Context) error {
-	if t.server == nil {
-		return nil
-	}
+	t.mu.Lock()
 	server := t.server
 	t.server = nil
+	t.mu.Unlock()
+	if server == nil {
+		return nil
+	}
 	if err := server.Stop(); err != nil {
 		return fmt.Errorf("stop temporal: %w", err)
 	}
 	return nil
 }
 
-// Health returns Ready=true once StartDevServer has succeeded. The frontend
-// is reachable at that point; deeper liveness probes (workflow service
-// gRPC health check) can land later if useful.
-func (t *Temporal) Health(_ context.Context) HealthStatus {
-	if t.server == nil {
+// Health probes the dev server's frontend port with a short TCP dial. A
+// crashed dev-server process must report not-ready here, or the watcher's
+// RestartOnExit policy never fires — "started once" is not liveness.
+func (t *Temporal) Health(ctx context.Context) HealthStatus {
+	hostPort := t.FrontendHostPort()
+	if hostPort == "" {
 		return HealthStatus{Ready: false, Message: "not started"}
 	}
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", hostPort)
+	if err != nil {
+		return HealthStatus{Ready: false, Message: fmt.Sprintf("frontend %s unreachable: %v", hostPort, err)}
+	}
+	_ = conn.Close()
 	return HealthStatus{
-		Ready: true,
-		Message: fmt.Sprintf("frontend %s, namespace %s",
-			t.server.FrontendHostPort(), t.cfg.Namespace),
+		Ready:   true,
+		Message: fmt.Sprintf("frontend %s, namespace %s", hostPort, t.cfg.Namespace),
 	}
 }
 
 // FrontendHostPort returns the host:port string of the dev server's frontend
 // (e.g., "localhost:7233"). Useful for downstream consumers (workers, the
 // reckon-backend) to construct Temporal clients without re-deriving from config.
+// Empty until Start has succeeded.
 func (t *Temporal) FrontendHostPort() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.server == nil {
 		return ""
 	}

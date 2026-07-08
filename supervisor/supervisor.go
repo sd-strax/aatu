@@ -34,14 +34,13 @@ type HealthStatus struct {
 }
 
 // RestartPolicy tells the supervisor how to react when a Component exits
-// unexpectedly (not via a Stop call).
-//
-// Today this records intent; the per-component watcher lands in A.2.5.
+// unexpectedly (not via a Stop call). The per-component watcher goroutine
+// started by Run acts on it.
 type RestartPolicy int
 
 const (
-	// RestartOnExit attempts to restart the Component up to MaxRestarts times
-	// within a sliding window before escalating.
+	// RestartOnExit attempts to restart the Component up to its restart
+	// budget within a sliding window before escalating.
 	RestartOnExit RestartPolicy = iota
 
 	// FatalOnExit halts the entire supervisor when this Component exits
@@ -53,7 +52,11 @@ const (
 // Spec wraps a Component with its supervision policy.
 type Spec struct {
 	Component
-	Policy      RestartPolicy
+	Policy RestartPolicy
+
+	// MaxRestarts is the per-component restart budget within the sliding
+	// window before the watcher escalates to fatal. 0 means the package
+	// default (watchMaxRestarts).
 	MaxRestarts int
 }
 
@@ -69,10 +72,16 @@ func New() *Supervisor {
 	return &Supervisor{}
 }
 
-// Register adds a Component. Components start in the order they are
-// registered and stop in reverse order. Default MaxRestarts is 3.
+// Register adds a Component with the default restart budget. Components
+// start in the order they are registered and stop in reverse order.
 func (s *Supervisor) Register(c Component, policy RestartPolicy) {
-	s.specs = append(s.specs, Spec{Component: c, Policy: policy, MaxRestarts: 3})
+	s.RegisterSpec(Spec{Component: c, Policy: policy})
+}
+
+// RegisterSpec adds a Component with an explicit supervision Spec, for
+// callers that need a non-default restart budget.
+func (s *Supervisor) RegisterSpec(spec Spec) {
+	s.specs = append(s.specs, spec)
 }
 
 // Start every registered component in order. On the first failure,
@@ -198,6 +207,11 @@ func (s *Supervisor) watch(ctx context.Context, fatalCancel context.CancelFunc, 
 	ticker := time.NewTicker(watchInterval)
 	defer ticker.Stop()
 
+	maxRestarts := spec.MaxRestarts
+	if maxRestarts == 0 {
+		maxRestarts = watchMaxRestarts
+	}
+
 	consecutiveMisses := 0
 	var restartTimes []time.Time
 
@@ -229,9 +243,9 @@ func (s *Supervisor) watch(ctx context.Context, fatalCancel context.CancelFunc, 
 			return
 		case RestartOnExit:
 			restartTimes = trimRestartHistory(restartTimes)
-			if len(restartTimes) >= watchMaxRestarts {
+			if len(restartTimes) >= maxRestarts {
 				log.Printf("supervisor: %s restarted %d times within %s — escalating to fatal",
-					spec.Name(), watchMaxRestarts, watchRestartWindow)
+					spec.Name(), maxRestarts, watchRestartWindow)
 				fatalCancel()
 				return
 			}
@@ -239,7 +253,7 @@ func (s *Supervisor) watch(ctx context.Context, fatalCancel context.CancelFunc, 
 				return
 			}
 			log.Printf("supervisor: restarting %s (attempt %d of %d in the last %s)",
-				spec.Name(), len(restartTimes)+1, watchMaxRestarts, watchRestartWindow)
+				spec.Name(), len(restartTimes)+1, maxRestarts, watchRestartWindow)
 			_ = spec.Stop(ctx)
 			if err := spec.Start(ctx); err != nil {
 				log.Printf("supervisor: %s restart failed: %v — escalating to fatal",

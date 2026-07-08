@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -93,5 +96,57 @@ paid:
 	}
 	if cfg.Paid.Governance.Mode != "gated" {
 		t.Errorf("governance mode = %q", cfg.Paid.Governance.Mode)
+	}
+}
+
+// TestLoadExplicitPathMissingErrors: a $<CLI>_CONFIG pointing at a
+// nonexistent file must error — a typo'd explicit path silently booting
+// defaults is the failure mode this guards against.
+func TestLoadExplicitPathMissingErrors(t *testing.T) {
+	t.Setenv(configEnvVar(), filepath.Join(t.TempDir(), "does-not-exist.yaml"))
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for explicit missing config path; got nil")
+	}
+}
+
+// TestLoadExplicitPathParses: an explicit config overlays Default().
+func TestLoadExplicitPathParses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yamlData := "deployment:\n  mode: paid\nkeycloak:\n  client_id: reckon\n"
+	if err := os.WriteFile(path, []byte(yamlData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(configEnvVar(), path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Deployment.Mode != "paid" {
+		t.Errorf("deployment.mode = %q; want paid", cfg.Deployment.Mode)
+	}
+	if cfg.Keycloak.ClientID != "reckon" {
+		t.Errorf("keycloak.client_id = %q; want reckon", cfg.Keycloak.ClientID)
+	}
+	// Unset keys keep their defaults.
+	if cfg.Postgres.Port != 5435 {
+		t.Errorf("postgres.port = %d; want default 5435", cfg.Postgres.Port)
+	}
+}
+
+// TestLoadMalformedYAMLErrors: broken YAML is an error, never a silent
+// fallback to defaults.
+func TestLoadMalformedYAMLErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("deployment: [broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(configEnvVar(), path)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected YAML parse error; got nil")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q should name the offending file", err)
 	}
 }

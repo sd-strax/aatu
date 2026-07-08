@@ -99,6 +99,19 @@ func downloadAndExtractTarGz(ctx context.Context, url, destDir, markerFile strin
 				return fmt.Errorf("close %s: %w", target, err)
 			}
 		case tar.TypeSymlink:
+			// Validate the link target, not just the entry name: an absolute
+			// or dot-dot Linkname would point outside destDir, and later
+			// entries writing through it would escape the extraction root.
+			if filepath.IsAbs(hdr.Linkname) {
+				return fmt.Errorf("symlink %s has absolute target %s: refusing", relPath, hdr.Linkname)
+			}
+			// This Join IS the traversal guard: it resolves the link target so
+			// the Rel check below can refuse anything outside destDir.
+			resolved := filepath.Join(filepath.Dir(target), hdr.Linkname) //nolint:gosec // G305: resolved is validated against destDir on the next line, never used raw
+			rel, err := filepath.Rel(destDir, resolved)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("symlink %s target %s escapes %s: refusing", relPath, hdr.Linkname, destDir)
+			}
 			_ = os.Remove(target)
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
