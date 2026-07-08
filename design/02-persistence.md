@@ -104,6 +104,8 @@ EventEnvelope
   payload           JSONB, type-specific
 ```
 
+**Event-type naming and implemented envelope.** The PascalCase names below (`InvestigationCreated`, `MemberAdded`, ...) are concept names; the persisted `event_type` strings are dotted lowercase (`investigation.created`, `investigation.member_added`, `interpretation.recorded`, ...). The implemented events table is named `events` (not `investigation_events`), and `aggregate_id` is stored as a bare UUID — the `grouping--` prefix lives at the STIX layer. The implemented envelope matches this section's shape: `event_id` is a UUIDv7 minted at append time (unique), `event_version` is the per-type schema version used for upcasting (§5), `recorded_at` is the DB-stamped write time, and `causation_id` is NULL for command-initiated events.
+
 ### v0 event types
 
 Lifecycle (each event is recorded in the same aggregate transaction as its corresponding `InterpretationRecorded` of type "lifecycle"; shared `correlation_id` ties them):
@@ -127,7 +129,7 @@ Evidence linkage:
 
 Action lifecycle (see 04-action-authorization.md §3 for the action model and §3.2 for the state machine):
 - `ActionRequested` — payload: action_id, action_type, tier, targets, parameters, evidence_refs, expires_at, requesting_interpretation_id. Recorded in the same aggregate transaction as the producing `InterpretationRecorded` (interpretation_type "action-request"); shared `correlation_id` ties them. Permitted against a CONCLUDED investigation only when the request is a reversal action (see 04-action-authorization.md §9.1 and the 01-domain-model.md Lifecycle invariants).
-- `ActionApproved` — payload: action_id, authorization { mode (MANUAL | AUTO_POLICY | TWO_PARTY), stage (SOLO | PRIMARY | SECONDARY — SOLO for MANUAL/AUTO_POLICY; PRIMARY then SECONDARY for TWO_PARTY), primary_approver_ref, primary_approved_at, secondary_approver_ref?, secondary_approved_at?, policy_ref?, policy_version?, challenge_response? }, approval_interpretation_id. Resulting x-action status: PENDING_SECONDARY when (mode=TWO_PARTY, stage=PRIMARY); APPROVED otherwise. Subsequent rejection or expiry from PENDING_SECONDARY uses the existing `ActionRejected` / `ActionExpired` events.
+- `ActionApproved` — payload: action_id, authorization { mode (MANUAL | AUTO_POLICY | TWO_PARTY | EXTERNAL_DELEGATED — the last recorded when an external orchestrator substitutes reckon's approval gate, 04-action-authorization.md §5.7), stage (SOLO | PRIMARY | SECONDARY — SOLO for MANUAL/AUTO_POLICY; PRIMARY then SECONDARY for TWO_PARTY), primary_approver_ref, primary_approved_at, secondary_approver_ref?, secondary_approved_at?, policy_ref?, policy_version?, challenge_response? }, approval_interpretation_id. Resulting x-action status: PENDING_SECONDARY when (mode=TWO_PARTY, stage=PRIMARY); APPROVED otherwise. Subsequent rejection or expiry from PENDING_SECONDARY uses the existing `ActionRejected` / `ActionExpired` events.
 - `ActionRejected` — payload: action_id, reason, rejection_interpretation_id.
 - `ActionExpired` — payload: action_id, expiry_interpretation_id. System-emitted on `expires_at`.
 - `ActionDispatched` — payload: action_id, adapter, adapter_request_id, dispatched_at, dispatch_interpretation_id. System-emitted when the dispatcher picks up an APPROVED action.
@@ -160,7 +162,7 @@ The decisive property: atomic event append + projection update in one transactio
 Other reasons:
 - One operational surface (Postgres already holds STIX objects, OCSF, projections, CRUD tables).
 - JSONB plus GIN indexes is sufficient for heterogeneous event payloads at v0 scale.
-- Team familiarity. No new ops surface, no new client library to learn.
+- Operational simplicity: a plain events table needs no ES framework expertise, no new ops surface, no new client library.
 - Axon Framework brings an opinionated CQRS/saga model and runtime; the sugar isn't worth the lock-in at v0 scale.
 - EventStoreDB is the right answer at 100x v0 scale, when catch-up subscriptions across services matter. Today, it's a second database with its own backup story.
 
@@ -234,11 +236,12 @@ The reasoning persistence problem decomposes into three layers. The split is the
 
 The Interpretation event payload contains:
 - `interpretation_id`
-- `interpretation_type` — string drawn from the canonical enum (see 01-domain-model.md INTERPRETATION → Interpretation types; 18 values at v0)
+- `interpretation_type` — string drawn from the canonical enum (see 01-domain-model.md INTERPRETATION → Interpretation types; 20 values at v0+ — `linkage` and `post_conclusion` were added later by 07-post-conclusion-outputs.md)
 - `input_refs` — STIX or OCSF ids the reasoning departed from (matches `INTERPRETATION.input_refs` in the domain model)
 - `output_refs` — STIX ids the reasoning produced (matches `INTERPRETATION.output_refs` in the domain model)
 - `rationale` — bounded natural-language string (proposed cap ~500 chars). The "why," terse by design.
 - `confidence` — HIGH | MEDIUM | LOW (optional)
+- `derivation_mode` — DIRECT | INFERRED. Carried in the `InterpretationRecorded` payload (as implemented), in addition to the provenance recorded on the interpretation-layer nodes themselves (01-domain-model.md PROVENANCE).
 - `tool_call_refs` — list of `{call_id, content_hash}` references into the tool-call store
 - `transcript_ref` — `{transcript_id, turn_id, content_hash}` if AI-authored; null if human-authored
 
@@ -313,17 +316,17 @@ This is a *write-time check*, not a stored property. The event captures what was
 - **Snapshots.** Add when fold latency demands; not before.
 - **Cross-investigation linkage events.** Surfaced as `InvestigationLinked` events at v0+ (07-post-conclusion-outputs.md §5). Richer relations beyond the v0+ enum (`see-also` | `follow-up-of` | `spawned-by` | `duplicate-of` | `supersedes`) — campaign trees, cluster relations, attribution chains — may surface later as product demand drives.
 - **Policy snapshots on events.** Add only if regulatory drivers require policy-at-time-of-decision in the audit trail.
-- **Cross-process event distribution.** Persistence guarantees atomic event-append + projection-update. Component-architecture-level distribution is now specified: post-commit `NOTIFY` per `(tenant_id, investigation_id, event_type)` for projection deltas to WebSocket-connected IDEs (05-component-architecture.md §4.3, §8.1); Temporal workflow signals for orchestration (05 §3.3, with the top-level `InvestigationLifecycleWorkflow` receiving signals on major investigation events at v1+). The two are complementary — projection deltas drive UI freshness; workflow signals drive durable orchestration.
-- **Detection authoring as a feature.** The investigation event stream and the reasoning-thread projection are designed to support a future detection-authoring tool — analyst marks parts of an investigation as the basis for a detection rule, the tool generates rule code, and the rule is pushed through the 04-action-authorization.md push-to-production flow (T3, see §2 Action Categorization). The authoring tool itself is not specified in any v0 thread; the data model accommodates it without further change. References to "detection authoring" in §1 (decision summary), §3 (event indexing), and §4.2 (projection consumers) are about supporting this future use case, not committing to build it in v0.
+- **Cross-process event distribution.** Persistence guarantees atomic event-append + projection-update. Component-architecture-level distribution is now specified: post-commit `NOTIFY` per `(tenant_id, investigation_id, event_type)` for projection deltas to WebSocket-connected IDEs (05-component-architecture.md §8.1); Temporal workflow signals for orchestration (05 §3.3, with the top-level `InvestigationLifecycleWorkflow` receiving signals on major investigation events at v1+). The two are complementary — projection deltas drive UI freshness; workflow signals drive durable orchestration.
+- **Detection authoring as a feature.** The investigation event stream and the reasoning-thread projection are designed to support a future detection-authoring tool — analyst marks parts of an investigation as the basis for a detection rule, the tool generates rule code, and the rule is pushed through the 04-action-authorization.md push-to-production flow (T3, see §2 Action Categorization). The authoring tool itself is not specified in any v0 thread; the data model accommodates it without further change. References to "detection authoring" in §1 (decision summary), §3 (event indexing), and §4 (Projections subsection, projection consumers) are about supporting this future use case, not committing to build it in v0.
 - **Action dispatch / write-side adapter contract.** Persistence assumes the capability layer dispatches actions and returns `adapter_request_id` for correlation in `ActionDispatched` events. The capability spec (03-capability-layer.md) covers the read side; the write-side contract — adapter operation, idempotency, `adapter_request_id` correlation — is specified in 08-write-side-actions.md. Until that contract is implemented, `ActionDispatched` events in v0 prototype carry fixture-stub adapter ids (08 §9).
 
 ---
 
-## 9. Open items for the team
+## 9. Open items
 
-These are decisions or operational details intentionally left to the team rather than fixed in this spec:
+These are decisions or operational details intentionally left to implementation rather than fixed in this spec:
 
-- Concrete value of the schema-evolution **freeze window** per event type (proposed default: 90 days; team to confirm).
+- Concrete value of the schema-evolution **freeze window** per event type (proposed default: 90 days; confirm at implementation).
 - Default tenant transcript retention (operational/legal call, not a design call).
 - Choice of object store vs. Postgres side table for `ai_transcripts` (operational call; either works with the reference-and-hash pattern).
 - Initial set of OCSF classes ingested at v0 (depends on the capability layer; see 03-capability-layer.md §4 — not this spec's concern).

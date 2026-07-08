@@ -149,7 +149,7 @@ The proposed IOCs land in the tenant's known-bad list as candidates pending revi
 
 ### 3.3 Optional TI publication
 
-Tenants may configure post-conclusion IOC publication to external TI platforms (MISP, OpenCTI, internal feeds, ISAC submissions). Publication is an `x-action` of type `ioc.publish_indicator`, gated through the same authorization machinery as any other action — `ti_admin` or `senior_approver` typically authorizes; `ioc.publish_to_isac` is T3 by default because it leaves the org boundary.
+Tenants may configure post-conclusion IOC publication to external TI platforms (MISP, OpenCTI, internal feeds, ISAC submissions). Publication is an `x-action` of the `ioc.publish_*` family — `ioc.publish_to_misp` (T2, org-controlled feed) or `ioc.publish_to_isac` (04 §2.1) — gated through the same authorization machinery as any other action. `ti_admin` or `senior_approver` typically authorizes; `ioc.publish_to_isac` is T3 by default because it leaves the org boundary.
 
 The action's evidence_refs cite the investigation that produced the IOC; the audit trail captures who authorized publishing. Reversal is type-specific: TI platforms with a delete API support reversal; ISAC publications are typically irreversible.
 
@@ -214,7 +214,7 @@ InvestigationLinked
     relation                    "see-also" | "follow-up-of" | "spawned-by" |
                                 "duplicate-of" | "supersedes"
     rationale                   string (why linked)
-    interpretation_id           the producing Interpretation
+    linkage_interpretation_id   the producing Interpretation (02 §3)
 ```
 
 The producing Interpretation has `interpretation_type = "linkage"` (an addition to the canonical enum in 01 INTERPRETATION → Interpretation types).
@@ -320,11 +320,11 @@ Optional. Customers operating in regulated or threat-aware industries (financial
 Same pattern as ticketing and IOC publication:
 
 ```
-ti.publish_to_isac           target: list<indicator_ref>
+ioc.publish_to_isac          target: list<indicator_ref>
                              parameters: isac_name, sharing_traffic_light, attribution_level
                              tier: T3 (leaves the org boundary)
 
-ti.publish_to_misp_feed      target: list<indicator_ref>
+ioc.publish_to_misp          target: list<indicator_ref>
                              parameters: feed_name, distribution_level
                              tier: T2 (org-controlled feed) or T3 (federated feed)
 
@@ -345,7 +345,7 @@ Where sharing requires anonymization (e.g., redacting org-identifying entity val
 
 ### 8.4 Cross-tenant within reckon
 
-A future federated indicator pool (deferred per 01 §5) is a special case of industry sharing: reckon hosts the pool as a separate tenant-of-tenants construct, with explicit publish-and-subscribe semantics. This is v3+ at earliest and requires its own thread.
+A future federated indicator pool (deferred per 01 Architectural Commitments #5) is a special case of industry sharing: reckon hosts the pool as a separate tenant-of-tenants construct, with explicit publish-and-subscribe semantics. This is v3+ at earliest and requires its own thread.
 
 ---
 
@@ -372,8 +372,8 @@ PostConclusionPipeline(grouping_id)
     6. OpenFollowupTickets(grouping_id)
        - Apply tenant rules, submit ticket.create actions
     7. PublishIOCsExternally(grouping_id)
-       - Where configured, submit ti.publish_* actions for high-confidence IOCs
-       - Each ti.publish_* action is gated by its own authorization
+       - Where configured, submit ioc.publish_* actions for high-confidence IOCs
+       - Each ioc.publish_* action is gated by its own authorization
 
   cancellation:
     - Triggered by InvestigationReopened (the conclusion is no longer terminal)
@@ -399,7 +399,7 @@ This preserves the audit invariant: every action traces to a named human who is 
 
 The pipeline emits `InterpretationRecorded` events on the *source investigation's* thread with `interpretation_type = "post_conclusion"` (a small addition to the canonical enum in 01). Each step's outcome is recorded — what was generated, what was published, what failed.
 
-The source investigation's lifecycle stays CONCLUDED throughout (per 01 INVESTIGATION → Lifecycle invariants, CONCLUDED accepts new Interpretations only when they are action-* lifecycle entries for reversals; the lifecycle invariants in 01 may need a minor extension to accept `post_conclusion` Interpretations as well, to be confirmed in 01 companion edits).
+The source investigation's lifecycle stays CONCLUDED throughout (per 01 INVESTIGATION → Lifecycle invariants, which already carry the exceptions this pipeline relies on: CONCLUDED accepts new Interpretations when they are action-* lifecycle entries for reversals, `post_conclusion` entries from this pipeline, or `linkage` entries).
 
 ### 9.4 Re-running
 
@@ -432,7 +432,7 @@ Add `InvestigationLinked` to the v0+ event types in §3 (was deferred under "Cro
 
 ### 11.3 03-capability-layer.md
 
-Action manifest extension in the write-side adapter contract (08-write-side-actions.md §3, §8): include the post-conclusion action types — `ticket.create`, `ticket.update`, `ioc.publish_to_*`, `ti.contribute_to_*`, `document.deliver` — as standard categories. Adapters for common SoRs and TI platforms ship as first-party.
+Action manifest extension in the write-side adapter contract (08-write-side-actions.md §3, §8): include the post-conclusion action types — `ticket.create`, `ticket.update`, `ioc.publish_to_misp`, `ioc.publish_to_isac`, `ti.contribute_to_attack`, `document.deliver` — as standard categories. Adapters for common SoRs and TI platforms ship as first-party.
 
 ### 11.4 04-action-authorization.md
 
@@ -446,7 +446,7 @@ Note the post-conclusion pipeline as the producer of investigation summaries and
 
 ## 12. Open questions / Deferred to implementation
 
-- **Default per-tenant pipeline configuration.** Which steps run by default for new tenants? Likely: archive (always on), summary extraction (always on), IOC extraction (on, candidates require review), candidate SOP generation (on at v1+), linkage suggestion (on), ticketing handoff (off; requires explicit configuration), industry sharing (off; requires explicit configuration). Confirm with first SaaS customers.
+- **Default per-tenant pipeline configuration.** Which steps run by default for new tenants? Likely: archive (always on), summary extraction (always on), IOC extraction (on, candidates require review), candidate SOP generation (on at v1+), linkage suggestion (on), ticketing handoff (off; requires explicit configuration), industry sharing (off; requires explicit configuration). Confirm against managed/SaaS deployment requirements.
 - **IOC sensitivity classification.** v0+ uses simple rules (entity type, label-based heuristics). v2+ may introduce LLM-assisted classification. The architectural shape doesn't change; quality improves.
 - **Document template authoring.** Tenants will want to customize templates. v1 ships with the standard set; v2+ may add a template editor. Templates as code (markdown + YAML metadata) at v0+; templates as a managed product surface later.
 - **Re-run vs new-version semantics.** When the pipeline re-runs, do superseded outputs remain visible or are they archived behind a flag? Default proposal: visible, marked as superseded; tenant-admin can prune.

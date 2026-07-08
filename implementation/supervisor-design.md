@@ -11,8 +11,8 @@ This doc covers patterns, not API reference. For exact signatures, read `reckon/
 `reckon start` brings up four things on the analyst's laptop:
 
 1. **Postgres** — embedded via `fergusstrange/embedded-postgres`. Two databases: `reckon_main`, `reckon_knowledge`.
-2. **Temporal** — dev server via `go.temporal.io/sdk/testsuite.StartDevServer`. SQLite-backed (D15).
-3. **Keycloak** — bundled Temurin JRE 17 + Keycloak 26.0.7 Quarkus distribution. Single realm `reckon` with the canonical role set; master-realm admin auto-bootstrapped (D17).
+2. **Temporal** — dev server via `go.temporal.io/sdk/testsuite.StartDevServer`. SQLite-backed at v0: the dev server carries its own persistence, so the bundled Postgres serves only reckon's databases; a Postgres-backed or managed Temporal is a scale-up option, not a supervisor concern.
+3. **Keycloak** — bundled Temurin JRE 17 + Keycloak 26.0.7 Quarkus distribution; bundling the JRE keeps the install self-contained (no Docker, no system Java). Single realm `reckon` with the canonical role set; master-realm admin auto-bootstrapped.
 4. **reckon-backend** — in-process Go service. Today a placeholder that validates dep connectivity and serves `/healthz` + `/status`. Phase A.4–A.7 fill in the engine.
 
 `reckon stop` signals a running supervisor. `reckon status` queries `/status`.
@@ -184,5 +184,4 @@ Avoid: storing global state in the component (use struct fields), spawning gorou
 
 - `reckon/design/05-component-architecture.md §3` — runtime topology this implements
 - `reckon/implementation/module-layout.md` — the OSS/paid repo split this lives inside
-- `reckon-enterprise/decisions.md` D15 (Temporal SQLite vs Pg), D17 (JRE+Keycloak bundling)
 - `reckon/init/README.md` — launchd / systemd templates for running the supervisor as a system service

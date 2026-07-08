@@ -534,8 +534,10 @@ Output:
   `first_observed = last_observed = time`, `number_observed = 1`.
 - Edges: `extracted-from` from each SCO to the `OcsfEvent`; `derived-from` from
   the `ObservedData` to the `OcsfEvent`.
-- STIX `Relationship` objects for parent-child (`relationship_type: "parent-of"`
-  between the two process SCOs).
+- STIX `Relationship` objects for parent-child (`relationship_type:
+  "parent-process-of"` between the two process SCOs; distinct from the
+  `parent-of` edge, which 01-domain-model.md reserves for x-hypothesis
+  refinement).
 
 ### 4.2 OCSF authentication (class_uid 3002) → STIX
 
@@ -769,8 +771,9 @@ Output:
   separate from the Sighting. This preserves the raw "this entity was seen"
   signal independent of the vendor's interpretation.
 - Edges: standard `extracted-from`/`derived-from` for entities and
-  ObservedData; `produced-by` from the Indicator and Sighting to a
-  capability-layer-emitted Interpretation marker (see below).
+  ObservedData. The Indicator and Sighting carry **no** `produced-by` edge —
+  they sit in the store as imported vendor claims, attributed via
+  `created_by_ref` and `provenance.tool` (see below).
 - Provenance on the Indicator and Sighting: `derivation_mode = INFERRED`,
   `tool` = the vendor name. This is the **single exception** to the rule
   that capability-layer outputs are `DIRECT` — the vendor's claim is, by
@@ -835,7 +838,7 @@ any standard OCSF class. Two options, in order of preference:
    class_uid, documents the payload schema, and a corresponding normalizer is
    registered. This is the right path for any internal tool whose data the
    investigation will reason over repeatedly.
-2. **Opaque ObservedData fallback.** The default normalizer (§4.4) handles
+2. **Opaque ObservedData fallback.** The default normalizer (§4.13) handles
    unrecognized classes. Acceptable for v0 and for one-off integrations, but
    loses typed-entity stitching — the LLM sees raw payload, not graph nodes.
 
@@ -1395,6 +1398,12 @@ injection, rate-limit handling), a second fixture format stores raw tool
 responses (whether MCP or native API). These are scenario-tagged
 `raw_response` fixtures and used only by adapter-level tests, not by the agent
 loop.
+
+Each scenario directory may also carry an **asset-criticality sidecar file**
+(`fixtures/<scenario>/asset-criticality.json`) mapping entity identifiers to
+criticality classes; in fixture mode it populates
+`TargetSpec.asset_criticality` for policy evaluation (04-action-authorization.md
+§8.2).
 
 ### 9.2 How the resolver picks fixtures
 

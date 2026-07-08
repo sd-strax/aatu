@@ -168,6 +168,11 @@ PENDING_SECONDARY  -> APPROVED            interpretation_type = "action-approval
 PENDING_SECONDARY  -> REJECTED            interpretation_type = "action-rejection"
                                           (secondary declines)
 PENDING_SECONDARY  -> EXPIRED             interpretation_type = "action-expiry"     (system-emitted)
+REQUESTED          -> EXECUTING           interpretation_type = "action-dispatch"
+                                          (mode == EXTERNAL_DELEGATED only: an external
+                                          system substitutes reckon's approval gate per
+                                          §5.7; dispatch is immediate and the approval
+                                          is recorded from the orchestrator's callback)
 APPROVED           -> EXECUTING           interpretation_type = "action-dispatch"   (system-emitted)
 EXECUTING          -> SUCCEEDED | FAILED  interpretation_type = "action-result"     (system-emitted)
 SUCCEEDED          -> REVERSED            recorded on the *reversing* x-action via reversal_of_ref;
@@ -181,7 +186,10 @@ The seven `action-*` types — `action-request`, `action-approval`, `action-reje
 
 ```text
 Authorization:
-  mode                   MANUAL | AUTO_POLICY | TWO_PARTY
+  mode                   MANUAL | AUTO_POLICY | TWO_PARTY | EXTERNAL_DELEGATED
+                         (EXTERNAL_DELEGATED: the approval gate was held by an
+                         external orchestrator that substitutes reckon's gate
+                         per an opted-in SOAR_PLAYBOOK binding; see §5.7)
   stage                  SOLO | PRIMARY | SECONDARY
                          (SOLO for MANUAL and AUTO_POLICY; PRIMARY then
                          SECONDARY for TWO_PARTY. Mirrors the
@@ -289,11 +297,14 @@ ctx.sop_guidance.applicable      bool — true if SOP retrieval surfaced
                                  relevant guidance for this action's
                                  investigation context (see
                                  06-knowledge-service.md §5.1)
-ctx.sop_guidance.recommendation  optional string — extracted recommendation
-                                 if SOP guidance is structured (e.g.,
-                                 "isolate", "do-not-act",
-                                 "require-secondary"); null when SOPs are
-                                 narrative-only
+ctx.sop_guidance.recommendation  optional string — structured recommendation
+                                 (e.g., "isolate", "do-not-act",
+                                 "require-secondary"). Populated only when
+                                 the retrieved SOP's metadata carries the
+                                 optional structured `recommendation` field
+                                 (06-knowledge-service.md §2.1); the SOP
+                                 body is prose and is never parsed, so this
+                                 is null for narrative-only SOPs
 
 ctx.similarity.has_match         bool — true if recall_similar_investigations
                                  returned ≥1 ranked result above a
@@ -398,7 +409,7 @@ For policies that require `TWO_PARTY`: after primary approval the action moves t
 
 ### 5.3 Async approvals (Slack / email / mobile)
 
-Out of scope to fully build in v0, but the mechanic is: the same `REQUESTED` action can have a `notification_channels` list, and the backend exposes signed deep links of the form `claude-soc://approve/<action-id>?token=<...>` that, when clicked, open the web review panel. Slack/email integrations push these links. v0 ships VS Code + CLI + web; the deep-link contract is reserved.
+Out of scope to fully build in v0, but the mechanic is: the same `REQUESTED` action can have a `notification_channels` list, and the backend exposes signed deep links of the form `reckon://approve/<action-id>?token=<...>` that, when clicked, open the web review panel. Slack/email integrations push these links. v0 ships VS Code + CLI + web; the deep-link contract is reserved.
 
 ### 5.4 Multiple analysts watching
 
@@ -438,7 +449,7 @@ Binding (on a SOAR_PLAYBOOK adapter):
 
 Default-safe posture: most bindings double-gate naturally (reckon's gate + whatever the playbook does internally). Friction is recoverable; an unauthorized state-changing action isn't. The opt-out is per binding and requires `policy_signer` sign-off (governance-module concern in `gated` mode).
 
-The `mode: EXTERNAL_DELEGATED` value is a sixth `Authorization.mode` value alongside `MANUAL`, `AUTO_POLICY`, `TWO_PARTY` — it indicates the gate was held outside reckon and trades audit detail for delegation flexibility.
+The `mode: EXTERNAL_DELEGATED` value is a fourth `Authorization.mode` value alongside `MANUAL`, `AUTO_POLICY`, `TWO_PARTY` (see §3.3) — it indicates the gate was held outside reckon and trades audit detail for delegation flexibility.
 
 ---
 

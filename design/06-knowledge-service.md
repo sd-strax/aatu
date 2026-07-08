@@ -37,7 +37,7 @@ Both expose the same retrieval surface to the agent loop. Both are per-tenant. B
 
 **1. Two corpora, one retrieval surface.** SOPs and concluded-investigation summaries are different data — institutional standing knowledge vs. institutional case knowledge — but the agent loop consumes both as ranked context. The retrieval API is uniform: scope, query, return ranked results with rationale. Future corpora (e.g., a tenant-curated threat actor profile library) extend the same surface without changing the agent loop.
 
-**2. Per-tenant by construction.** Both corpora are tenant-scoped. SOPs authored in tenant A are invisible to tenant B. Investigation summaries from tenant A are invisible to tenant B. Cross-tenant retrieval is not expressible. Per the per-tenant namespace UUID rule (01-domain-model.md §3, §5), this is structural, not just policy.
+**2. Per-tenant by construction.** Both corpora are tenant-scoped. SOPs authored in tenant A are invisible to tenant B. Investigation summaries from tenant A are invisible to tenant B. Cross-tenant retrieval is not expressible. Per the per-tenant namespace UUID rule (01-domain-model.md Architectural Commitments #3, #5), this is structural, not just policy.
 
 **3. Knowledge is context, not control.** Retrieved knowledge enters the LLM's reasoning as context — system prompt material or tool-call results. It never becomes graph content. SOPs and summaries are not STIX-shaped objects in the interpretation layer; they are sibling stores. The Interpretation that *consulted* knowledge cites it via Layer A reference fields, but the knowledge itself does not enter the aggregate.
 
@@ -58,7 +58,7 @@ Both expose the same retrieval surface to the agent loop. Both are per-tenant. B
 ```
 SOP
 
-  id                  sop--<uuid v4 within tenant namespace>
+  id                  sop--<tenant-scoped random UUID (v4)>
   tenant_id           UUID
   title               string
   body                markdown
@@ -70,6 +70,12 @@ SOP
                         threat_categories? list<string>   # e.g., ["ransomware", "bec"]
                         severity_min?      "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
                       }
+  recommendation      optional string     # structured recommendation token
+                                          # (e.g., "isolate", "do-not-act",
+                                          # "require-secondary"). Metadata only —
+                                          # the body remains unparsed prose. Feeds
+                                          # ctx.sop_guidance.recommendation
+                                          # (04-action-authorization.md §4.2).
   authored_by         user_id (must hold sop_author role)
   signed_off_by       list<user_id> (each must hold sop_signer role)
   effective_from      timestamp
@@ -82,7 +88,7 @@ SOP
 
 **`body` content conventions.** SOPs are prose, not procedure code. They state priorities, exceptions, communication norms, references to past incidents, and judgment calls. They do *not* enumerate executable steps. The system never parses the body into a workflow; the LLM reads it as context. Authoring guidelines (a separate document, not in this spec) recommend short headers, explicit exception cases, and citations of past investigations or external references where applicable.
 
-**Identity is UUIDv4 within the tenant namespace, not deterministic.** SOPs are documents, not observable facts; deterministic identity rules don't apply. Two SOPs with identical body in different tenants are deliberately distinct entities.
+**Identity is a tenant-scoped random UUID (v4), not deterministic.** SOPs are documents, not observable facts; deterministic identity rules don't apply. Two SOPs with identical body in different tenants are deliberately distinct entities.
 
 ### 2.2 Lifecycle
 
@@ -144,7 +150,7 @@ In an OSS single-tenant install (typically `governance_mode: lightweight` by def
 ```
 InvestigationSummary
 
-  id                  summary--<uuid v4 within tenant namespace>
+  id                  summary--<tenant-scoped random UUID (v4)>
   tenant_id           UUID
   investigation_ref   grouping--<uuid> (the source investigation)
   conclusion_at       timestamp (when the source investigation concluded)
@@ -252,8 +258,8 @@ For summaries: the `summary_text` plus the `structured` fields. The agent loop c
 ### 4.3 Coverage
 
 Per the 03-capability-layer.md coverage convention, retrieval emits a coarse outcome:
-- `COMPLETE` — corpus was queried, results returned (possibly empty if no matches)
-- `EMPTY` — corpus has no entries matching the scope (e.g., no SOPs tagged for the relevant techniques)
+- `COMPLETE` — the search executed over an indexed corpus and returned at least one result
+- `EMPTY` — the search executed and the corpus is indexed, but zero entries matched the scope (e.g., no SOPs tagged for the relevant techniques)
 
 `EMPTY` is meaningful evidence-of-absence: "we have no institutional procedure for this" is a real signal the LLM should weigh.
 
@@ -289,7 +295,7 @@ These are *not* capability-layer verbs. They produce no telemetry, no OcsfEvents
 
 ### 5.3 System prompt scaffolding
 
-The agent loop's system prompt includes guidance on when to weigh SOP recommendations, how to handle conflicts between SOPs and current evidence, and how to cite SOPs in rationale. Authored once, refined through operation. This sits in the `prompts/` directory of the codebase (per 05 §3.4) and is consumed identically by the extension's TypeScript runtime and any future Go-side agent runtime.
+The agent loop's system prompt includes guidance on when to weigh SOP recommendations, how to handle conflicts between SOPs and current evidence, and how to cite SOPs in rationale. Authored once, refined through operation. The scaffolding ships as part of the backend binary's prompt assets (exact path deferred to implementation) and is consumed identically by the extension's TypeScript runtime and any future Go-side agent runtime.
 
 Specifically, the prompt instructs the LLM to:
 - Cite SOPs by ID and version in Interpretation rationale when their guidance influenced the decision
@@ -405,7 +411,7 @@ The post-conclusion pipeline (07) may generate candidate SOPs from concluded inv
 
 ## 11. Open questions / Deferred to implementation
 
-- **Bundled embedding model choice.** BGE-small, MiniLM, or equivalent. Trade-off: model size in the binary vs retrieval quality. v0 default is configurable; first customer feedback drives the choice.
+- **Bundled embedding model choice.** BGE-small, MiniLM, or equivalent. Trade-off: model size in the binary vs retrieval quality. v0 default is configurable; feedback from real deployments drives the choice.
 - **Retrieval token budget.** SOPs can be long; default budget is 4000 tokens but tunable per LLM model context window.
 - **Sub-document embedding for long SOPs.** v0+ uses whole-document embedding with section-extraction at retrieval time; v1 may move to sub-document embedding for sharper section-level matches.
 - **Match-rationale generation cost.** v0+ produces match rationale via simple template; v2+ may use a small LLM call to generate richer rationale. Balance cost vs interpretability.

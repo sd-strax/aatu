@@ -39,7 +39,7 @@ This spec defines the component topology, deployment shapes, authentication, the
 | Distributions | OSS and paid; two binaries from two repos | Public `reckon` repo defines module interfaces and ships the OSS binary; private `reckon-enterprise` depends on `reckon` and implements the interfaces, shipping the paid binary. The seam is repo-enforced — OSS cannot import paid because paid is not in its import graph |
 | Operator | Customer (OSS, paid self-hosted) or reckon (paid reckon-hosted); orthogonal to distribution | Same Terraform/Helm for paid regardless of operator |
 | Postgres | Bundled (`embedded-postgres-go`) in OSS; managed typical in paid; bundled still works in paid | Analyst UX in OSS; operational preference in paid |
-| Temporal | Bundled (Temporal CLI dev server, Postgres-backed) in OSS; managed cluster typical in paid | Eliminates handrolled task-queue plumbing for action expiry, dispatch retries, reversal sagas, re-normalization, archive bundling, post-conclusion workflow |
+| Temporal | Bundled (Temporal CLI dev server, SQLite-backed) in OSS; Postgres-backed or managed cluster typical in paid / at scale | Eliminates handrolled task-queue plumbing for action expiry, dispatch retries, reversal sagas, re-normalization, archive bundling, post-conclusion workflow |
 | Agent loop | Client-side (extension/CLI) for interactive; server-side Temporal for async | BYOK LLM key never crosses to backend on interactive path; same loop code points at local or remote backend identically |
 | LLM provider | BYOK for interactive; tenant-scoped for async | Per-analyst keys via the credential-resolution scheme (§10.2); never reckon-hosted inference at v0–v2 |
 | Adapter packaging | Out-of-process JSON-RPC, MCP-compatible; classes are MCP / NATIVE_API / CUSTOM / FIXTURE / SOAR_PLAYBOOK | Polyglot adapter authoring; mature MCP ecosystem reuse; in-process Go plugins explicitly rejected; SOAR delegation is just another adapter class |
@@ -49,7 +49,7 @@ This spec defines the component topology, deployment shapes, authentication, the
 | Token policy | No valid token, no operation | No grace period for client-initiated commands; long-running Temporal workflows carry the initiating principal in workflow context |
 | Vendor credentials | Orthogonal to user identity | Resolved via `keychain://`/`vault://`/`env://` (§10.2); never visible to user JWTs or the extension |
 | Action layer | Same adapter pattern as reads | Symmetric write-side; remediation, ticketing, comms, TI publication, IT operations all slot in as action types and adapters. SOAR_PLAYBOOK bindings delegate to existing playbooks; native bindings call vendors directly; analyst picks per action. |
-| Licensing | Bolt-on; honor-system at v0–v1; signed entitlement file later (air-gap compatible) | Don't boil the ocean before paying customers exist; preserve the module seam so a future license check has a single, isolated place to land |
+| Licensing | Bolt-on; honor-system at v0–v1; signed entitlement file later (air-gap compatible) | Preserve the module seam so a future license check has a single, isolated place to land |
 
 ---
 
@@ -71,7 +71,7 @@ These follow from the upstream specs and the decisions above. They are load-bear
 
 **7. The agent loop runs client-side. BYOK keys never cross to the backend.** The VS Code extension (or the future CLI agent surface) holds the analyst's LLM key in the OS keychain. It builds tool definitions from the backend's `/capabilities` endpoint plus the knowledge service's `/knowledge/tools` endpoint, calls the LLM directly, dispatches tool calls to the backend over authenticated HTTP, and posts the resulting Interpretation command together with the transcript bytes for hashing and side-store linkage. The backend never sees the LLM key in either deployment shape.
 
-**8. Tenant-scoped by construction; multi-tenant only in SaaS.** Per the per-tenant namespace UUID rule from 01-domain-model.md §3 and §5, every tenant — solo or SaaS — has its own immutable namespace UUID assigned at creation. Cross-tenant identity collision is structurally impossible. Solo mode is a tenant of one; SaaS mode is many tenants on shared infrastructure with row-level security as defense-in-depth on top of the namespace property.
+**8. Tenant-scoped by construction; multi-tenant only in SaaS.** Per the per-tenant namespace UUID rule from 01-domain-model.md Architectural Commitments #3 and #5, every tenant — solo or SaaS — has its own immutable namespace UUID assigned at creation. Cross-tenant identity collision is structurally impossible. Solo mode is a tenant of one; SaaS mode is many tenants on shared infrastructure with row-level security as defense-in-depth on top of the namespace property.
 
 ---
 
@@ -85,10 +85,10 @@ The reckon binary runs in two dependency configurations distinguished only by wh
 
 ```
 reckon start
-  ├── postgres            (embedded; persistence for aggregate, Temporal,
+  ├── postgres            (embedded; persistence for aggregate,
   │                        knowledge service, side stores, projections)
-  ├── temporal            (dev mode; Postgres-backed; same Pg instance,
-  │                        separate database)
+  ├── temporal            (dev server; SQLite-backed at v0, carrying its
+  │                        own persistence separate from Postgres)
   ├── keycloak            (single realm bundled with the OSS install;
   │                        multi-realm config activated by the tenancy
   │                        module — see §4)
@@ -108,16 +108,17 @@ Stateless reckon-backend workers behind a load balancer point at managed Postgre
 Bundled via `fergusstrange/embedded-postgres` or equivalent; the supervisor downloads the binary on first run if not present, data lives under `~/.reckon/pg/`. Same schemas regardless of dependency configuration:
 
 - `reckon_main` — investigation events, STIX object store, projections, side stores (`ai_tool_calls`, `ai_transcripts`)
-- `reckon_temporal` — Temporal persistence
 - `reckon_knowledge` — SOP repository, concluded-investigation summary index, pgvector embeddings (see 06)
+
+The bundled Temporal dev server carries its own SQLite-backed persistence at v0 and does not use this Postgres instance; a Postgres-backed or managed Temporal is the v1+/scale option (§3.3).
 
 `pgvector` is required for the knowledge service. The bundled Postgres ships with the extension preinstalled. Managed-deps deployments require pgvector on the chosen Postgres provider. If a future deployment context demands an alternative (Postgres distributions without pgvector availability), the knowledge service's storage interface is abstracted enough to swap.
 
-When the tenancy module is on (§4), `reckon_main` activates row-level-security policies keyed on `tenant_id`; the schema gains no new tables. Per-tenant namespace UUIDs (01-domain-model.md §3) remain the structural guarantee against cross-tenant id collision; RLS is defense-in-depth.
+When the tenancy module is on (§4), `reckon_main` activates row-level-security policies keyed on `tenant_id`; the schema gains no new tables. Per-tenant namespace UUIDs (01-domain-model.md Architectural Commitments #3) remain the structural guarantee against cross-tenant id collision; RLS is defense-in-depth.
 
 ### 3.3 Temporal
 
-Bundled as the Temporal CLI dev server (single-binary, Postgres-backed) in OSS; managed Temporal clusters typical in larger deployments. The reckon-backend process registers a Temporal worker on the `reckon` task queue (per-tenant task queues when the tenancy module is on).
+Bundled as the Temporal CLI dev server (single-binary, SQLite-backed at v0) in OSS; a Postgres-backed Temporal or managed Temporal cluster is the v1+/scale option and typical in larger deployments. The reckon-backend process registers a Temporal worker on the `reckon` task queue (per-tenant task queues when the tenancy module is on).
 
 **Workflow inventory.**
 
@@ -172,7 +173,7 @@ Resolved through the uniform indirection scheme (§10.2): `keychain://`, `vault:
 
 reckon is local-first, not offline-only. Required network reachability:
 - **Keycloak (trust root)** — for initial auth and periodic token refresh. Issuer URL is per-deployment config. Bounded offline tolerance: access-token validity (default 1h) for absolute disconnect; refresh-token validity (default 30d) for reconnect-after-disconnect.
-- **Signed-bundle distribution surface (§11)** — software updates, signed policy bundles, fixture corpus, MITRE corpus, adapter registry. Pull-on-startup with a fallback to last-cached. Mirrorable for air-gapped customers (TR-1).
+- **Signed-bundle distribution surface (§11)** — software updates, signed policy bundles, fixture corpus, MITRE corpus, adapter registry. Pull-on-startup with a fallback to last-cached. Mirrorable for air-gapped customers.
 - **Approval relay + transactional email** — only when `approver_emails` is configured and a TWO_PARTY policy fires, or (with tenancy module) multi-analyst async approval is in use.
 - **Vendor APIs** (v1+) — direct from the executing host to vendor for read-side capability calls; credentials per §3.5.
 - **LLM provider** (BYOK for interactive; tenant-scoped for async) — direct call from the executing host; not proxied through reckon.
@@ -181,7 +182,7 @@ The reckon-backend process does not require outbound network for normal investig
 
 ### 3.7 Tenant model
 
-The tenant primitive is always present in the data model: every tenant-scoped row carries a `tenant_id UUID NOT NULL`, defaulting to the single OSS tenant (`00000000-0000-0000-0000-000000000001`, "tenant 1"). That single tenant's namespace UUID is generated when its row is seeded into `reckon_main.tenants` and is immutable thereafter — `tenant_id` is the partition key; `namespace_uuid` is the per-tenant identity namespace (01-domain-model.md §3) and is a distinct value. The principal recorded on every event is the Keycloak-issued user id, carried in the JWT.
+The tenant primitive is always present in the data model: every tenant-scoped row carries a `tenant_id UUID NOT NULL`, defaulting to the single OSS tenant (`00000000-0000-0000-0000-000000000001`, "tenant 1"). That single tenant's namespace UUID is generated when its row is seeded into `reckon_main.tenants` and is immutable thereafter — `tenant_id` is the partition key; `namespace_uuid` is the per-tenant identity namespace (01-domain-model.md Architectural Commitments #3) and is a distinct value. The principal recorded on every event is the Keycloak-issued user id, carried in the JWT.
 
 When the paid tenancy module is on, the schema is unchanged; what activates is RLS enforcement, multi-realm or claim-routed Keycloak configuration, per-tenant vault paths, and the tenant lifecycle workflows. See §4.
 
@@ -296,10 +297,11 @@ The roles below are the v0+ set used as Keycloak group memberships and rendered 
 | `sop_signer` | Sign off authored SOPs; publication requires this role |
 | `tenant_admin` | Manage users and role assignments within the tenant; configure tenant settings (adapter bindings, `approver_emails`, etc.) |
 | `auditor` | Read-only access to investigations, action history, full audit chain; no writes |
+| `ti_admin` | Administer threat-intel publication: review IOC candidates and authorize `ioc.publish_*` actions, manage TI platform integrations (introduced by 07 §3.3) |
 
 **OSS single-tenant installs collapse roles to the install owner by default.** The first user holds every role; their JWT carries the union; RBAC Gate 1 always passes. The action-authorization Gate 2 (04's machinery) still applies, including the AI-delegate constraints that produce friction proportional to risk regardless of how many roles the principal holds. An OSS multi-user install (a small team running OSS on shared infra) assigns roles via the bundled Keycloak admin console — functional but raw; the governance module ships the polished tenant-admin UI around the same operations.
 
-`policy_author` / `policy_signer` and `sop_author` / `sop_signer` are operationally meaningful only when `governance_mode: gated` (see 06 §X / 04 §X). In `lightweight` mode the split collapses — anyone with the parent role can edit and ship.
+`policy_author` / `policy_signer` and `sop_author` / `sop_signer` are operationally meaningful only when `governance_mode: gated` (see 06 §2.2 for the SOP authoring lifecycle and 04 §4.1 for policy authoring and sign-off). In `lightweight` mode the split collapses — anyone with the parent role can edit and ship.
 
 ### 5.5 Two-axis evaluation
 
@@ -348,7 +350,7 @@ The write-side adapter contract (operation declaration, idempotency key, `adapte
 
 ### 6.3 Adapter discovery
 
-Adapters are discovered through signed manifests distributed via reckon's CDN (the adapter registry; §11). Each manifest declares: adapter name, version, `AdapterClass` (MCP / NATIVE_API / CUSTOM / FIXTURE), supported operations, parameter schemas, supported action types (for write-side adapters), and a verification signature.
+Adapters are discovered through signed manifests distributed via reckon's CDN (the adapter registry; §11). Each manifest declares: adapter name, version, `AdapterClass` (MCP / NATIVE_API / CUSTOM / SOAR_PLAYBOOK / FIXTURE; 03 §5.4), supported operations, parameter schemas, supported action types (for write-side adapters), and a verification signature.
 
 Tenants pin specific adapter versions in their config. Pinning is per-tenant; there is no global version. Adapter binaries are downloaded on demand and cached locally; manifests verify against the reckon CDN's signing key before any binary is invoked.
 
@@ -535,7 +537,7 @@ A wrapper around a third-party provider (SES, SendGrid, Postmark) or direct inte
 ### 11.5 Optional intake endpoints
 
 - **Telemetry** — anonymized product usage signals when the subscriber consents. Single endpoint, single Postgres. In reckon-hosted paid: runs on reckon's infrastructure, default off. In self-hosted paid: not applicable (customer's deployment doesn't phone home). In OSS: default off.
-- **Licensing / entitlement** — bolt-on; not implemented at v0–v1 (see §13.4). When implemented, an endpoint issuing offline-verifiable signed entitlement files (air-gap compatible per TR-1).
+- **Licensing / entitlement** — bolt-on; not implemented at v0–v1 (see §13.4). When implemented, an endpoint issuing offline-verifiable signed entitlement files (air-gap compatible — no phone-home required).
 
 ### 11.6 Web surfaces
 
@@ -617,7 +619,7 @@ The two modules are independent: a deployment can activate tenancy without gover
 
 ### 13.3 Behaviors and roles are core; operational tooling is paid
 
-The roles in §5.4 (`viewer`, `analyst`, `approver`, `senior_approver`, `policy_author`, `policy_signer`, `sop_author`, `sop_signer`, `tenant_admin`, `auditor`) are defined in the OSS engine. In an OSS install they work — they exist in Keycloak, they're carried in the JWT, the backend enforces them. What's absent in OSS is the *polished operational surface*:
+The roles in §5.4 (`viewer`, `analyst`, `approver`, `senior_approver`, `policy_author`, `policy_signer`, `sop_author`, `sop_signer`, `tenant_admin`, `auditor`, `ti_admin`) are defined in the OSS engine. In an OSS install they work — they exist in Keycloak, they're carried in the JWT, the backend enforces them. What's absent in OSS is the *polished operational surface*:
 
 - Role assignments happen through the bundled Keycloak's admin console — functional but raw.
 - The SOP and policy lifecycle has both `lightweight` (write-it-use-it) and `gated` (draft → in-review → published → retired) modes. The mode is a deployment config; both are in the engine. But the gated-mode UX — review queue, signoff history, citation analytics, audit export — is only useful with the governance module's surface.
@@ -629,7 +631,7 @@ This is the general philosophy: **behaviors and roles are core; the operational 
 
 Modules are activated by configuration. At v0–v1 the activation is honor-system: a config flag enables the module. The architectural seam — separately-compilable packages or build tags — is preserved so that a future signed-entitlement check has a single, isolated place to live.
 
-At v2+, the activation gate adds an offline-verifiable signed entitlement file (TR-1: air-gap compatibility forbids periodic phone-home licensing). The entitlement check fires at module load and refuses activation if the signature is invalid or expired. Adding this check is a small, isolated change — not a refactor — precisely because the module seam is preserved from v0.
+At v2+, the activation gate adds an offline-verifiable signed entitlement file (air-gap compatibility forbids periodic phone-home licensing). The entitlement check fires at module load and refuses activation if the signature is invalid or expired. Adding this check is a small, isolated change — not a refactor — precisely because the module seam is preserved from v0.
 
 The architectural commitment is: keep the module boundary clean. Pricing and licensing terms are independent of this commitment.
 
@@ -637,12 +639,12 @@ The architectural commitment is: keep the module boundary clean. Pricing and lic
 
 Who runs the bits is independent of which bits are running.
 
-- **OSS — always customer-operated.** reckon does not host the OSS distribution. The customer runs it on a laptop (the default first-run experience per TR-3), a server, or anywhere else they choose. The credential-resolution indirection scheme (§10.2) makes laptop-vs-server a config concern (`keychain://` vs `vault://`/`env://`), not a code path.
+- **OSS — always customer-operated.** reckon does not host the OSS distribution. The customer runs it on a laptop (the default first-run experience — a single-host install achievable in an afternoon), a server, or anywhere else they choose. The credential-resolution indirection scheme (§10.2) makes laptop-vs-server a config concern (`keychain://` vs `vault://`/`env://`), not a code path.
 - **Paid — customer-operated OR reckon-operated.** Same Terraform, same Helm chart, same dependency set, same config schema. The differences are who pays the cloud bill, who's on the pager, which VPC the resources live in. None are architectural.
 
-The architecture supports both paid-operator choices uniformly. §11 (the production-operated surface) describes the services — signed-bundle distribution, approval relay, transactional email, observability — that the paid distribution depends on. In reckon-hosted paid, reckon operates these services. In self-hosted paid, the customer operates them, typically from the same Terraform that provisions the rest of the deployment. reckon's CDN-equivalent for signed bundles is *mirrorable* for self-hosted customers (TR-1 air-gap path); the customer's deployment pulls from a local mirror that reckon publishes to on a schedule.
+The architecture supports both paid-operator choices uniformly. §11 (the production-operated surface) describes the services — signed-bundle distribution, approval relay, transactional email, observability — that the paid distribution depends on. In reckon-hosted paid, reckon operates these services. In self-hosted paid, the customer operates them, typically from the same Terraform that provisions the rest of the deployment. reckon's CDN-equivalent for signed bundles is *mirrorable* for self-hosted customers (the air-gap path); the customer's deployment pulls from a local mirror that reckon publishes to on a schedule.
 
-Operator-orthogonality preserves TR-1 (air-gap / self-hostable) for customers who need it while preserving reckon's ability to offer a managed experience for those who don't. There is no architectural fork between the two.
+Operator-orthogonality preserves the air-gap / self-hostable path for customers who need it while preserving reckon's ability to offer a managed experience for those who don't. There is no architectural fork between the two.
 
 ---
 
@@ -650,19 +652,19 @@ Operator-orthogonality preserves TR-1 (air-gap / self-hostable) for customers wh
 
 These are minor edits that land alongside this spec. Each is small and additive; none changes architectural commitments.
 
-### 13.1 01-domain-model.md
+### 14.1 01-domain-model.md
 
 **Resolve open question on `x-hypothesis.labels`:** "Labels bind to MITRE ATT&CK technique IDs by convention (e.g., `T1486`, `T1078.004`); freeform values permitted. The agent loop is prompted to label hypotheses with applicable techniques where evident."
 
 **Extend PROVENANCE section:** add `consulted_sops` and `consulted_similar_investigations` as optional fields on Interpretation Layer A. Each is a list of `{id, version, retrieval_score}` references into the knowledge service. Layer B side store extends to retain retrieved snippets keyed by content hash. Detail in 06 §7.
 
-### 13.2 03-capability-layer.md
+### 14.2 03-capability-layer.md
 
 **New verb category — external case lookup:** `query_external_cases(filter: CaseFilter, window: TimeWindow) -> list<ObservedData>` and `get_external_case_details(case_id: string) -> ObservedData`. Adapters: `thehive`, `servicenow_soc`, `jira_soc`, custom. Output normalized as ObservedData wrapping case references. Same shape as existing verbs.
 
 **Note on MITRE flow:** the existing `indicator_types` field on Indicators emitted by the `detection_finding` normalizer (§4.12) already carries MITRE technique IDs where vendors emit them; this is preserved as the canonical path for technique data into the interpretation layer.
 
-### 13.3 04-action-authorization.md
+### 14.3 04-action-authorization.md
 
 **Extend `ActionDescriptor` schema** with optional `d3fend_technique` field. Mapping is illustrative (free metadata; not enforced):
 
@@ -671,7 +673,8 @@ host.isolate         d3fend_technique: D3-NTI   (Network Traffic Isolation)
 account.suspend      d3fend_technique: D3-AL    (Account Locking)
 credential.reset     d3fend_technique: D3-CR    (Credential Rotation)
 detection.deploy     d3fend_technique: D3-DA    (Detection Authorship)
-ioc.publish          d3fend_technique: D3-IDA   (Indicator Distribution)
+ioc.publish_to_misp  d3fend_technique: D3-IDA   (Indicator Distribution)
+ioc.publish_to_isac  d3fend_technique: D3-IDA
 ```
 
 **Extend CEL evaluation context (§4.2):**
@@ -684,7 +687,7 @@ ctx.similarity.top_match_outcome        "succeeded" | "failed" | "abandoned" —
 
 These are optional context fields; policies that don't reference them are unaffected. They enable policy patterns like "auto-approve if SOP recommends this action class AND the closest past similar investigation succeeded with the same action."
 
-### 13.4 02-persistence.md
+### 14.4 02-persistence.md
 
 No structural changes. The existing event taxonomy already accommodates the post-conclusion pipeline (07) — the `InvestigationConcluded` event is the trigger for the post-conclusion Temporal workflow; no new event types are required. Cross-investigation linkage events (mentioned as deferred in 02 §8) land with 07.
 
@@ -694,7 +697,7 @@ No structural changes. The existing event taxonomy already accommodates the post
 
 | Stage | Deployment | Capability surface | Notes |
 |---|---|---|---|
-| **v0** | OSS only (laptop default) | Read fixtures + write fixture stubs; agent loop functional (interactive client-side); SOPs functional with keyword retrieval. SOAR_PLAYBOOK adapter class shipped with fixture playbooks. | No real integrations. Knowledge service ships with SOP CRUD and lightweight `governance_mode` only; no embeddings yet. Bundled Pg + Temporal + Keycloak. Signed-bundle distribution surface live. Temporal workflows: action lifecycle, reversal, re-normalization, archive, post-conclusion, summary extraction. Cross-investigation similarity is keyword search over `investigation_current` projection. Paid module Go-package boundary preserved (`oss/`, `paid/tenancy/`, `paid/governance/`); no licensing check. |
+| **v0** | OSS only (laptop default) | Read fixtures + write fixture stubs; agent loop functional (interactive client-side); SOPs functional with keyword retrieval. SOAR_PLAYBOOK adapter class shipped with fixture playbooks. | No real integrations. Knowledge service ships with SOP CRUD and lightweight `governance_mode` only; no embeddings yet. Bundled Pg + Temporal + Keycloak. Signed-bundle distribution surface live. Temporal workflows: action lifecycle, reversal, re-normalization, archive, post-conclusion, summary extraction. Cross-investigation similarity is keyword search over `investigation_current` projection. Open-core seam preserved via the two-repo `module/` interface boundary (public `reckon` defines the interfaces; private `reckon-enterprise` implements them — see `implementation/module-layout.md`); no licensing check. |
 | **v1** | OSS (laptop and self-hosted multi-user) | Real read integrations (EDR, SIEM, IdP, TI, comms, ticketing, MDM); write-side adapter contract lands; T2/T3 actions live; real SOAR_PLAYBOOK bindings (Tines/Torq/customer-authored) | Cross-cutting concerns (rate limiting, health probes, credential resolution) actively exercised. Knowledge service adds embeddings and post-conclusion summary extraction. MITRE corpus distribution live. **`InvestigationLifecycleWorkflow` lands as the top-level Temporal orchestrator**; v0 child workflows reparent under it. |
 | **v2** | OSS + paid distribution (self-hosted and reckon-hosted) | Paid tenancy and governance modules launch. Shared investigation, async approvals via relay, vault-based vendor credentials, BYO IdP federation upstream of Keycloak, gated `governance_mode` UX | Paid distribution goes live in both operator modes. Lift Sub-path A consolidates OSS instances into paid multi-tenant. **`BackgroundHuntWorkflow` and `ScheduledInvestigationWorkflow` land — server-side agent loops with tenant-scoped LLM credentials, separate from per-analyst BYOK.** SOC 2 / compliance work begins for reckon-hosted. Honor-system module activation still in place. |
 | **v3+** | (deferred) | MSP / hierarchical tenancy if customer demand justifies; cross-tenant indicator pool; signed offline-verifiable entitlement licensing (replaces honor-system) | None of this is on the v0–v2 roadmap. Each is gated on real customer need. |
@@ -709,13 +712,13 @@ These are deliberate non-decisions; the architecture accommodates either resolut
 - **Default access-token and refresh-token validity.** Proposed defaults: 1h access, 30d refresh. Tunable per tenant and per role; stricter for `tenant_admin` and `policy_signer`.
 - **pgvector vs alternatives** for the knowledge service. pgvector is the v0+ default for operational simplicity (already on the bundled Postgres). If retrieval quality at scale demands a dedicated vector engine, the storage interface in 06 is abstracted enough to swap.
 - **Per-tenant Temporal namespace scaling cap.** Temporal's namespace primitive scales to the low thousands. If a paid reckon-hosted tenant count exceeds that, sharding across multiple Temporal clusters with a dispatcher layer becomes necessary. Not a v2 concern.
-- **Sub-path B (OSS joining an existing paid tenant) default behavior.** v0 default is "personal scratch + write fresh into shared tenant." Confirm with first paid customers whether re-id or alias-bridge alternatives are demanded.
+- **Sub-path B (OSS joining an existing paid tenant) default behavior.** v0 default is "personal scratch + write fresh into shared tenant." Confirm against managed/SaaS deployment requirements whether re-id or alias-bridge alternatives are demanded.
 - **Telemetry intake schema and consent UX.** What signals to collect, what consent model, retention. Operational call, not an architectural one.
 - **Adapter binary distribution mechanism.** Direct CDN download with signature verification at v0. If adapter version churn becomes painful, an OCI-registry-style distribution is a future option without changing the manifest contract.
 - **Action-authorization enforcement of "guard against half-finished AI multi-step responses."** Whether to support a "composite action" primitive (a single `x-action` bundling multiple effects, atomic in the audit and authorization sense) or to leave multi-step as the agent loop's responsibility with policy gates on individual actions. v0 defers to the agent loop; revisit if real omissions surface in operation.
 - **Per-tenant analytics surface (MTTR, approval latency, reversal rate, throughput, SOP citation analytics).** All metrics are derivable from the event-sourced aggregate — every event carries timestamp, principal, delegate, correlation id, and target set. The data exists from v0. The *surface* (CISO dashboard, team-lead view, analyst self-view) is deferred to governance-module work post-v2; bolt-on, no architectural change required. MTTD is explicitly out of scope (detection happens upstream of reckon's Seed events).
 - **Cross-tenant analyst console.** Promised in §13.2 as part of the tenancy module. Detailed surface — cross-tenant MTTR/throughput/reversal rollups for an operator looking across their tenants — deferred to tenancy-module work post-v2. The cross-tenant *aggregation* path is structurally available the moment the tenancy module is on; the dashboard is additive UI over it.
-- **Cross-org / industry-benchmark surface (peer comparisons across customer tenants).** Genuinely cross-tenant by definition; requires explicit opt-in, anonymization, and differential-privacy-shaped design per TR-22. Deferred to v3+ alongside cross-tenant indicator pool. Not a v0–v2 concern.
+- **Cross-org / industry-benchmark surface (peer comparisons across customer tenants).** Genuinely cross-tenant by definition; requires explicit opt-in, anonymization, and differential-privacy-shaped design so no participating tenant's data is attributable. Deferred to v3+ alongside cross-tenant indicator pool. Not a v0–v2 concern.
 
 ---
 

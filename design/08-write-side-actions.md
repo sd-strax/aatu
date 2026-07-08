@@ -171,7 +171,7 @@ WriteResult {
   final_outcome      SUCCEEDED | FAILED | PARTIAL | TIMEOUT   -- = Execution.final_outcome
   per_target_results map<target_index, OK | FAIL | UNKNOWN>   -- = Execution.per_target_results
   adapter_request_id string         -- correlation id (see §6 / 05 §6.2)
-  error_class        RETRYABLE | FATAL | null  -- reuses 03 §6.2 taxonomy; null on success
+  error_class        RETRYABLE_ERROR | FATAL_ERROR | null  -- matches 04 §6.1 Attempt.outcome; null on success
   error_detail       string?        -- human-readable
   audit_depth        FULL | EXTERNAL -- FULL for DIRECT, EXTERNAL for SOAR_PLAYBOOK (§7; 04 §6.1)
   raw_response_ref   ref?            -- optional pointer to the stored adapter response
@@ -179,9 +179,9 @@ WriteResult {
 ```
 
 **Error classification** reuses the read-side taxonomy (`03 §6.2`) collapsed to what the executor
-acts on: `RETRYABLE` (rate limit, transient 5xx, network blip → retry within the budget, `§6`) and
-`FATAL` (auth, malformed request, target-not-found → no retry, `FAILED`). This matches the categories
-in `04 §6.2`.
+acts on: `RETRYABLE_ERROR` (rate limit, transient 5xx, network blip → retry within the budget, `§6`) and
+`FATAL_ERROR` (auth, malformed request, target-not-found → no retry, `FAILED`). This matches the
+categories in `04 §6.1`/`§6.2`.
 
 **`UNKNOWN` per-target** is a first-class result, not an error: it means the call left reckon but the
 adapter cannot confirm the per-target effect. It never coerces to `OK` — see the idempotency residual

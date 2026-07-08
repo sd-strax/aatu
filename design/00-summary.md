@@ -1,6 +1,6 @@
 # reckon — Architecture Summary
 
-A starting point for new UX and implementation conversations. Seven detailed specs sit alongside this file; this summary is intentionally short and navigation-oriented. Read this first, then drop into the relevant spec when you need depth.
+A starting point for new UX and implementation conversations. Eight detailed specs sit alongside this file; this summary is intentionally short and navigation-oriented. Read this first, then drop into the relevant spec when you need depth.
 
 ---
 
@@ -44,14 +44,14 @@ Differentiator vs. existing SOAR: investigation-engine-with-judgment-applied, no
 | Modules loaded | engine only | engine + tenancy and/or governance |
 | Tenants | single tenant (`tenant_id` defaults to 1) | multi-tenant if tenancy module is on |
 | Postgres | bundled (`embedded-postgres-go`) | managed typical; bundled still works |
-| Temporal | bundled (dev mode, shared Pg) | managed cluster typical |
+| Temporal | bundled (dev server, SQLite-backed) | managed cluster typical |
 | Keycloak | bundled, single realm | bundled or managed; multi-realm if tenancy on |
 | Vendor credentials | `keychain://` (laptop) or `env://`/`vault://` (server) | `vault://` per tenant |
 | Knowledge service | pgvector on the chosen Pg | same |
 | Multi-analyst | yes, within the single tenant | yes, across tenants if tenancy on |
 | Operator | always customer | customer (self-hosted) OR reckon (reckon-hosted) — same Terraform |
 
-OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-install); server-hosted multi-user is the same binary with different config. Paid runs as either a customer-operated deployment or an reckon-operated deployment — the binary, the Terraform, and the dependency set are identical. Lift sub-path A consolidates N OSS instances into one paid multi-tenant instance, preserving namespace UUIDs so STIX ids stay stable. Sub-path B (joining an existing tenant) defaults to "personal scratch alongside" the new shared tenant.
+OSS runs anywhere: laptop is the default first-run experience (an afternoon single-host install); server-hosted multi-user is the same binary with different config. Paid runs as either a customer-operated deployment or an reckon-operated deployment — the binary, the Terraform, and the dependency set are identical. Lift sub-path A consolidates N OSS instances into one paid multi-tenant instance, preserving namespace UUIDs so STIX ids stay stable. Sub-path B (joining an existing tenant) defaults to "personal scratch alongside" the new shared tenant.
 
 ---
 
@@ -61,7 +61,7 @@ OSS runs anywhere: laptop is the default first-run experience (TR-3 afternoon-in
 |---|---|
 | Stack | Go everywhere; OSS binary from public `reckon` repo, paid binary from private `reckon-enterprise` repo; paid binary supersets OSS behaviorally |
 | Local Postgres | Bundled |
-| Local Temporal | Bundled (dev mode, sharing Pg) |
+| Local Temporal | Bundled (dev server, SQLite-backed at v0; Postgres-backed/managed is the scale option) |
 | Identity | Keycloak is the trust root in every deployment; customer IdPs federate upstream via SAML/OIDC |
 | Roles | Live in IdP, carried in JWT; reckon does not cache or mirror roles |
 | Token policy | No valid token, no operation (workflow-context exception for Temporal) |
@@ -265,7 +265,7 @@ In a new conversation:
 
 1. Paste this file or reference it as `design/00-summary.md`.
 2. State explicitly what the conversation is about: "we're working on the UX for the action review panel" or "we're implementing the capability resolver."
-3. The architecture above is the substrate. The seven specs are the depth. Most UX/implementation questions fold into either "what should this look like?" (UX) or "how should this be built?" (implementation), with the architectural shape already settled.
+3. The architecture above is the substrate. The eight specs are the depth. Most UX/implementation questions fold into either "what should this look like?" (UX) or "how should this be built?" (implementation), with the architectural shape already settled.
 4. If a conversation surfaces a question that the existing specs answer, link to the spec section instead of relitigating.
 5. If a conversation surfaces a genuinely new architectural question, that's a signal to spawn a new spec or extend an existing one — not to redesign in-conversation.
 

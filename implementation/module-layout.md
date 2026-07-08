@@ -1,6 +1,6 @@
 # Module layout — the OSS / paid repo boundary
 
-The single most leveraged architectural commit. reckon's open-core split is enforced by a **repo boundary**, not a folder boundary: OSS in one public repo, paid modules in one private repo, with the paid repo depending on the OSS repo through a stable module-interface package. Lands in Week 1; everything in Phase A and beyond hangs off it.
+The single most leveraged architectural commit. reckon's open-core split is enforced by a **repo boundary**, not a folder boundary: OSS in one public repo, paid modules in one private repo, with the paid repo depending on the OSS repo through a stable module-interface package. It is the first structural commit in the codebase; everything in Phase A and beyond hangs off it.
 
 ## Why a repo-level boundary
 
@@ -34,9 +34,12 @@ reckon                                       # public — github.com/sd-strax/re
 ├── identity/                              # per-tenant namespace, UUIDv5 resolver
 ├── authz/                                 # JWT validation, role extraction, two-axis evaluation
 ├── temporal/                              # worker registration, OSS workflows
+├── runtime/                               # runtime.Run entry point shared by both binaries
+├── supervisor/                            # bundled-deps process supervisor (Pg, Temporal, Keycloak, backend)
 ├── config/                                # config loader
 ├── server/                                # HTTP+WS server
 ├── adapters/                              # first-party adapter binaries
+├── init/                                  # launchd / systemd service templates
 ├── internal/                              # truly internal helpers
 ├── design/                                # specs (existing)
 └── go.mod
@@ -56,7 +59,7 @@ reckon-enterprise                            # private — github.com/sd-strax/r
 ```go
 module github.com/sd-strax/reckon-enterprise
 
-go 1.22
+go 1.25
 
 require github.com/sd-strax/reckon v0.x.y
 ```
@@ -209,7 +212,7 @@ For contributors working across both repos, the canonical local layout is:
 A Go workspace file (gitignored from both repos) makes both modules visible at once:
 
 ```
-go 1.22
+go 1.25
 
 use ./reckon
 use ./reckon-enterprise
@@ -232,11 +235,11 @@ Examples:
 - `reckon/internal/pgutil/` — Postgres helpers; not part of the public API.
 - `reckon-enterprise/tenancy/` — paid tenancy module implementation.
 
-## What this looks like in PR #1
+## What the seam's initial commits look like
 
-The Week 1 commits land in two repos.
+The initial commits land in two repos.
 
-**`reckon` PR #1:**
+**`reckon` initial commit:**
 - Top-level directory structure as above (mostly empty)
 - `module/` with interfaces and disabled-stub implementations
 - `cmd/reckon-backend/` with OSS-side wireup
@@ -244,7 +247,7 @@ The Week 1 commits land in two repos.
 - Config loader (recognizes paid keys but the OSS binary logs a warning if they're set — OSS binary has no paid module to wire)
 - A single Go test that proves: `module.Tenancy().Enabled() == false` and the disabled stubs return their no-op defaults.
 
-**`reckon-enterprise` PR #1:**
+**`reckon-enterprise` initial commit:**
 - `tenancy/` and `governance/` skeletons with `Enabled() bool` stubs and a stub return
 - `cmd/reckon-backend/` with paid-side wireup
 - `cmd/reckon/` with paid-side `reckon version` (reports as paid build)

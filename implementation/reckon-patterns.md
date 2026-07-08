@@ -16,19 +16,23 @@ Used in `reckon/aggregate/`. Pattern: split "what events does this command produ
 
 ```go
 // command.go — pure, no DB
-func applyCommand(env Envelope, cmd Command, currentSeq int64) ([]Event, error)
+func foldState(events []Event) (aggregateState, error)
+func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, error)
 
 // handler.go — owns the transaction
 func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (Result, error) {
     tx, _ := h.store.db.BeginTx(ctx, nil)
-    currentSeq, _ := h.store.LatestSequenceTx(ctx, tx, env.AggregateID)
-    events, _ := applyCommand(env, cmd, currentSeq)
-    // ... append + project ...
+    stream, _ := h.store.LoadStreamTx(ctx, tx, env.AggregateID)
+    state, _ := foldState(stream)
+    events, _ := applyCommand(env, cmd, state)
+    // ... append + project each event, still in-tx ...
     return Result{...}, tx.Commit()
 }
 ```
 
-**Why this shape:** the pure function is trivially unit-testable without touching Pg (see `TestApplyCommand_*`). The transaction wrapper is itself thin enough that the integration tests cover it without combinatorial explosion. Don't fold them together.
+**Why this shape:** the pure functions are trivially unit-testable without touching Pg (see `TestApplyCommand_*`). The transaction wrapper is itself thin enough that the integration tests cover it without combinatorial explosion. Don't fold them together.
+
+Two acknowledged edges: `applyCommand` mints interpretation IDs (`uuid.New()`) — safe because replay re-applies stored events, never re-runs commands (rationale at `interpretation.go`'s `interpretationEvent`); and the fold is O(events-in-stream) per command — fine at Phase-A stream sizes, snapshotting is the v1+ answer if streams grow long.
 
 **Where to use:** any command handler in aggregate/ — and any future command handler in other engine packages that follow the same event-sourcing shape.
 

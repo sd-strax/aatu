@@ -273,7 +273,7 @@ A status state machine.
 
 **States:** `DRAFT`, `ACTIVE`, `PAUSED`, `CONCLUDED`, `ARCHIVED`.
 
-`DRAFT` is the entry state: the investigation has a seed and can be reasoned over freely — hypotheses, evidence, notes, the whole interpretation layer — but is **not yet cleared to act on the outside world**. External (T2+) action requests are refused until it is activated (04-action-authorization.md §T1). This makes activation an explicit, auditable step rather than a side effect of creation — relevant when the agent proposes an investigation off an alert and it awaits a human picking it up. `ACTIVE` is the working state; `PAUSED` is a reversible hold; `CONCLUDED` carries a Report; `ARCHIVED` is terminal.
+`DRAFT` is the entry state: the investigation has a seed and can be reasoned over freely — hypotheses, evidence, notes, the whole interpretation layer — but is **not yet cleared to act on the outside world**. External (T2+) action requests are refused until it is activated (04-action-authorization.md §1 (tier T1)). This makes activation an explicit, auditable step rather than a side effect of creation — relevant when the agent proposes an investigation off an alert and it awaits a human picking it up. `ACTIVE` is the working state; `PAUSED` is a reversible hold; `CONCLUDED` carries a Report; `ARCHIVED` is terminal.
 
 **Transitions:**
 
@@ -289,8 +289,8 @@ CONCLUDED  →  ARCHIVED
 
 - `CONCLUDED` requires `conclusion_ref` populated.
 - **Reopen** (`CONCLUDED → ACTIVE`) clears `conclusion_ref`; the prior Report is preserved and referenced from the reasoning thread.
-- Each transition emits an Interpretation of type `lifecycle`. The lifecycle event and the Interpretation are written in the **same aggregate transaction** (02-persistence.md §3) with a shared `correlation_id`.
-- `CONCLUDED` accepts new Interpretations **only** when they are (a) `action-*` lifecycle entries for **reversal actions** (see 04-action-authorization.md §9.1 — un-isolating a host weeks after closing the case without reopening), (b) `post_conclusion` entries from the post-conclusion pipeline (07-post-conclusion-outputs.md §9), or (c) `linkage` entries recording cross-investigation relationships discovered after closure. `conclusion_ref` stays set; the reasoning thread continues to grow with the reversal / post-conclusion / linkage trace; the investigation does **NOT** auto-reopen. Any other Interpretation against a `CONCLUDED` investigation requires an explicit reopen.
+- Each transition emits an Interpretation of type `lifecycle` — **except** the conclude transition (`ACTIVE → CONCLUDED`), which emits its Interpretation as type `conclusion`; the conclusion record doubles as the transition record. The lifecycle event and the Interpretation are written in the **same aggregate transaction** (02-persistence.md §3) with a shared `correlation_id`.
+- `CONCLUDED` accepts new Interpretations **only** when they are (a) `action-*` lifecycle entries for **reversal actions** (see 04-action-authorization.md §9.1 — un-isolating a host weeks after closing the case without reopening), (b) `post_conclusion` entries from the post-conclusion pipeline (07-post-conclusion-outputs.md §9), or (c) `linkage` entries recording cross-investigation relationships discovered after closure. `conclusion_ref` stays set; the reasoning thread continues to grow with the reversal / post-conclusion / linkage trace; the investigation does **NOT** auto-reopen. Any other Interpretation against a `CONCLUDED` investigation requires an explicit reopen. `CONCLUDED` likewise freezes membership and evidence mutations — `MemberAdded` / `MemberRemoved` / `EvidenceAttached` (02-persistence.md §3) are rejected against a `CONCLUDED` investigation; reopen first.
 - `ARCHIVED` accepts **no new events of any kind**.
 
 ### Extension 3 — ReasoningThread
@@ -474,6 +474,9 @@ x-action
                       by this time; system emits ActionExpired)
   assignee_ref        optional Analyst id (claimed by reviewer)
   pending_approvers   optional set<Analyst id>
+  notification_channels optional list<string> (async-approval delivery
+                      channels for the deep-link flow; added by
+                      04-action-authorization.md §5.3)
   authorization       Authorization sub-record
                       (04-action-authorization.md §3.3)
   execution           Execution sub-record
@@ -510,6 +513,11 @@ EDGE TYPES (v0 vocabulary, open)
 | `aliases`        | Entity         | Entity         | Identity assertion (non-destructive — never a merge).                                                                                                  |
 | `parent-of`      | x-hypothesis   | x-hypothesis   | Hypothesis refinement.                                                                                                                                 |
 | `reverses`       | x-action       | x-action       | A reversing action negates a previously-`SUCCEEDED` action. Also expressible via `x-action.reversal_of_ref`; the edge form supports graph queries (04-action-authorization.md §7). |
+| `parent-process-of` | process     | process        | Observed process parent/child relationship (emitted by the process_activity normalizer, 03-capability-layer.md §4.1). Distinct from `parent-of`, which is reserved for x-hypothesis refinement. |
+| `x-authenticated-to` | user-account | x-host        | Observed authentication of a user to a host (emitted by the authentication normalizer, 03-capability-layer.md §4.2).                                                                    |
+| `loads`          | process        | file           | Observed module/DLL load (emitted by the module_activity normalizer, 03-capability-layer.md §4.8).                                                                                       |
+| `member-of-group`| user-account   | x-group        | Observed directory-group membership (emitted by the account_change normalizer, 03-capability-layer.md §4.9).                                                                             |
+| `clicked`        | user-account   | url            | Observed URL click from email (emitted by the email_url_activity normalizer, 03-capability-layer.md §4.11).                                                                              |
 
 Standard STIX relationship types (`indicates`, `uses`, `targets`, `communicates-with`, `resolves-to`, `located-at`, etc.) are also valid where applicable.
 
@@ -587,7 +595,7 @@ ADOPTED VS INVENTED
 - **`x-action`** — primitive for state-changing operations. Lifecycle and authorization in 04-action-authorization.md.
 - **Custom STIX SDOs:** `x-hypothesis`, `x-prediction`.
 - **Custom STIX SCOs:** `x-host`, `x-registry-key`, `x-scheduled-task`, `x-group` — entity types not covered by STIX 2.1 native; identity rules in 03-capability-layer.md §7.2.
-- **Custom STIX relationship types:** `x-supports`, `x-refutes`, `reverses`.
+- **Custom STIX relationship types:** `x-supports`, `x-refutes`, `reverses`; plus the normalizer-emitted observation relationships `parent-process-of`, `x-authenticated-to`, `loads`, `member-of-group`, `clicked` (03-capability-layer.md §4.1, §4.2, §4.8, §4.9, §4.11).
 - **Investigation extension structure** — `Seed`, `Lifecycle`, `ReasoningThread`, `ConclusionSlot` layered on top of `Grouping`.
 
 
@@ -601,7 +609,7 @@ These are **not domain-model gaps**. The model accommodates either choice.
 ### Closed (resolved by other specs)
 
 - **Eager STIX promotion from OCSF.** Every tool response is normalized at ingest into `ObservedData` and SCOs, with the raw `OcsfEvent` retained as ground truth and re-normalizable on demand. See 03-capability-layer.md §4.13.
-- **Reasoning thread is a projection.** It is materialized as a projection (`investigation_thread`) rebuilt from the event stream; the canonical ordering lives in the events' `sequence_no`, not in a list field on the Grouping. The Grouping's `ReasoningThread` extension is the logical view. See 02-persistence.md §4.2.
+- **Reasoning thread is a projection.** It is materialized as a projection (`investigation_thread`) rebuilt from the event stream; the canonical ordering lives in the events' `sequence_no`, not in a list field on the Grouping. The Grouping's `ReasoningThread` extension is the logical view. See 02-persistence.md §4 (Projections subsection).
 - **`labels` on `x-hypothesis` controlled vocabulary.** Bind to MITRE ATT&CK technique IDs (e.g., `T1486`, `T1078.004`) by convention; freeform values remain permitted. The agent loop is prompted to label hypotheses with applicable techniques where evident. See 05-component-architecture.md §14.1.
 
 
