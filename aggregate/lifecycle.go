@@ -143,16 +143,7 @@ func statusTransition(env Envelope, state aggregateState, from, to, reason strin
 	if err != nil {
 		return nil, err
 	}
-	domain := Event{
-		AggregateID:   env.AggregateID,
-		SequenceNo:    state.Seq + 1,
-		TenantID:      env.TenantID,
-		Type:          EventTypeStatusChanged,
-		Payload:       payload,
-		Actor:         env.Actor,
-		OccurredAt:    env.OccurredAt,
-		CorrelationID: env.CorrelationID,
-	}
+	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeStatusChanged, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationLifecycle,
 		fmt.Sprintf("lifecycle %s→%s", from, to), nil)
 	if err != nil {
@@ -229,6 +220,7 @@ func lifecycleDomainEvent(env Envelope, seqNo int64, eventType string, payload [
 		SequenceNo:    seqNo,
 		TenantID:      env.TenantID,
 		Type:          eventType,
+		Version:       schemaVersion,
 		Payload:       payload,
 		Actor:         env.Actor,
 		OccurredAt:    env.OccurredAt,

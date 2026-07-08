@@ -146,6 +146,7 @@ func membershipEvent(env Envelope, state aggregateState, eventType string, paylo
 		SequenceNo:    state.Seq + 1,
 		TenantID:      env.TenantID,
 		Type:          eventType,
+		Version:       schemaVersion,
 		Payload:       raw,
 		Actor:         env.Actor,
 		OccurredAt:    env.OccurredAt,

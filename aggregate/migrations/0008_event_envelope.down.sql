@@ -1,0 +1,5 @@
+ALTER TABLE events DROP COLUMN IF EXISTS causation_id;
+ALTER TABLE events DROP COLUMN IF EXISTS recorded_at;
+ALTER TABLE events DROP COLUMN IF EXISTS event_version;
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_event_id_key;
+ALTER TABLE events DROP COLUMN IF EXISTS event_id;

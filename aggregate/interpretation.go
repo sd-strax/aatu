@@ -66,6 +66,7 @@ func interpretationEvent(env Envelope, seqNo int64, interpID uuid.UUID, itype, s
 		SequenceNo:    seqNo,
 		TenantID:      env.TenantID,
 		Type:          EventTypeInterpretationRecorded,
+		Version:       schemaVersion,
 		Payload:       payload,
 		Actor:         env.Actor,
 		OccurredAt:    env.OccurredAt,

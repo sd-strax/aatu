@@ -22,6 +22,12 @@ type Command interface {
 
 // CreateInvestigation is the first concrete command — sufficient for the
 // A.4 done bar. Persists one investigation.created event.
+//
+// Deliberately thinner than the spec's InvestigationCreated: the Seed
+// extension (01-domain-model.md §Extension 1 — AlertSeed/EntitySeed/
+// QuestionSeed, context, description) lands together with STIX object CRUD
+// in Phase B, when there are STIX objects for a seed to reference. Until
+// then Title is the whole creation payload.
 type CreateInvestigation struct {
 	Title string `json:"title"`
 }
@@ -72,10 +78,11 @@ func (e ErrEnvelope) Error() string { return "envelope: " + string(e) }
 // to applyCommand so transition legality is checked against authoritative state
 // (not a projection that could lag or be mid-rebuild).
 type aggregateState struct {
-	Seq           int64  // sequence number of the last event (0 if none)
-	Exists        bool   // an investigation.created has been seen
-	Status        string // current lifecycle status
-	ConclusionRef string // set while concluded, cleared on reopen
+	Seq           int64     // sequence number of the last event (0 if none)
+	Exists        bool      // an investigation.created has been seen
+	TenantID      uuid.UUID // tenant stamped at creation; immutable thereafter
+	Status        string    // current lifecycle status
+	ConclusionRef string    // set while concluded, cleared on reopen
 }
 
 // foldState replays an event stream into the current aggregateState. Only
@@ -88,6 +95,7 @@ func foldState(events []Event) (aggregateState, error) {
 		switch e.Type {
 		case EventTypeCreated:
 			s.Exists = true
+			s.TenantID = e.TenantID
 			s.Status = StatusDraft
 		case EventTypeStatusChanged:
 			var p InvestigationStatusChanged
@@ -133,6 +141,12 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		if !state.Exists {
 			return nil, fmt.Errorf("%s on non-existent investigation %s", cmd.Kind(), env.AggregateID)
 		}
+		// An aggregate belongs to exactly one tenant, stamped at creation
+		// (01-domain-model.md §5). A command arriving under a different tenant
+		// must not stamp foreign tenant_ids onto later events of the stream.
+		if env.TenantID != state.TenantID {
+			return nil, fmt.Errorf("%s rejected: envelope tenant %s does not match investigation tenant %s", cmd.Kind(), env.TenantID, state.TenantID)
+		}
 		if state.Status == StatusArchived {
 			return nil, fmt.Errorf("%s rejected: investigation %s is archived (terminal)", cmd.Kind(), env.AggregateID)
 		}
@@ -152,6 +166,7 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 			SequenceNo:    state.Seq + 1,
 			TenantID:      env.TenantID,
 			Type:          EventTypeCreated,
+			Version:       schemaVersion,
 			Payload:       payload,
 			Actor:         env.Actor,
 			OccurredAt:    env.OccurredAt,

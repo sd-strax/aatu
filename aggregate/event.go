@@ -35,12 +35,40 @@ type Event struct {
 	Actor       Actor           `json:"actor"`
 	OccurredAt  time.Time       `json:"occurred_at"`
 
+	// EventID is the event's stable global identifier (02-persistence.md §3):
+	// side stores (ai_tool_calls) and cross-store provenance reference one
+	// event by it without carrying the composite natural key. Minted as
+	// UUIDv7 at append time if zero — it is an infrastructure identity, not
+	// command output, so applyCommand never sets it.
+	EventID uuid.UUID `json:"event_id"`
+
+	// Version is the payload schema version for this event type
+	// (02-persistence.md §5). Bump per event type when its payload shape
+	// changes, and upcast old versions at read time. Everything is version 1
+	// today (schemaVersion).
+	Version int `json:"event_version"`
+
+	// RecordedAt is the DB-stamped write time, as opposed to the
+	// caller-supplied business time OccurredAt. Zero on events built by
+	// applyCommand; populated when events are read back from the store.
+	RecordedAt time.Time `json:"recorded_at,omitzero"`
+
+	// CausationID references the event that caused this one, for event-chain
+	// provenance. Invalid (NULL) for command-initiated events — all events
+	// today; system-emitted chains (Temporal workflows) populate it later.
+	CausationID uuid.NullUUID `json:"causation_id,omitempty"`
+
 	// CorrelationID groups every event produced by one command. A command that
 	// emits a domain event plus its paired InterpretationRecorded (a lifecycle
 	// transition, say) stamps the same CorrelationID on both, so the reasoning
 	// trail can be reassembled (02-persistence.md §3, "shared correlation_id").
 	CorrelationID uuid.UUID `json:"correlation_id"`
 }
+
+// schemaVersion is the current payload schema version stamped on every event
+// built by this package (Event.Version). Bump per event type — not globally —
+// when a payload shape changes; see 02-persistence.md §5.
+const schemaVersion = 1
 
 // Envelope is the request-time metadata accompanying every command. TenantID is
 // resolved at the request boundary (module.TenancyModule.ResolveTenant; the OSS

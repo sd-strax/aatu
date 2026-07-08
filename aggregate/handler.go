@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 // Handler orchestrates command-to-events translation, atomic event-append
@@ -69,12 +71,21 @@ func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (Result
 		return Result{}, err
 	}
 
-	for _, evt := range events {
-		if err := h.store.AppendEventTx(ctx, tx, evt); err != nil {
+	for i := range events {
+		// Mint the infrastructure identity here — not in applyCommand — so the
+		// pure layer stays free of write-time concerns and the caller's
+		// Result.AppliedEvents carries the persisted identity.
+		if events[i].EventID == (uuid.UUID{}) {
+			events[i].EventID = uuid.Must(uuid.NewV7())
+		}
+		if events[i].Version == 0 {
+			events[i].Version = schemaVersion
+		}
+		if err := h.store.AppendEventTx(ctx, tx, events[i]); err != nil {
 			return Result{}, err
 		}
 		for _, p := range h.projectors {
-			if err := p.Apply(ctx, tx, evt); err != nil {
+			if err := p.Apply(ctx, tx, events[i]); err != nil {
 				return Result{}, fmt.Errorf("projector %s: %w", p.Name(), err)
 			}
 		}
@@ -122,14 +133,19 @@ func (h *Handler) Replay(ctx context.Context) error {
 		}
 	}
 
-	// Stream every event in canonical replay order: by occurrence time, then
-	// by (aggregate_id, sequence_no) for tiebreaking. Same query the Store
-	// exposes via LoadAll, but we run it inside the replay tx for snapshot
+	// Stream every event in canonical replay order: (aggregate_id, sequence_no).
+	// Deliberately NOT occurred_at — that is caller-supplied wall-clock time and
+	// nothing enforces per-aggregate monotonicity (clock step-back, second
+	// writer), so time-first ordering could apply one aggregate's events out of
+	// sequence and silently corrupt projections. Both projections are keyed
+	// per-aggregate, so cross-aggregate interleaving order is immaterial;
+	// sequence_no is the only ordering the aggregate guarantees. Same query the
+	// Store exposes via LoadAll, but run inside the replay tx for snapshot
 	// consistency with the projection writes.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id
+		SELECT aggregate_id, sequence_no, tenant_id, event_type, payload, actor, occurred_at, correlation_id, event_id, event_version, recorded_at, causation_id
 		FROM events
-		ORDER BY occurred_at, aggregate_id, sequence_no
+		ORDER BY aggregate_id, sequence_no
 	`)
 	if err != nil {
 		return fmt.Errorf("query events for replay: %w", err)

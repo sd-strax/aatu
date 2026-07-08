@@ -162,8 +162,8 @@ func TestHandleCreateInvestigation(t *testing.T) {
 // the same aggregate at a stale sequence_no is rejected.
 //
 // CreateInvestigation specifically rejects "already exists" up front via
-// applyCommand's check (currentSeq > 0). The store-level concurrency check
-// is exercised by the unit test below (TestStoreConcurrentInsert).
+// applyCommand's existence check (state.Exists). The store-level concurrency
+// check is exercised by the unit test below (TestStoreConcurrentInsert).
 func TestStaleSequenceRejected(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping aggregate integration test in short mode")
