@@ -6,7 +6,16 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// tracer emits the aggregate's spans. Cached at package init; the global
+// tracer delegates to whatever provider telemetry.Setup installs at startup,
+// so spans are inert (but harmless) if Setup never runs — e.g. in unit tests.
+var tracer = otel.Tracer("reckon/aggregate")
 
 // Handler orchestrates command-to-events translation, atomic event-append
 // + projection-update inside a single Postgres transaction, and cold replay.
@@ -27,9 +36,9 @@ func NewHandler(store *Store, projectors ...Projector) *Handler {
 // Result is what Handle returns: the events that were persisted and the
 // aggregate's new latest sequence number.
 type Result struct {
-	AggregateID    AggregateID
-	AppliedEvents  []Event
-	NewSequenceNo  int64
+	AggregateID   AggregateID
+	AppliedEvents []Event
+	NewSequenceNo int64
 }
 
 // Handle executes one command:
@@ -43,7 +52,19 @@ type Result struct {
 // If anything fails, the transaction rolls back; nothing is persisted.
 // Returns ErrConcurrent if another writer beat us to the aggregate
 // (callers should reload, re-execute, and retry).
-func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (Result, error) {
+func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (res Result, err error) {
+	ctx, span := tracer.Start(ctx, "aggregate.Handle", trace.WithAttributes(
+		attribute.String("command.type", fmt.Sprintf("%T", cmd)),
+		attribute.String("aggregate.id", fmt.Sprintf("%v", env.AggregateID)),
+	))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	tx, err := h.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("begin tx: %w", err)
@@ -84,11 +105,19 @@ func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (Result
 		if err := h.store.AppendEventTx(ctx, tx, events[i]); err != nil {
 			return Result{}, err
 		}
+		// One span per event covers the projection update — the third layer of
+		// the A.8 trace (HTTP → aggregate.Handle → aggregate.project).
+		_, pspan := tracer.Start(ctx, "aggregate.project",
+			trace.WithAttributes(attribute.String("event.type", events[i].Type)))
 		for _, p := range h.projectors {
-			if err := p.Apply(ctx, tx, events[i]); err != nil {
-				return Result{}, fmt.Errorf("projector %s: %w", p.Name(), err)
+			if perr := p.Apply(ctx, tx, events[i]); perr != nil {
+				pspan.RecordError(perr)
+				pspan.SetStatus(codes.Error, perr.Error())
+				pspan.End()
+				return Result{}, fmt.Errorf("projector %s: %w", p.Name(), perr)
 			}
 		}
+		pspan.End()
 	}
 
 	if err := tx.Commit(); err != nil {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	_ "github.com/lib/pq" // registers the "postgres" sql driver for the aggregate DB
 
@@ -21,6 +22,8 @@ import (
 	"github.com/sd-strax/reckon/module"
 	"github.com/sd-strax/reckon/server"
 	"github.com/sd-strax/reckon/supervisor"
+	"github.com/sd-strax/reckon/telemetry"
+	"github.com/sd-strax/reckon/temporal"
 )
 
 // Config is the runtime configuration passed to a ModuleBuilder. Today it
@@ -95,6 +98,28 @@ func activate(build ModuleBuilder) (config.Config, module.Registry, error) {
 // file is written on entry and removed on exit so `reckon stop` can find the
 // process.
 func serve(cfg config.Config) error {
+	// Bring observability up first so everything below logs through the
+	// configured structured logger and can emit spans (A.8).
+	logDir := ""
+	if cfg.Telemetry.LogToFile {
+		logDir = telemetry.DefaultLogDir(cfg.Data.Dir)
+	}
+	tel, err := telemetry.Setup(telemetry.Config{
+		ServiceName:    branding.CLI,
+		LogLevel:       cfg.Telemetry.LogLevel,
+		LogFormat:      cfg.Telemetry.LogFormat,
+		LogDir:         logDir,
+		MetricsEnabled: cfg.Telemetry.MetricsEnabled,
+	})
+	if err != nil {
+		return fmt.Errorf("init telemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tel.Shutdown(shutdownCtx)
+	}()
+
 	pidPath := PIDFilePath(cfg)
 	if err := writePIDFile(pidPath); err != nil {
 		return err
@@ -128,10 +153,20 @@ func serve(cfg config.Config) error {
 		RealmName:      cfg.Keycloak.Realm,
 	})
 
+	// The Temporal worker runs in-process (05 §3.3): it registers the OSS
+	// workflow inventory on the `reckon` task queue. It depends only on the
+	// Temporal frontend being reachable, so it registers after temp and
+	// self-probes at Start.
+	worker := temporal.NewWorker(temporal.WorkerConfig{
+		HostPort:  fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
+		Namespace: cfg.Temporal.Namespace,
+	})
+
 	sup := supervisor.New()
 	sup.Register(pg, supervisor.FatalOnExit)
 	sup.Register(temp, supervisor.RestartOnExit)
 	sup.Register(kc, supervisor.RestartOnExit)
+	sup.Register(worker, supervisor.RestartOnExit)
 
 	// Open the aggregate's DB lazily — sql.Open doesn't actually connect
 	// until first query, so it's safe to construct before Pg starts. The
@@ -146,7 +181,7 @@ func serve(cfg config.Config) error {
 		aggregate.InvestigationCurrentProjector{},
 	)
 
-	backend := server.NewBackend(server.BackendConfig{
+	backendCfg := server.BackendConfig{
 		HTTPPort:         cfg.Backend.HTTPPort,
 		PgDSN:            pg.DSN("reckon_main"),
 		TemporalHostPort: fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
@@ -154,7 +189,12 @@ func serve(cfg config.Config) error {
 			cfg.Keycloak.HTTPPort, cfg.Keycloak.Realm),
 		KeycloakClientID: cfg.Keycloak.ClientID,
 		Handler:          handler,
-	}, sup)
+		Middleware:       tel.HTTPMiddleware,
+	}
+	if tel.Metrics != nil {
+		backendCfg.MetricsHandler = tel.Metrics.Handler()
+	}
+	backend := server.NewBackend(backendCfg, sup)
 	sup.Register(backend, supervisor.RestartOnExit)
 
 	log.Printf("%s: pid %d; /status on http://localhost:%d/status; %s stop to shut down",

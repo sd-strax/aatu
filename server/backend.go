@@ -64,6 +64,16 @@ type BackendConfig struct {
 	// with a 503 if absent so the server still serves /healthz cleanly when
 	// the engine is being torn down).
 	Handler *aggregate.Handler
+
+	// Middleware, when non-nil, wraps the entire router — it carries the
+	// telemetry tracing/metrics layer (telemetry.Provider.HTTPMiddleware).
+	// Injected as a function so server stays decoupled from the telemetry
+	// package. Nil means no wrapping.
+	Middleware func(http.Handler) http.Handler
+
+	// MetricsHandler, when non-nil, is served at /metrics (Prometheus text
+	// exposition). Nil disables the endpoint.
+	MetricsHandler http.Handler
 }
 
 // Backend is the in-process HTTP server.
@@ -192,6 +202,13 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	mux.HandleFunc("/healthz", b.handleHealthz)
 	mux.HandleFunc("/status", b.handleStatus)
 
+	// Public — Prometheus scrape endpoint. Unauthenticated in the bundled/local
+	// shape (scraped over loopback); a paid/SaaS deployment fronts it with
+	// network policy or an auth proxy.
+	if b.cfg.MetricsHandler != nil {
+		mux.Handle("/metrics", b.cfg.MetricsHandler)
+	}
+
 	// API — auth required.
 	api := http.NewServeMux()
 
@@ -218,6 +235,9 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 
 	mux.Handle("/api/", http.StripPrefix("/api", api))
 
+	if b.cfg.Middleware != nil {
+		return b.cfg.Middleware(mux)
+	}
 	return mux
 }
 

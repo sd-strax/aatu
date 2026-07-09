@@ -19,6 +19,7 @@ type Config struct {
 	Temporal   Temporal   `yaml:"temporal"`
 	Keycloak   Keycloak   `yaml:"keycloak"`
 	Backend    Backend    `yaml:"backend"`
+	Telemetry  Telemetry  `yaml:"telemetry"`
 	Paid       Paid       `yaml:"paid"`
 }
 
@@ -86,6 +87,22 @@ type Backend struct {
 	HTTPPort int `yaml:"http_port"`
 }
 
+// Telemetry configures structured logging, tracing, and metrics (Phase A.8).
+type Telemetry struct {
+	// LogLevel is the minimum slog level: "debug", "info", "warn", "error".
+	// Default "info".
+	LogLevel string `yaml:"log_level"`
+	// LogFormat is "text" (human-readable) or "json" (machine-ingestible).
+	// Default "text".
+	LogFormat string `yaml:"log_format"`
+	// LogToFile also writes rolling logs under <Data.Dir>/logs in addition to
+	// stderr. Default true.
+	LogToFile bool `yaml:"log_to_file"`
+	// MetricsEnabled exposes the Prometheus /metrics endpoint on the backend.
+	// Default true.
+	MetricsEnabled bool `yaml:"metrics_enabled"`
+}
+
 // Paid groups the activation flags for paid modules. Ignored when the
 // binary is OSS; consulted by the paid binary's registry builder.
 type Paid struct {
@@ -129,6 +146,12 @@ func Default() Config {
 		},
 		Backend: Backend{
 			HTTPPort: 8080,
+		},
+		Telemetry: Telemetry{
+			LogLevel:       "info",
+			LogFormat:      "text",
+			LogToFile:      true,
+			MetricsEnabled: true,
 		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},
