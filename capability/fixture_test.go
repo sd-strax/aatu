@@ -189,6 +189,44 @@ func TestFixtureMissingScenario(t *testing.T) {
 	assertErrorClass(t, err, ErrUnhealthy)
 }
 
+// TestFixtureRecoversAfterFailedLoad: a load failure is re-tested on the next
+// call (§6.2 UNHEALTHY semantics), and the recovery load must not duplicate
+// fixtures.
+func TestFixtureRecoversAfterFailedLoad(t *testing.T) {
+	root := t.TempDir()
+	a := NewFixtureAdapter(root, "late")
+	a.SetApplyDelays(false)
+
+	// Scenario dir doesn't exist yet: unhealthy.
+	if h := a.Health(); h.Healthy {
+		t.Fatal("expected unhealthy before scenario exists")
+	}
+
+	// Scenario appears (e.g. operator drops fixtures in); adapter recovers.
+	dir := filepath.Join(root, "late")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture := `{
+      "fixture_meta":{"scenario":"late","matches":{"verb":"enumerate_logons","params":{}},"delay_ms":0},
+      "ocsf":{"class_uid":3002,"class_name":"Authentication","time":"2026-04-20T14:32:11Z"}
+    }`
+	if err := os.WriteFile(filepath.Join(dir, "e1.json"), []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if h := a.Health(); !h.Healthy {
+		t.Fatalf("expected recovery after scenario appears: %s", h.Message)
+	}
+	resp, err := a.Invoke(context.Background(), "replay", map[string]any{ParamVerb: "enumerate_logons"})
+	if err != nil {
+		t.Fatalf("invoke after recovery: %v", err)
+	}
+	if len(resp.Events) != 1 {
+		t.Errorf("got %d events after recovery; want exactly 1 (no duplication)", len(resp.Events))
+	}
+}
+
 // TestFixtureHealth: a loaded scenario reports healthy with a fixture count.
 func TestFixtureHealth(t *testing.T) {
 	a := newTestFixture(t, twoLogonsPlusOther)

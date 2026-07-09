@@ -49,7 +49,6 @@ type FixtureAdapter struct {
 
 	mu       sync.Mutex
 	loaded   bool
-	loadErr  error
 	fixtures []fixtureFile
 }
 
@@ -76,23 +75,25 @@ func (a *FixtureAdapter) SupportedOperations() []string { return []string{fixtur
 // "fixture:lateral-movement-via-rdp".
 func (a *FixtureAdapter) sourceTool() string { return "fixture:" + a.scenario }
 
-// load reads and parses every fixture JSON in the scenario directory once.
-// Sidecar files (asset-criticality.json) and raw_response fixtures are skipped.
+// load reads and parses every fixture JSON in the scenario directory. Success
+// is cached; a failure is NOT — the next call re-tests, per the §6.2 UNHEALTHY
+// semantic ("unusable until re-tested"). Each attempt parses into a fresh slice
+// so a retry can never double-append. Sidecar files (asset-criticality.json)
+// and raw_response fixtures are skipped.
 func (a *FixtureAdapter) load() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.loaded {
-		return a.loadErr
+		return nil
 	}
-	a.loaded = true
 
 	dir := filepath.Join(a.root, a.scenario)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		a.loadErr = fmt.Errorf("read scenario dir %s: %w", dir, err)
-		return a.loadErr
+		return fmt.Errorf("read scenario dir %s: %w", dir, err)
 	}
 
+	var fixtures []fixtureFile
 	for _, ent := range entries {
 		name := ent.Name()
 		if ent.IsDir() || !strings.HasSuffix(name, ".json") {
@@ -103,20 +104,21 @@ func (a *FixtureAdapter) load() error {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			a.loadErr = fmt.Errorf("read fixture %s: %w", name, err)
-			return a.loadErr
+			return fmt.Errorf("read fixture %s: %w", name, err)
 		}
 		var f fixtureFile
 		if err := json.Unmarshal(data, &f); err != nil {
-			a.loadErr = fmt.Errorf("parse fixture %s: %w", name, err)
-			return a.loadErr
+			return fmt.Errorf("parse fixture %s: %w", name, err)
 		}
-		a.fixtures = append(a.fixtures, f)
+		fixtures = append(fixtures, f)
 	}
 	// Stable order so multi-event results are deterministic.
-	sort.SliceStable(a.fixtures, func(i, j int) bool {
-		return fixtureOrder(a.fixtures[i]) < fixtureOrder(a.fixtures[j])
+	sort.SliceStable(fixtures, func(i, j int) bool {
+		return fixtureOrder(fixtures[i]) < fixtureOrder(fixtures[j])
 	})
+
+	a.fixtures = fixtures
+	a.loaded = true
 	return nil
 }
 

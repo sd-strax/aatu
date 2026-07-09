@@ -1168,7 +1168,10 @@ namespace UUID per §7.1.
   ports stripped, fragment preserved, query-string keys sorted).
 - **`file`**: hashes in priority order — `SHA-256` if present, else `SHA-1`,
   else `MD5`, else `(name, parent_directory_ref.value, size)`. Hash strings
-  lowercased.
+  lowercased. The selected algorithm participates in identity alongside its
+  digest (the canonical JSON carries the `{algorithm: digest}` pair, mirroring
+  STIX 2.1's `hashes` contributing property), so equal digest strings under
+  different algorithms can never merge two files.
 - **`x-host`** (custom): priority order — `(asset_id_from_cmdb)` if known, else
   `(domain, hostname)` lowercased, else `(mac_address)` lowercased and
   colon-separated, else `(hostname)` alone.
@@ -1289,6 +1292,17 @@ computes the deterministic id; it cannot produce a global / cross-tenant id.
 The resolver is pure (given the same tenant + inputs, always produces the
 same id), deterministic, and stateless; it can be unit-tested exhaustively
 against fixtures.
+
+Division of labor within that rule: the `IdentityResolver` applies only the
+*folding* described in §7.2 — case, whitespace, and format canonicalization.
+Per-type *shaping* of inputs (composing `account_login` as `domain\user`
+versus an email address versus a bare Unix username, choosing which host
+identifier tier is available, selecting the strongest file hash) happens in
+the normalizer before the resolver is called, because only the normalizer
+sees the vendor fields required to shape correctly. Two normalizers that
+shape the same logical account differently will fragment identity — the
+shaping rules in §7.2 are therefore part of the normalizer contract, not an
+internal detail of the resolver.
 
 ---
 

@@ -106,10 +106,15 @@ type FileIdentity struct {
 }
 
 // File resolves a file SCO using the strongest available hash, else the
-// (name, parent_directory, size) fallback. Hash digests are lowercased.
+// (name, parent_directory, size) fallback. Hash digests are lowercased. The
+// algorithm participates in identity alongside the digest (mirroring STIX 2.1,
+// whose id-contributing property for file is the hashes dict) so digests from
+// different algorithms can never merge two files.
 func (r *Resolver) File(f FileIdentity) STIXID {
-	if h := pickHash(f.Hashes); h != "" {
-		return r.mint(TypeFile, map[string]any{"hash": h})
+	if algo, digest := pickHash(f.Hashes); digest != "" {
+		return r.mint(TypeFile, map[string]any{
+			"hashes": map[string]string{algo: digest},
+		})
 	}
 	return r.mint(TypeFile, map[string]any{
 		"name":             strings.TrimSpace(f.Name),
@@ -118,8 +123,10 @@ func (r *Resolver) File(f FileIdentity) STIXID {
 	})
 }
 
-// pickHash returns the strongest available digest, lowercased, or "".
-func pickHash(hashes map[string]string) string {
+// pickHash returns the strongest available (algorithm, digest), both
+// canonicalized (algorithm as bare lowercase name, digest lowercased), or
+// ("", "") when no hash is present.
+func pickHash(hashes map[string]string) (algo, digest string) {
 	// Normalize keys once so lookup is case/format-insensitive ("SHA-256",
 	// "sha256", "SHA256" all match).
 	norm := make(map[string]string, len(hashes))
@@ -129,12 +136,12 @@ func pickHash(hashes map[string]string) string {
 			norm[key] = strings.ToLower(v)
 		}
 	}
-	for _, algo := range []string{"sha256", "sha1", "md5"} {
-		if v, ok := norm[algo]; ok {
-			return v
+	for _, a := range []string{"sha256", "sha1", "md5"} {
+		if v, ok := norm[a]; ok {
+			return a, v
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // --- deviations from strict STIX (§7.2) -------------------------------------
@@ -152,6 +159,12 @@ func (r *Resolver) EmailAddr(value string) STIXID {
 // are lowercased (Windows/AD/Entra are case-insensitive). account_type is NOT
 // case-folded — a cloud account and a domain account for the same human are
 // deliberately distinct SCOs, linked only by an explicit aliases edge.
+//
+// Per-type login shaping (§7.2: Windows domain accounts as "domain\user",
+// email-style accounts as the address, Unix accounts as the bare username) is
+// the CALLER's contract: normalizers must shape account_login before calling
+// here, because only they see the vendor fields needed to do it. This resolver
+// applies the case/whitespace folding only.
 func (r *Resolver) UserAccount(accountLogin, userID, accountType string) STIXID {
 	return r.mint(TypeUserAccount, map[string]any{
 		"account_login": strings.ToLower(strings.TrimSpace(accountLogin)),

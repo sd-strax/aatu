@@ -90,6 +90,7 @@ func TestCanonicalizationEquivalence(t *testing.T) {
 		{"ip whitespace", r.IPv4Addr(" 8.8.8.8 "), r.IPv4Addr("8.8.8.8")},
 		{"domain case+dot", r.DomainName("Example.COM."), r.DomainName("example.com")},
 		{"url scheme/host/port/query", r.URL("HTTP://Example.com:80/p?b=2&a=1"), r.URL("http://example.com/p?a=1&b=2")},
+		{"url ipv6 host keeps brackets", r.URL("http://[2001:DB8::1]:80/x"), r.URL("http://[2001:db8::1]/x")},
 		{"email case", r.EmailAddr("Alice@Contoso.com"), r.EmailAddr("alice@contoso.com")},
 		{"user case", r.UserAccount("CONTOSO\\Alice", "S-1", "windows-domain"), r.UserAccount("contoso\\alice", "s-1", "windows-domain")},
 		{"host domain/hostname case", r.Host(HostIdentity{Domain: "CORP", Hostname: "WS1"}), r.Host(HostIdentity{Domain: "corp", Hostname: "ws1"})},
@@ -125,6 +126,13 @@ func TestFileHashPriority(t *testing.T) {
 	sha1Only := r.File(FileIdentity{Hashes: map[string]string{"SHA1": "def"}})
 	if full == sha1Only {
 		t.Error("file with SHA-256 collided with file identified by SHA-1 only")
+	}
+
+	// The algorithm participates in identity: an identical digest string under
+	// a different algorithm is a different file, never a merge.
+	if r.File(FileIdentity{Hashes: map[string]string{"sha1": "abc"}}) ==
+		r.File(FileIdentity{Hashes: map[string]string{"md5": "abc"}}) {
+		t.Error("same digest under different algorithms collided")
 	}
 
 	fallback1 := r.File(FileIdentity{Name: "evil.exe", ParentDirectory: "C:\\Temp", Size: 100})

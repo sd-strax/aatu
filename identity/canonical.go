@@ -56,7 +56,9 @@ func canonicalURL(v string) string {
 
 	host := strings.ToLower(u.Hostname())
 	if port := u.Port(); port != "" && !isDefaultPort(u.Scheme, port) {
-		u.Host = net.JoinHostPort(host, port)
+		u.Host = net.JoinHostPort(host, port) // re-brackets IPv6 literals
+	} else if strings.Contains(host, ":") {
+		u.Host = "[" + host + "]" // IPv6 literal without a port keeps its brackets
 	} else {
 		u.Host = host
 	}
