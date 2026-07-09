@@ -32,9 +32,10 @@ const (
 // deliberately NOT used here — 01-domain-model.md reserves it for x-hypothesis
 // refinement, distinct from parent-process-of.
 const (
-	RelParentProcessOf = "parent-process-of"
-	RelResolvesTo      = "resolves-to"
-	RelAuthenticatedTo = "x-authenticated-to"
+	RelParentProcessOf   = "parent-process-of"
+	RelParentDirectoryOf = "parent-directory-of"
+	RelResolvesTo        = "resolves-to"
+	RelAuthenticatedTo   = "x-authenticated-to"
 )
 
 // Provenance is the uniform provenance carried by every normalizer output

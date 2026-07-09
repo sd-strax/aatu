@@ -30,20 +30,22 @@ type STIXID string
 // types use their canonical names; custom objects use the x- prefix per STIX
 // convention (design/01).
 const (
-	TypeIPv4Addr      = "ipv4-addr"
-	TypeIPv6Addr      = "ipv6-addr"
-	TypeDomainName    = "domain-name"
-	TypeURL           = "url"
-	TypeFile          = "file"
-	TypeEmailAddr     = "email-addr"
-	TypeUserAccount   = "user-account"
-	TypeProcess       = "process"
-	TypeHost          = "x-host"
-	TypeRegistryKey   = "x-registry-key"
-	TypeScheduledTask = "x-scheduled-task"
-	TypeGroup         = "x-group"
-	TypeObservedData  = "observed-data"
-	TypeIdentity      = "identity"
+	TypeIPv4Addr       = "ipv4-addr"
+	TypeIPv6Addr       = "ipv6-addr"
+	TypeDomainName     = "domain-name"
+	TypeURL            = "url"
+	TypeFile           = "file"
+	TypeEmailAddr      = "email-addr"
+	TypeUserAccount    = "user-account"
+	TypeProcess        = "process"
+	TypeDirectory      = "directory"
+	TypeNetworkTraffic = "network-traffic"
+	TypeHost           = "x-host"
+	TypeRegistryKey    = "x-registry-key"
+	TypeScheduledTask  = "x-scheduled-task"
+	TypeGroup          = "x-group"
+	TypeObservedData   = "observed-data"
+	TypeIdentity       = "identity"
 )
 
 // Resolver computes tenant-scoped deterministic ids. Construct one per tenant
@@ -188,6 +190,26 @@ func (r *Resolver) Process(hostRef STIXID, pid int, createdTime time.Time) (id S
 		"pid":          pid,
 		"created_time": createdTime.UTC().Truncate(time.Second).Format(time.RFC3339),
 	}), true
+}
+
+// Directory resolves a directory SCO from its path (STIX-native; path is the
+// id-contributing property). Path case is preserved — filesystems disagree on
+// case sensitivity and STIX does not fold it.
+func (r *Resolver) Directory(path string) STIXID {
+	return r.mint(TypeDirectory, map[string]any{"path": strings.TrimSpace(path)})
+}
+
+// NetworkTraffic resolves a network-traffic SCO. STIX assigns these random ids;
+// we compute deterministically from the endpoints, ports, and protocol so the
+// same connection observed twice dedupes (same trade as ObservedData, §7.3).
+func (r *Resolver) NetworkTraffic(srcRef, dstRef STIXID, srcPort, dstPort int, protocol string) STIXID {
+	return r.mint(TypeNetworkTraffic, map[string]any{
+		"src_ref":  string(srcRef),
+		"dst_ref":  string(dstRef),
+		"src_port": srcPort,
+		"dst_port": dstPort,
+		"protocol": strings.ToLower(strings.TrimSpace(protocol)),
+	})
 }
 
 // --- custom SCOs (§7.2) -----------------------------------------------------

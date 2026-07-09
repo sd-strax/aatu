@@ -34,6 +34,9 @@ func NewRegistry(r *identity.Resolver) *Registry {
 	reg.def = &opaqueNormalizer{r: r}
 	reg.Register(&processNormalizer{r: r})
 	reg.Register(&authNormalizer{r: r})
+	reg.Register(&networkNormalizer{r: r})
+	reg.Register(&dnsNormalizer{r: r})
+	reg.Register(&fileActivityNormalizer{r: r})
 	return reg
 }
 
@@ -214,7 +217,12 @@ func (b *resultBuilder) userAccount(prefix string) identity.STIXID {
 // ipAddr extracts an ipv4-addr or ipv6-addr SCO from a string path (e.g.
 // "src_endpoint.ip").
 func (b *resultBuilder) ipAddr(path string) identity.STIXID {
-	v := pathStr(b.evt.Payload, path)
+	return b.addIPValue(pathStr(b.evt.Payload, path))
+}
+
+// addIPValue adds an ipv4-addr or ipv6-addr SCO for a literal address value
+// (used when the value comes from an array element, not a fixed path).
+func (b *resultBuilder) addIPValue(v string) identity.STIXID {
 	if v == "" {
 		return ""
 	}
@@ -223,6 +231,14 @@ func (b *resultBuilder) ipAddr(path string) identity.STIXID {
 		return b.addSCO(b.r.IPv6Addr(v), identity.TypeIPv6Addr, map[string]any{"value": v})
 	}
 	return b.addSCO(b.r.IPv4Addr(v), identity.TypeIPv4Addr, map[string]any{"value": v})
+}
+
+// addDomain adds a domain-name SCO for a literal domain value.
+func (b *resultBuilder) addDomain(v string) identity.STIXID {
+	if v == "" {
+		return ""
+	}
+	return b.addSCO(b.r.DomainName(v), identity.TypeDomainName, map[string]any{"value": v})
 }
 
 // file extracts a file SCO from an OCSF file object at prefix (e.g.
