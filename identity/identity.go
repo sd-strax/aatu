@@ -298,6 +298,26 @@ func (r *Resolver) Relationship(relType string, source, target STIXID) STIXID {
 	})
 }
 
+// Indicator resolves a deterministic id for an imported vendor Indicator
+// (§4.12) from the vendor's stable finding uid (falling back to the pattern), so
+// re-ingesting the same detection dedupes to one Indicator.
+func (r *Resolver) Indicator(findingUID, pattern string) STIXID {
+	return r.mint("indicator", map[string]any{
+		"finding_uid": strings.TrimSpace(findingUID),
+		"pattern":     strings.TrimSpace(pattern),
+	})
+}
+
+// Sighting resolves a deterministic id for an imported vendor Sighting (§4.12)
+// from (indicator, observation second, tool).
+func (r *Resolver) Sighting(indicatorRef STIXID, observed time.Time, tool string) STIXID {
+	return r.mint("sighting", map[string]any{
+		"sighting_of": string(indicatorRef),
+		"time":        observed.UTC().Truncate(time.Second).Format(time.RFC3339),
+		"tool":        strings.TrimSpace(tool),
+	})
+}
+
 // Identity resolves the per-tenant vendor identity SDO id from a vendor name.
 // The detection_finding normalizer (§4.12) attributes imported Indicators and
 // Sightings to this Identity via created_by_ref; it is auto-created on first

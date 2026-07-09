@@ -37,6 +37,9 @@ func NewRegistry(r *identity.Resolver) *Registry {
 	reg.Register(&networkNormalizer{r: r})
 	reg.Register(&dnsNormalizer{r: r})
 	reg.Register(&fileActivityNormalizer{r: r})
+	// detection_finding recurses into the registry to normalize nested
+	// evidence, so it takes a back-reference to reg.
+	reg.Register(&detectionNormalizer{r: r, reg: reg})
 	return reg
 }
 

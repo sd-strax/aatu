@@ -93,12 +93,55 @@ type Edge struct {
 	OcsfEventID string          `json:"ocsf_event_id"` // the telemetry record's id
 }
 
+// Indicator is a STIX Indicator SDO. In the capability layer it is produced
+// ONLY by the detection_finding normalizer (§4.12) as an imported vendor claim:
+// derivation_mode = INFERRED, attributed to a vendor Identity via CreatedByRef.
+// It carries no produced-by edge — the agent loop wraps it in an Interpretation
+// only when an investigation engages with it.
+type Indicator struct {
+	ID             identity.STIXID `json:"id"`
+	Name           string          `json:"name"`
+	Pattern        string          `json:"pattern,omitempty"`
+	PatternType    string          `json:"pattern_type,omitempty"`
+	IndicatorTypes []string        `json:"indicator_types,omitempty"` // e.g. MITRE technique IDs
+	ValidFrom      time.Time       `json:"valid_from"`
+	Confidence     int             `json:"confidence"`
+	CreatedByRef   identity.STIXID `json:"created_by_ref"` // the vendor Identity
+	Provenance     Provenance      `json:"provenance"`
+}
+
+// Sighting is a STIX Sighting SRO linking an Indicator to the entities and
+// evidence it was seen through (§4.12). Also INFERRED and vendor-attributed.
+type Sighting struct {
+	ID               identity.STIXID   `json:"id"`
+	SightingOfRef    identity.STIXID   `json:"sighting_of_ref"` // the Indicator
+	ObservedDataRefs []identity.STIXID `json:"observed_data_refs,omitempty"`
+	WhereSighted     []identity.STIXID `json:"where_sighted_refs,omitempty"` // named entities
+	Confidence       int               `json:"confidence"`
+	Description      string            `json:"description,omitempty"`
+	CreatedByRef     identity.STIXID   `json:"created_by_ref"`
+	Provenance       Provenance        `json:"provenance"`
+}
+
+// VendorIdentity is the per-tenant STIX Identity SDO a vendor's imported claims
+// are attributed to (§4.12). Deterministic within the tenant, auto-created on
+// first ingest.
+type VendorIdentity struct {
+	ID   identity.STIXID `json:"id"`
+	Name string          `json:"name"`
+}
+
 // NormalizationResult is the full output of normalizing one OcsfEvent: the SCOs
 // extracted, the ObservedData grouping them, the STIX relationships between
-// them, and the cross-layer edges back to the OcsfEvent (§4).
+// them, and the cross-layer edges back to the OcsfEvent (§4). Indicators,
+// Sightings, and Identities are populated only by the detection_finding
+// normalizer (§4.12).
 type NormalizationResult struct {
 	ObservedData  []ObservedData
 	SCOs          []SCO
 	Relationships []Relationship
 	Edges         []Edge
+	Indicators    []Indicator
+	Sightings     []Sighting
+	Identities    []VendorIdentity
 }
