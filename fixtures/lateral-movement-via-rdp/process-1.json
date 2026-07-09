@@ -1,0 +1,33 @@
+{
+  "fixture_meta": {
+    "scenario": "lateral-movement-via-rdp",
+    "matches": {
+      "verb": "get_process_ancestry",
+      "params": { "host.hostname": "WIN-FILE01" }
+    },
+    "delay_ms": 40
+  },
+  "ocsf": {
+    "class_uid": 1007,
+    "class_name": "Process Activity",
+    "time": "2026-04-20T14:33:05Z",
+    "process": {
+      "pid": 6120,
+      "name": "powershell.exe",
+      "cmd_line": "powershell.exe -NoProfile -EncodedCommand ZQBjAGgAbwA=",
+      "created_time": "2026-04-20T14:33:05Z",
+      "file": {
+        "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "name": "powershell.exe",
+        "hashes": { "SHA-256": "9f1c2d3e4a5b6c7d8e9f0011223344556677889900aabbccddeeff0011223344" }
+      },
+      "parent_process": {
+        "pid": 5000,
+        "name": "mstsc-hijack.exe",
+        "created_time": "2026-04-20T14:32:40Z"
+      }
+    },
+    "device": { "hostname": "WIN-FILE01", "domain": "CONTOSO" },
+    "actor": { "user": { "name": "svc_backup", "domain": "CONTOSO", "uid": "S-1-5-21-2002" } }
+  }
+}

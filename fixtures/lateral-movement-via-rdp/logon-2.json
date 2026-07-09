@@ -1,0 +1,20 @@
+{
+  "fixture_meta": {
+    "scenario": "lateral-movement-via-rdp",
+    "matches": {
+      "verb": "enumerate_logons",
+      "params": { "target.hostname": "WIN-FILE01", "outcome": "SUCCESS" }
+    },
+    "delay_ms": 40
+  },
+  "ocsf": {
+    "class_uid": 3002,
+    "class_name": "Authentication",
+    "time": "2026-04-20T14:32:47Z",
+    "actor": { "user": { "name": "svc_backup", "domain": "CONTOSO", "uid": "S-1-5-21-2002" } },
+    "dst_endpoint": { "hostname": "WIN-FILE01", "domain": "CONTOSO" },
+    "src_endpoint": { "ip": "10.0.4.20" },
+    "logon_type": "RemoteInteractive",
+    "status": "SUCCESS"
+  }
+}

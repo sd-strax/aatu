@@ -1,0 +1,55 @@
+# Example tenant capability config (design/03-capability-layer.md §3.2) for the
+# bundled lateral-movement-via-rdp fixture scenario. Point the backend at it with
+#   capability:
+#     config_path: examples/capability/lateral-movement.yaml
+#     fixture_root: fixtures
+# in the main reckon config, then GET /api/capabilities to see the verbs light up.
+
+tenant: demo
+
+adapters:
+  fixture:
+    class: fixture
+    enabled: true
+    scenario: lateral-movement-via-rdp
+  # Real adapters land in Phase E; disabled here so v0 runs on fixtures only.
+  crowdstrike_falcon:
+    class: native_api
+    enabled: false
+
+bindings:
+  enumerate_logons:
+    - adapter: fixture
+      operation: replay
+      priority: 100
+      params:
+        target:
+          hostname: "${entity.host.hostname}"
+        outcome: '${outcome ?? "SUCCESS"}'
+
+  get_process_ancestry:
+    - adapter: fixture
+      operation: replay
+      priority: 100
+      params:
+        host:
+          hostname: "${entity.host.hostname}"
+
+  get_network_connections:
+    - adapter: fixture
+      operation: replay
+      priority: 100
+      params:
+        endpoint:
+          hostname: "${entity.host.hostname}"
+
+  search_alerts:
+    - adapter: fixture
+      operation: replay
+      priority: 100
+      params: {}
+
+policies:
+  default_window:
+    investigation: PT24H
+    hunt: PT7D

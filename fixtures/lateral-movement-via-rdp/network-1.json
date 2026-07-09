@@ -1,0 +1,19 @@
+{
+  "fixture_meta": {
+    "scenario": "lateral-movement-via-rdp",
+    "matches": {
+      "verb": "get_network_connections",
+      "params": { "endpoint.hostname": "WIN-FILE01" }
+    },
+    "delay_ms": 40
+  },
+  "ocsf": {
+    "class_uid": 4001,
+    "class_name": "Network Activity",
+    "time": "2026-04-20T14:33:20Z",
+    "src_endpoint": { "ip": "10.0.4.20", "port": 49999 },
+    "dst_endpoint": { "ip": "185.220.101.5", "port": 443, "domain": "exfil.example.net" },
+    "connection_info": { "protocol_name": "tcp" },
+    "device": { "hostname": "WIN-FILE01", "domain": "CONTOSO" }
+  }
+}
