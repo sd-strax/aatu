@@ -36,6 +36,10 @@ const (
 	RelParentDirectoryOf = "parent-directory-of"
 	RelResolvesTo        = "resolves-to"
 	RelAuthenticatedTo   = "x-authenticated-to"
+	RelLoads             = "loads"
+	RelMemberOfGroup     = "member-of-group"
+	RelContains          = "contains"
+	RelClicked           = "clicked"
 )
 
 // Provenance is the uniform provenance carried by every normalizer output

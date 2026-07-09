@@ -40,6 +40,7 @@ const (
 	TypeProcess        = "process"
 	TypeDirectory      = "directory"
 	TypeNetworkTraffic = "network-traffic"
+	TypeEmailMessage   = "email-message"
 	TypeHost           = "x-host"
 	TypeRegistryKey    = "x-registry-key"
 	TypeScheduledTask  = "x-scheduled-task"
@@ -209,6 +210,26 @@ func (r *Resolver) NetworkTraffic(srcRef, dstRef STIXID, srcPort, dstPort int, p
 		"src_port": srcPort,
 		"dst_port": dstPort,
 		"protocol": strings.ToLower(strings.TrimSpace(protocol)),
+	})
+}
+
+// EmailMessage resolves an email-message SCO. When a message id is present,
+// identity is the message_id ALONE — a deliberate deviation from STIX 2.1's
+// (message_id, from_ref): message_id is RFC-mandated unique, and identity on it
+// alone lets an email_url_activity click (§4.11), which carries the message id
+// but not the sender, stitch to the full message from email_activity (§4.10).
+// Requiring `from` would fragment that stitch. Falls back to (from, subject,
+// date) when no message id is available.
+func (r *Resolver) EmailMessage(messageID, from, subject string, date time.Time) STIXID {
+	if strings.TrimSpace(messageID) != "" {
+		return r.mint(TypeEmailMessage, map[string]any{
+			"message_id": strings.ToLower(strings.TrimSpace(messageID)),
+		})
+	}
+	return r.mint(TypeEmailMessage, map[string]any{
+		"from":    strings.ToLower(strings.TrimSpace(from)),
+		"subject": strings.TrimSpace(subject),
+		"date":    date.UTC().Truncate(time.Second).Format(time.RFC3339),
 	})
 }
 

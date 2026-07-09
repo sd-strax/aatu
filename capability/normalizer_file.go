@@ -32,14 +32,5 @@ func (n *fileActivityNormalizer) Normalize(evt OcsfEvent) (NormalizationResult, 
 	}
 	b.userAccount("actor.user")
 
-	ext := map[string]any{}
-	if a := pathStr(p, "activity_name"); a != "" {
-		ext["activity"] = a
-	} else if id := pathInt(p, "activity_id"); id != 0 {
-		ext["activity_id"] = id
-	}
-	if len(ext) == 0 {
-		ext = nil
-	}
-	return b.finish(ext), nil
+	return b.finish(activityExt(p)), nil
 }

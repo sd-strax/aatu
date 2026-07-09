@@ -37,6 +37,12 @@ func NewRegistry(r *identity.Resolver) *Registry {
 	reg.Register(&networkNormalizer{r: r})
 	reg.Register(&dnsNormalizer{r: r})
 	reg.Register(&fileActivityNormalizer{r: r})
+	reg.Register(&registryNormalizer{r: r})
+	reg.Register(&scheduledJobNormalizer{r: r})
+	reg.Register(&moduleNormalizer{r: r})
+	reg.Register(&accountChangeNormalizer{r: r})
+	reg.Register(&emailNormalizer{r: r})
+	reg.Register(&emailURLNormalizer{r: r})
 	// detection_finding recurses into the registry to normalize nested
 	// evidence, so it takes a back-reference to reg.
 	reg.Register(&detectionNormalizer{r: r, reg: reg})
@@ -244,6 +250,77 @@ func (b *resultBuilder) addDomain(v string) identity.STIXID {
 	return b.addSCO(b.r.DomainName(v), identity.TypeDomainName, map[string]any{"value": v})
 }
 
+// emailAddr adds an email-addr SCO for a literal address value.
+func (b *resultBuilder) emailAddr(v string) identity.STIXID {
+	if v == "" {
+		return ""
+	}
+	return b.addSCO(b.r.EmailAddr(v), identity.TypeEmailAddr, map[string]any{"value": v})
+}
+
+// emailAddrs adds an email-addr SCO for each string in the array at path,
+// returning their ids.
+func (b *resultBuilder) emailAddrs(path string) []identity.STIXID {
+	v, ok := lookupPath(b.evt.Payload, path)
+	if !ok {
+		return nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var refs []identity.STIXID
+	for _, item := range arr {
+		if id := b.emailAddr(toString(item)); id != "" {
+			refs = append(refs, id)
+		}
+	}
+	return refs
+}
+
+// url adds a url SCO for a literal URL value.
+func (b *resultBuilder) url(v string) identity.STIXID {
+	if v == "" {
+		return ""
+	}
+	return b.addSCO(b.r.URL(v), identity.TypeURL, map[string]any{"value": v})
+}
+
+// addFileFromMap adds a file SCO from an OCSF file object (used for array items
+// like email attachments, where the object isn't at a fixed payload path).
+func (b *resultBuilder) addFileFromMap(m map[string]any) identity.STIXID {
+	name := toString(m["name"])
+	filePath := toString(m["path"])
+	hashes := hashesFromValue(m["hashes"])
+	if name == "" && filePath == "" && len(hashes) == 0 {
+		return ""
+	}
+	id := b.r.File(identity.FileIdentity{
+		Hashes:          hashes,
+		Name:            name,
+		ParentDirectory: parentDir(filePath),
+		Size:            int64(toInt(m["size"])),
+	})
+	props := map[string]any{"name": name}
+	if len(hashes) > 0 {
+		props["hashes"] = hashes
+	}
+	return b.addSCO(id, identity.TypeFile, props)
+}
+
+// activityExt captures the OCSF activity (create/modify/disable/…) as an
+// ObservedData extension — the high-information field for the persistence and
+// account-change classes (§4.6/§4.7/§4.9). Returns nil when absent.
+func activityExt(p map[string]any) map[string]any {
+	if a := pathStr(p, "activity_name"); a != "" {
+		return map[string]any{"activity": a}
+	}
+	if id := pathInt(p, "activity_id"); id != 0 {
+		return map[string]any{"activity_id": id}
+	}
+	return nil
+}
+
 // file extracts a file SCO from an OCSF file object at prefix (e.g.
 // "process.file").
 func (b *resultBuilder) file(prefix string) identity.STIXID {
@@ -294,13 +371,18 @@ func pathTime(m map[string]any, path string) time.Time {
 	return time.Time{}
 }
 
-// pathHashes reads an OCSF hashes value, accepting both the object form
-// ({"SHA-256": "..."}) and the array form ([{"algorithm": "...", "value": "..."}]).
+// pathHashes reads an OCSF hashes value at path.
 func pathHashes(m map[string]any, path string) map[string]string {
-	v, ok := lookupPath(m, path)
-	if !ok {
-		return nil
+	if v, ok := lookupPath(m, path); ok {
+		return hashesFromValue(v)
 	}
+	return nil
+}
+
+// hashesFromValue coerces an OCSF hashes value to a map, accepting both the
+// object form ({"SHA-256": "..."}) and the array form
+// ([{"algorithm": "...", "value": "..."}]).
+func hashesFromValue(v any) map[string]string {
 	out := map[string]string{}
 	switch hv := v.(type) {
 	case map[string]any:
@@ -315,9 +397,7 @@ func pathHashes(m map[string]any, path string) map[string]string {
 			if !ok {
 				continue
 			}
-			algo := toString(im["algorithm"])
-			val := toString(im["value"])
-			if algo != "" && val != "" {
+			if algo, val := toString(im["algorithm"]), toString(im["value"]); algo != "" && val != "" {
 				out[algo] = val
 			}
 		}

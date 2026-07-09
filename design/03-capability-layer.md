@@ -713,10 +713,16 @@ Output:
 - One `ObservedData` referencing the email-message and all of its parts.
 - Edges as in §4.1.
 
-`email-message` identity follows STIX 2.1: `(message_id, from_ref.value)` if
-both are present, else `(from_ref.value, to_refs, subject, date)` as a
-fallback. Cross-tool stitching for emails is more reliable than for processes
-because `message_id` is RFC-mandated unique.
+`email-message` identity is the `message_id` **alone** when present, else
+`(from_ref.value, subject, date)` as a fallback. This is a deliberate deviation
+from strict STIX 2.1, which uses `(message_id, from_ref.value)`: `message_id` is
+RFC-mandated unique, and identity on it alone is what lets an
+`email_url_activity` click (§4.11) — which carries the message id but not the
+sender — stitch to the full `email-message` produced by `email_activity`
+(§4.10). Requiring `from_ref` in the identity would fragment that stitch, since
+the click event has no sender. Same stitching-precedence rationale as the
+`process`/`email-addr`/`user-account` deviations (§7.2). Cross-tool stitching
+for emails is more reliable than for processes because `message_id` is unique.
 
 ### 4.11 OCSF email_url_activity (class_uid 4011) → STIX
 
