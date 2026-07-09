@@ -263,6 +263,19 @@ func (r *Resolver) ObservedData(classUID int, observed time.Time, sourceTool str
 	})
 }
 
+// Relationship resolves a deterministic id for a STIX Relationship (SRO) from
+// its (type, source, target). STIX 2.1 assigns SROs random ids, but computing
+// them deterministically lets the same edge observed twice dedupe to one
+// relationship — the same pragmatic trade as ObservedData (§7.3). The prefix is
+// "relationship" (STIX-native) regardless of the custom relationship_type.
+func (r *Resolver) Relationship(relType string, source, target STIXID) STIXID {
+	return r.mint("relationship", map[string]any{
+		"relationship_type": strings.TrimSpace(relType),
+		"source_ref":        string(source),
+		"target_ref":        string(target),
+	})
+}
+
 // Identity resolves the per-tenant vendor identity SDO id from a vendor name.
 // The detection_finding normalizer (§4.12) attributes imported Indicators and
 // Sightings to this Identity via created_by_ref; it is auto-created on first
