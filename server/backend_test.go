@@ -21,9 +21,9 @@ type fakeComponent struct {
 	msg     string
 }
 
-func (f *fakeComponent) Name() string                                       { return f.name }
-func (f *fakeComponent) Start(_ context.Context) error                      { return nil }
-func (f *fakeComponent) Stop(_ context.Context) error                       { return nil }
+func (f *fakeComponent) Name() string                  { return f.name }
+func (f *fakeComponent) Start(_ context.Context) error { return nil }
+func (f *fakeComponent) Stop(_ context.Context) error  { return nil }
 func (f *fakeComponent) Health(_ context.Context) supervisor.HealthStatus {
 	return supervisor.HealthStatus{Ready: f.healthy, Message: f.msg}
 }

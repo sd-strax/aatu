@@ -20,6 +20,7 @@ type Config struct {
 	Keycloak   Keycloak   `yaml:"keycloak"`
 	Backend    Backend    `yaml:"backend"`
 	Telemetry  Telemetry  `yaml:"telemetry"`
+	Capability Capability `yaml:"capability"`
 	Paid       Paid       `yaml:"paid"`
 }
 
@@ -103,6 +104,22 @@ type Telemetry struct {
 	MetricsEnabled bool `yaml:"metrics_enabled"`
 }
 
+// Capability configures the read-side capability layer (Phase B). Optional: an
+// empty ConfigPath leaves the layer unwired and the backend serves no capability
+// routes.
+type Capability struct {
+	// ConfigPath points at the tenant capability YAML (adapters + bindings +
+	// policies, design/03 §3.2). Empty disables the capability layer.
+	ConfigPath string `yaml:"config_path"`
+	// FixtureRoot is the directory fixture scenarios live under. Default
+	// "fixtures".
+	FixtureRoot string `yaml:"fixture_root"`
+	// TenantNamespace is the identity-namespace UUID for the (single, v0) tenant
+	// (design/03 §7.1). Defaults to a fixed OSS namespace; multi-tenant
+	// deployments assign a fresh UUID per tenant via the tenancy module.
+	TenantNamespace string `yaml:"tenant_namespace"`
+}
+
 // Paid groups the activation flags for paid modules. Ignored when the
 // binary is OSS; consulted by the paid binary's registry builder.
 type Paid struct {
@@ -152,6 +169,12 @@ func Default() Config {
 			LogFormat:      "text",
 			LogToFile:      true,
 			MetricsEnabled: true,
+		},
+		Capability: Capability{
+			FixtureRoot: "fixtures",
+			// Fixed namespace for the OSS default tenant; multi-tenant
+			// deployments override per tenant.
+			TenantNamespace: "6f1b2c3d-0000-4000-8000-000000000001",
 		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},

@@ -15,7 +15,10 @@ import (
 
 	_ "github.com/lib/pq" // registers the "postgres" sql driver for the aggregate DB
 
+	"github.com/google/uuid"
+
 	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/branding"
 	"github.com/sd-strax/reckon/knowledge"
@@ -181,15 +184,25 @@ func serve(cfg config.Config) error {
 		aggregate.InvestigationCurrentProjector{},
 	)
 
+	// Build the read-side capability layer when a tenant capability config is
+	// set (Phase B). Optional in v0: absent config leaves the /api/capabilities
+	// route disabled; a present-but-broken config fails boot loudly.
+	capResolver, capCatalog, err := buildCapability(cfg)
+	if err != nil {
+		return err
+	}
+
 	backendCfg := server.BackendConfig{
 		HTTPPort:         cfg.Backend.HTTPPort,
 		PgDSN:            pg.DSN("reckon_main"),
 		TemporalHostPort: fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
 		KeycloakIssuer: fmt.Sprintf("http://localhost:%d/realms/%s",
 			cfg.Keycloak.HTTPPort, cfg.Keycloak.Realm),
-		KeycloakClientID: cfg.Keycloak.ClientID,
-		Handler:          handler,
-		Middleware:       tel.HTTPMiddleware,
+		KeycloakClientID:   cfg.Keycloak.ClientID,
+		Handler:            handler,
+		Middleware:         tel.HTTPMiddleware,
+		CapabilityResolver: capResolver,
+		CapabilityCatalog:  capCatalog,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()
@@ -205,6 +218,31 @@ func serve(cfg config.Config) error {
 	}
 	log.Printf("%s: stopped", branding.CLI)
 	return nil
+}
+
+// buildCapability constructs the capability resolver + catalog from the tenant
+// capability config, or returns (nil, nil, nil) when no config path is set. A
+// present-but-malformed config is a boot error — the operator asked for it.
+func buildCapability(cfg config.Config) (*capability.Resolver, *capability.Catalog, error) {
+	path := cfg.Capability.ConfigPath
+	if path == "" {
+		return nil, nil, nil
+	}
+	tc, err := capability.LoadTenantConfig(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	ns, err := uuid.Parse(cfg.Capability.TenantNamespace)
+	if err != nil {
+		return nil, nil, fmt.Errorf("capability.tenant_namespace %q: %w", cfg.Capability.TenantNamespace, err)
+	}
+	resolver, catalog, err := capability.BuildResolver(tc, cfg.Capability.FixtureRoot, ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build capability layer: %w", err)
+	}
+	log.Printf("%s: capability layer loaded from %s (%d verbs available)",
+		branding.CLI, path, len(resolver.AvailableVerbs(catalog)))
+	return resolver, catalog, nil
 }
 
 // PIDFilePath returns the supervisor PID-file path for this config. serve

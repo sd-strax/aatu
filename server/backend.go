@@ -23,6 +23,7 @@ import (
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/supervisor"
 )
 
@@ -74,6 +75,13 @@ type BackendConfig struct {
 	// MetricsHandler, when non-nil, is served at /metrics (Prometheus text
 	// exposition). Nil disables the endpoint.
 	MetricsHandler http.Handler
+
+	// CapabilityResolver and CapabilityCatalog, when both non-nil, enable the
+	// /api/capabilities route (the read-side capability layer, Phase B). Nil
+	// leaves the route returning 503 so the backend still serves without a
+	// capability config.
+	CapabilityResolver *capability.Resolver
+	CapabilityCatalog  *capability.Catalog
 }
 
 // Backend is the in-process HTTP server.
@@ -223,6 +231,12 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.investigationsItem),
 	))
 
+	// GET /api/capabilities — list_capabilities (§2.8): the verbs resolvable in
+	// this tenant and their availability. Any authenticated reader.
+	api.Handle("/capabilities", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.listCapabilities),
+	))
+
 	// /stream — projection-delta WebSocket. Authenticated at the handshake
 	// inside the handler (a WS upgrade can't go through RequireAuth, which
 	// would write a non-WS error after the upgrade), not by middleware.
@@ -349,6 +363,26 @@ func (b *Backend) requireRolesOrDeny(w http.ResponseWriter, r *http.Request, rol
 		return
 	}
 	next(w, r)
+}
+
+// listCapabilities serves GET /api/capabilities. Returns 503 when the capability
+// layer is not configured (no tenant capability YAML); otherwise the verb
+// summaries with their availability. Read requires viewer/analyst/auditor.
+func (b *Backend) listCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if b.cfg.CapabilityResolver == nil || b.cfg.CapabilityCatalog == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "capability layer not configured")
+		return
+	}
+	b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, func(w http.ResponseWriter, _ *http.Request) {
+		summaries := b.cfg.CapabilityResolver.ListCapabilities(b.cfg.CapabilityCatalog)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": summaries})
+	})
 }
 
 // --- dependency probes -------------------------------------------------------
