@@ -1,0 +1,28 @@
+# Example write-side (action) tenant config (design/08 §4) for the bundled
+# lateral-movement-via-rdp fixture scenario. Can be its own file or merged into
+# the capability config (unknown keys are ignored). The fixture write adapter is
+# the "fake Tines" that exercises request → authorize → dispatch → result → reverse
+# without a real tool (08 §9); real vendor write adapters land in Phase F.
+
+action_adapters:
+  fixture_write:
+    class: fixture
+    enabled: true
+    scenario: lateral-movement-via-rdp
+
+action_bindings:
+  host.isolate:
+    - action_type: host.isolate
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        device_id: "${target.resolved_identifier}"
+
+  account.disable:
+    - action_type: account.disable
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        account: "${target.resolved_identifier}"
