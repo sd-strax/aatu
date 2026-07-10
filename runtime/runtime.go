@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/config"
@@ -156,25 +157,9 @@ func serve(cfg config.Config) error {
 		RealmName:      cfg.Keycloak.Realm,
 	})
 
-	// The Temporal worker runs in-process (05 §3.3): it registers the OSS
-	// workflow inventory on the `reckon` task queue. It depends only on the
-	// Temporal frontend being reachable, so it registers after temp and
-	// self-probes at Start.
-	worker := temporal.NewWorker(temporal.WorkerConfig{
-		HostPort:  fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
-		Namespace: cfg.Temporal.Namespace,
-	})
-
-	sup := supervisor.New()
-	sup.Register(pg, supervisor.FatalOnExit)
-	sup.Register(temp, supervisor.RestartOnExit)
-	sup.Register(kc, supervisor.RestartOnExit)
-	sup.Register(worker, supervisor.RestartOnExit)
-
-	// Open the aggregate's DB lazily — sql.Open doesn't actually connect
-	// until first query, so it's safe to construct before Pg starts. The
-	// Backend's probe verifies reachability before the HTTP server accepts
-	// traffic.
+	// Open the aggregate's DB lazily — sql.Open doesn't actually connect until
+	// first query, so it's safe to construct before Pg starts. The Backend's
+	// probe verifies reachability before the HTTP server accepts traffic.
 	aggDB, err := sql.Open("postgres", pg.DSN("reckon_main"))
 	if err != nil {
 		return fmt.Errorf("open aggregate db: %w", err)
@@ -184,6 +169,29 @@ func serve(cfg config.Config) error {
 		aggregate.InvestigationCurrentProjector{},
 		aggregate.ActionCurrentProjector{},
 	)
+
+	// The Temporal worker runs in-process (05 §3.3): it registers the OSS
+	// workflow inventory on the `reckon` task queue and — when write bindings
+	// are configured — the ActionLifecycle activities (handler + action
+	// resolver), so the dispatch workflow (C.4) can run.
+	worker := temporal.NewWorker(temporal.WorkerConfig{
+		HostPort:  fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
+		Namespace: cfg.Temporal.Namespace,
+	})
+	activities, err := buildActionActivities(cfg, handler)
+	if err != nil {
+		return err
+	}
+	if activities != nil {
+		worker.WithActivities(activities)
+		log.Printf("%s: action-lifecycle activities registered on the worker", branding.CLI)
+	}
+
+	sup := supervisor.New()
+	sup.Register(pg, supervisor.FatalOnExit)
+	sup.Register(temp, supervisor.RestartOnExit)
+	sup.Register(kc, supervisor.RestartOnExit)
+	sup.Register(worker, supervisor.RestartOnExit)
 
 	// Build the read-side capability layer when a tenant capability config is
 	// set (Phase B). Optional in v0: absent config leaves the /api/capabilities
@@ -219,6 +227,29 @@ func serve(cfg config.Config) error {
 	}
 	log.Printf("%s: stopped", branding.CLI)
 	return nil
+}
+
+// buildActionActivities constructs the ActionLifecycle activities (aggregate
+// handler + write-side action resolver) from the tenant config, or nil when no
+// write bindings are configured. Reuses the capability config path — the
+// action_adapters/action_bindings keys can share the same file (08 §4).
+func buildActionActivities(cfg config.Config, handler *aggregate.Handler) (*temporal.Activities, error) {
+	path := cfg.Capability.ConfigPath
+	if path == "" {
+		return nil, nil
+	}
+	ac, err := action.LoadActionConfig(path)
+	if err != nil {
+		return nil, fmt.Errorf("load action config: %w", err)
+	}
+	if len(ac.Bindings) == 0 {
+		return nil, nil // no write bindings — workflows-only worker
+	}
+	resolver, _, err := action.BuildActionResolver(ac, cfg.Capability.FixtureRoot)
+	if err != nil {
+		return nil, fmt.Errorf("build action resolver: %w", err)
+	}
+	return temporal.NewActivities(handler, resolver), nil
 }
 
 // buildCapability constructs the capability resolver + catalog from the tenant

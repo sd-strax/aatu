@@ -411,6 +411,73 @@ func (c ExpireAction) Validate(env Envelope) error {
 	return nil
 }
 
+// DispatchAction records an APPROVED action being picked up for dispatch
+// (02 §3). System-emitted by the ActionLifecycle workflow; the envelope
+// principal is the action's approver (the workflow carries it, 05 §6.2). The
+// adapter_request_id is the workflow id.
+type DispatchAction struct {
+	ActionID         uuid.UUID `json:"action_id"`
+	Adapter          string    `json:"adapter"`
+	AdapterRequestID string    `json:"adapter_request_id"`
+}
+
+// Kind returns "DispatchAction".
+func (DispatchAction) Kind() string { return "DispatchAction" }
+
+// Validate checks the envelope and the action id.
+func (c DispatchAction) Validate(env Envelope) error {
+	if err := validateEnvelope(env); err != nil {
+		return err
+	}
+	if c.ActionID == (uuid.UUID{}) {
+		return errors.New("DispatchAction: ActionID is zero")
+	}
+	return nil
+}
+
+// ResultAction records the terminal outcome of a dispatched action (02 §3).
+// System-emitted.
+type ResultAction struct {
+	ActionID         uuid.UUID         `json:"action_id"`
+	FinalOutcome     string            `json:"final_outcome"` // SUCCEEDED | FAILED | PARTIAL | TIMEOUT
+	PerTargetResults map[string]string `json:"per_target_results,omitempty"`
+	Attempts         int               `json:"attempts"`
+	RawResponseRef   string            `json:"raw_response_ref,omitempty"`
+}
+
+// Kind returns "ResultAction".
+func (ResultAction) Kind() string { return "ResultAction" }
+
+// Validate checks the envelope, action id, and outcome vocabulary.
+func (c ResultAction) Validate(env Envelope) error {
+	if err := validateEnvelope(env); err != nil {
+		return err
+	}
+	if c.ActionID == (uuid.UUID{}) {
+		return errors.New("ResultAction: ActionID is zero")
+	}
+	switch c.FinalOutcome {
+	case "SUCCEEDED", "FAILED", "PARTIAL", "TIMEOUT":
+	default:
+		return fmt.Errorf("ResultAction: invalid final_outcome %q", c.FinalOutcome)
+	}
+	return nil
+}
+
+// systemOnly reports whether a command may be issued only by a SYSTEM actor
+// (the Temporal workflows / timers). Dispatch, result, and expiry are lifecycle
+// transitions no human or AI issues directly — routing them through SYSTEM keeps
+// the workflow the single emitter and prevents a spoofed human command from
+// forging a dispatch or outcome.
+func systemOnly(cmd Command) bool {
+	switch cmd.(type) {
+	case DispatchAction, ResultAction, ExpireAction:
+		return true
+	default:
+		return false
+	}
+}
+
 // --- apply functions ---------------------------------------------------------
 
 // applyRequestAction builds the (ActionRequested, action-request Interpretation)
@@ -562,6 +629,71 @@ func applyRejectAction(env Envelope, state aggregateState, c RejectAction) ([]Ev
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionRejected, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionRejection, c.Reason, nil)
+	if err != nil {
+		return nil, err
+	}
+	return []Event{domain, interp}, nil
+}
+
+// applyDispatchAction builds the (ActionDispatched, action-dispatch
+// Interpretation) pair. Legal only from APPROVED. Its presence in the stream is
+// the dispatch-ledger guard (08 §6b): a re-triggered workflow sees it and
+// short-circuits re-issue.
+func applyDispatchAction(env Envelope, state aggregateState, c DispatchAction) ([]Event, error) {
+	act, ok := state.Actions[c.ActionID]
+	if !ok {
+		return nil, fmt.Errorf("DispatchAction rejected: action %s does not exist", c.ActionID)
+	}
+	if act.Status != ActionStatusApproved {
+		return nil, fmt.Errorf("DispatchAction rejected: action %s is %s, not APPROVED", c.ActionID, act.Status)
+	}
+
+	interpID := uuid.New()
+	payload, err := json.Marshal(ActionDispatched{
+		ActionID:                 c.ActionID,
+		Adapter:                  c.Adapter,
+		AdapterRequestID:         c.AdapterRequestID,
+		DispatchedAt:             env.OccurredAt,
+		DispatchInterpretationID: interpID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionDispatched, payload)
+	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionDispatch,
+		fmt.Sprintf("dispatched via %s (%s)", c.Adapter, c.AdapterRequestID), nil)
+	if err != nil {
+		return nil, err
+	}
+	return []Event{domain, interp}, nil
+}
+
+// applyResultAction builds the (ActionResulted, action-result Interpretation)
+// pair. Legal only from EXECUTING.
+func applyResultAction(env Envelope, state aggregateState, c ResultAction) ([]Event, error) {
+	act, ok := state.Actions[c.ActionID]
+	if !ok {
+		return nil, fmt.Errorf("ResultAction rejected: action %s does not exist", c.ActionID)
+	}
+	if act.Status != ActionStatusExecuting {
+		return nil, fmt.Errorf("ResultAction rejected: action %s is %s, not EXECUTING", c.ActionID, act.Status)
+	}
+
+	interpID := uuid.New()
+	payload, err := json.Marshal(ActionResulted{
+		ActionID:               c.ActionID,
+		FinalOutcome:           c.FinalOutcome,
+		PerTargetResults:       c.PerTargetResults,
+		Attempts:               c.Attempts,
+		RawResponseRef:         c.RawResponseRef,
+		ResultInterpretationID: interpID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionResulted, payload)
+	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionResult,
+		fmt.Sprintf("action %s: %s", c.ActionID, c.FinalOutcome), nil)
 	if err != nil {
 		return nil, err
 	}

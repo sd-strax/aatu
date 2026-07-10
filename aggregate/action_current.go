@@ -95,9 +95,27 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		}
 		return setActionStatus(ctx, tx, evt, p.ActionID, ActionStatusExpired)
 
+	case EventTypeActionDispatched:
+		var p ActionDispatched
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal ActionDispatched: %w", err)
+		}
+		return setActionStatus(ctx, tx, evt, p.ActionID, ActionStatusExecuting)
+
+	case EventTypeActionResulted:
+		var p ActionResulted
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal ActionResulted: %w", err)
+		}
+		status := ActionStatusSucceeded
+		if p.FinalOutcome == "FAILED" || p.FinalOutcome == "TIMEOUT" {
+			status = ActionStatusFailed
+		}
+		return setActionStatus(ctx, tx, evt, p.ActionID, status)
+
 	default:
-		// action.dispatched / action.resulted / action.reversed land in C.4;
-		// every non-action event is a no-op here.
+		// action.reversed lands with ReversalSaga; every non-action event is a
+		// no-op here.
 		return nil
 	}
 }

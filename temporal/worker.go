@@ -38,10 +38,21 @@ type WorkerConfig struct {
 type Worker struct {
 	cfg WorkerConfig
 
+	activities *Activities // action-lifecycle activities; nil = workflows-only worker
+
 	mu      sync.Mutex // guards client/worker/started; Health runs concurrently with watcher Stop/Start
 	client  client.Client
 	worker  worker.Worker
 	started bool
+}
+
+// WithActivities injects the action-lifecycle activities (handler + resolver) so
+// the worker can run ActionLifecycle. A worker without them registers the
+// workflows but not the activities — ActionLifecycle would fail at runtime, but
+// the bare worker (A.7) never triggers it.
+func (w *Worker) WithActivities(a *Activities) *Worker {
+	w.activities = a
+	return w
 }
 
 // NewWorker constructs the worker component (not yet started). Defaults:
@@ -79,6 +90,9 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	wk := worker.New(c, w.cfg.TaskQueue, worker.Options{})
 	registerWorkflows(wk)
+	if w.activities != nil {
+		wk.RegisterActivity(w.activities)
+	}
 
 	if err := wk.Start(); err != nil {
 		c.Close()

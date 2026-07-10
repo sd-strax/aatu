@@ -226,6 +226,50 @@ func TestAIWriteProtection(t *testing.T) {
 	}
 }
 
+// TestDispatchResult_SystemOnlyAndTransitions: dispatch/result require a SYSTEM
+// actor and the right source state (APPROVED → dispatch → EXECUTING → result).
+func TestDispatchResult_SystemOnlyAndTransitions(t *testing.T) {
+	id := uuid.New()
+
+	// A human cannot dispatch — system-only guard.
+	human := newTestEnvelope("alice")
+	approved := activeStateWithAction(human, id, ActionStatusApproved)
+	if _, err := applyCommand(human, DispatchAction{ActionID: id}, approved); err == nil {
+		t.Error("human DispatchAction should be rejected (system-only)")
+	}
+
+	// SYSTEM dispatches an APPROVED action → EXECUTING.
+	sys := newTestEnvelope("alice")
+	sys.Actor.Kind = ActorSystem
+	events, err := applyCommand(sys, DispatchAction{ActionID: id, Adapter: "fx", AdapterRequestID: "wf-1"}, approved)
+	if err != nil {
+		t.Fatalf("system dispatch: %v", err)
+	}
+	if events[0].Type != EventTypeActionDispatched {
+		t.Errorf("domain type = %q; want dispatched", events[0].Type)
+	}
+	executing := foldInto(approved.Actions, events)
+	if executing[id].Status != ActionStatusExecuting {
+		t.Fatalf("after dispatch status = %q; want EXECUTING", executing[id].Status)
+	}
+
+	// Dispatch requires APPROVED — from REQUESTED it's rejected.
+	req := activeStateWithAction(sys, id, ActionStatusRequested)
+	if _, err := applyCommand(sys, DispatchAction{ActionID: id}, req); err == nil {
+		t.Error("DispatchAction from REQUESTED should be rejected")
+	}
+
+	// SYSTEM records the result on the EXECUTING action → SUCCEEDED.
+	execState := aggregateState{Seq: 8, Exists: true, TenantID: sys.TenantID, Status: StatusActive, Actions: executing}
+	revents, err := applyCommand(sys, ResultAction{ActionID: id, FinalOutcome: "SUCCEEDED", PerTargetResults: map[string]string{"0": "OK"}, Attempts: 1}, execState)
+	if err != nil {
+		t.Fatalf("system result: %v", err)
+	}
+	if foldInto(executing, revents)[id].Status != ActionStatusSucceeded {
+		t.Error("after SUCCEEDED result, status should be SUCCEEDED")
+	}
+}
+
 // TestAIAllowlist: the AI guard is an ALLOWLIST (04 §5.6) — T1-annotate
 // commands and RequestAction pass; conclude/archive and any unlisted command
 // default to denied.

@@ -159,6 +159,14 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return nil, fmt.Errorf("%s rejected: not in the AI_DELEGATED command allowlist (04 §5.6)", cmd.Kind())
 	}
 
+	// System-only guard: dispatch/result/expiry are lifecycle transitions the
+	// Temporal workflows/timers emit — never a human or AI directly. Requiring
+	// a SYSTEM actor keeps the workflow the single emitter and stops a spoofed
+	// command from forging a dispatch or an outcome.
+	if systemOnly(cmd) && env.Actor.Kind != ActorSystem {
+		return nil, fmt.Errorf("%s rejected: system-emitted command requires a SYSTEM actor, got %q", cmd.Kind(), env.Actor.Kind)
+	}
+
 	if _, isCreate := cmd.(CreateInvestigation); !isCreate {
 		if !state.Exists {
 			return nil, fmt.Errorf("%s on non-existent investigation %s", cmd.Kind(), env.AggregateID)
@@ -220,6 +228,10 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return applyRejectAction(env, state, c)
 	case ExpireAction:
 		return applyExpireAction(env, state, c)
+	case DispatchAction:
+		return applyDispatchAction(env, state, c)
+	case ResultAction:
+		return applyResultAction(env, state, c)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd.Kind())
 	}
