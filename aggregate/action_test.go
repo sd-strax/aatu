@@ -191,6 +191,133 @@ func TestAIWriteProtection(t *testing.T) {
 	}
 }
 
+// TestAIAllowlist: the AI guard is an ALLOWLIST (04 §5.6) — T1-annotate
+// commands and RequestAction pass; conclude/archive and any unlisted command
+// default to denied.
+func TestAIAllowlist(t *testing.T) {
+	env := newTestEnvelope("alice")
+	env.Actor.Kind = ActorAIDelegated
+
+	// T1: lifecycle draft→active is AI-permitted (04 §1).
+	draft := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusDraft, Actions: map[uuid.UUID]actionState{}}
+	if _, err := applyCommand(env, ActivateInvestigation{}, draft); err != nil {
+		t.Errorf("AI Activate (T1) should be allowed: %v", err)
+	}
+
+	// Concluding an investigation is a human act — denied by default.
+	active := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusActive, Actions: map[uuid.UUID]actionState{}}
+	if _, err := applyCommand(env, ConcludeInvestigation{ReportRef: "r", Summary: "s"}, active); err == nil {
+		t.Error("AI ConcludeInvestigation should be denied (not in allowlist)")
+	}
+}
+
+// TestApproveAction_ModeStageConsistency: 04 §3.3 pairs are enforced at
+// Validate — TWO_PARTY+SOLO (the one-step secondary bypass) and MANUAL+PRIMARY
+// are both malformed.
+func TestApproveAction_ModeStageConsistency(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+	state := activeStateWithAction(env, id, ActionStatusRequested)
+
+	bypass := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeTwoParty, Stage: AuthStageSolo, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+	}}
+	if _, err := applyCommand(env, bypass, state); err == nil {
+		t.Error("TWO_PARTY with stage SOLO must be rejected (one-step secondary bypass)")
+	}
+
+	malformed := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeManual, Stage: AuthStagePrimary, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+	}}
+	if _, err := applyCommand(env, malformed, state); err == nil {
+		t.Error("MANUAL with stage PRIMARY must be rejected")
+	}
+}
+
+// TestApproveAction_TwoPartyIntegrity: the secondary approver must differ from
+// the primary, and the secondary event's primary_approver_ref must match the
+// recorded primary approval (folded state, not the caller's payload).
+func TestApproveAction_TwoPartyIntegrity(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+	pending := activeStateWithAction(env, id, ActionStatusPendingSecondary)
+	act := pending.Actions[id]
+	act.PrimaryApprover = "alice"
+	pending.Actions[id] = act
+
+	// Same human approving both stages → rejected.
+	self := newTestEnvelope("alice")
+	self.AggregateID = env.AggregateID
+	sameHuman := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeTwoParty, Stage: AuthStageSecondary,
+		PrimaryApproverRef: "alice", SecondaryApproverRef: "alice",
+	}}
+	if _, err := applyCommand(self, sameHuman, pending); err == nil {
+		t.Error("secondary approver == primary approver must be rejected (TWO_PARTY requires two humans)")
+	}
+
+	// A secondary event rewriting who the primary was → rejected.
+	bob := newTestEnvelope("bob")
+	bob.AggregateID = env.AggregateID
+	rewrite := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeTwoParty, Stage: AuthStageSecondary,
+		PrimaryApproverRef: "mallory", SecondaryApproverRef: "bob",
+	}}
+	if _, err := applyCommand(bob, rewrite, pending); err == nil {
+		t.Error("primary_approver_ref mismatching the recorded primary must be rejected")
+	}
+}
+
+// TestFoldDispatchLifecycle: the system-emitted events (C.4's emitters) fold the
+// rest of the machine — EXECUTING on dispatch, SUCCEEDED/FAILED per outcome
+// (PARTIAL→SUCCEEDED, TIMEOUT→FAILED), and REVERSED on the original.
+func TestFoldDispatchLifecycle(t *testing.T) {
+	id := uuid.New()
+	mk := func(eventType string, payload any) Event {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Event{Type: eventType, Payload: b}
+	}
+
+	cases := []struct {
+		name    string
+		events  []Event
+		want    string
+		checkID uuid.UUID
+	}{
+		{"dispatched → EXECUTING",
+			[]Event{mk(EventTypeActionDispatched, ActionDispatched{ActionID: id, Adapter: "fx"})},
+			ActionStatusExecuting, id},
+		{"resulted SUCCEEDED",
+			[]Event{mk(EventTypeActionResulted, ActionResulted{ActionID: id, FinalOutcome: "SUCCEEDED"})},
+			ActionStatusSucceeded, id},
+		{"resulted PARTIAL → SUCCEEDED",
+			[]Event{mk(EventTypeActionResulted, ActionResulted{ActionID: id, FinalOutcome: "PARTIAL"})},
+			ActionStatusSucceeded, id},
+		{"resulted TIMEOUT → FAILED",
+			[]Event{mk(EventTypeActionResulted, ActionResulted{ActionID: id, FinalOutcome: "TIMEOUT"})},
+			ActionStatusFailed, id},
+		{"reversed → REVERSED on the original",
+			[]Event{mk(EventTypeActionReversed, ActionReversed{OriginalActionID: id, ReversingActionID: uuid.New()})},
+			ActionStatusReversed, id},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			actions := map[uuid.UUID]actionState{id: {Status: ActionStatusApproved, Tier: TierT2}}
+			for _, e := range tc.events {
+				if err := foldActionEvent(actions, e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if actions[tc.checkID].Status != tc.want {
+				t.Errorf("status = %q; want %q", actions[tc.checkID].Status, tc.want)
+			}
+		})
+	}
+}
+
 // foldInto applies events onto a copy of the given action state map, returning
 // the result (test helper for pure fold assertions).
 func foldInto(base map[uuid.UUID]actionState, events []Event) map[uuid.UUID]actionState {

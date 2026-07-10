@@ -40,7 +40,7 @@ func okResult() WriteResult {
 }
 
 func target(id string) aggregate.TargetSpec {
-	return aggregate.TargetSpec{EntityRef: "x-host--x", ResolvedIdentifier: id}
+	return aggregate.TargetSpec{EntityRef: "x-host--" + id, ResolvedIdentifier: id}
 }
 
 // --- descriptor / list_action_types -----------------------------------------
@@ -124,6 +124,22 @@ func TestBlastRadiusEscalator(t *testing.T) {
 	// A T2 under the threshold stays T2.
 	if got := EscalateTier(aggregate.TierT2, DefaultBlastRadiusThreshold, DefaultBlastRadiusThreshold); got != aggregate.TierT2 {
 		t.Errorf("T2 at threshold escalated to %q; want T2", got)
+	}
+
+	// The escalator counts DISTINCT entities (04 §1), not raw list length: the
+	// same entity duplicated 11 times is one target, not eleven.
+	dupes := make([]aggregate.TargetSpec, DefaultBlastRadiusThreshold+1)
+	for i := range dupes {
+		dupes[i] = target("same-host")
+	}
+	cmd, err = BuildRequestCommand(catalog, ActionRequest{
+		ActionType: "host.isolate", Targets: dupes, Rationale: "dup",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Tier != aggregate.TierT2 {
+		t.Errorf("11 duplicates of one entity escalated to %q; want T2 (1 distinct)", cmd.Tier)
 	}
 }
 

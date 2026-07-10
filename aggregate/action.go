@@ -130,13 +130,49 @@ type ActionExpired struct {
 	ExpiryInterpretationID uuid.UUID `json:"expiry_interpretation_id"`
 }
 
+// ActionDispatched records the dispatcher picking up an APPROVED action
+// (02 §3). System-emitted by the ActionLifecycle workflow (C.4); its presence
+// in the stream is the dispatch-ledger guard (08 §6b) — a replayed workflow
+// sees it and short-circuits re-issue.
+type ActionDispatched struct {
+	ActionID                 uuid.UUID `json:"action_id"`
+	Adapter                  string    `json:"adapter"`
+	AdapterRequestID         string    `json:"adapter_request_id"`
+	DispatchedAt             time.Time `json:"dispatched_at"`
+	DispatchInterpretationID uuid.UUID `json:"dispatch_interpretation_id"`
+}
+
+// ActionResulted records the terminal outcome of a dispatched action (02 §3).
+// System-emitted. per_target_results is what makes PARTIAL outcomes auditable.
+type ActionResulted struct {
+	ActionID               uuid.UUID         `json:"action_id"`
+	FinalOutcome           string            `json:"final_outcome"` // SUCCEEDED | FAILED | PARTIAL | TIMEOUT
+	PerTargetResults       map[string]string `json:"per_target_results,omitempty"`
+	Attempts               int               `json:"attempts"`
+	RawResponseRef         string            `json:"raw_response_ref,omitempty"`
+	ResultInterpretationID uuid.UUID         `json:"result_interpretation_id"`
+}
+
+// ActionReversed records the original action's status moving to REVERSED on the
+// reversing action's success (02 §3). The reversing action is its own x-action
+// with its own lifecycle events.
+type ActionReversed struct {
+	OriginalActionID         uuid.UUID `json:"original_action_id"`
+	ReversingActionID        uuid.UUID `json:"reversing_action_id"`
+	ReversalInterpretationID uuid.UUID `json:"reversal_interpretation_id"`
+}
+
 // --- folded state ------------------------------------------------------------
 
 // actionState is one x-action's folded state within the aggregate.
+// PrimaryApprover is retained from the primary approval so the secondary stage
+// can enforce two-party integrity (distinct approvers, consistent audit record)
+// against authoritative state rather than trusting the caller's payload.
 type actionState struct {
-	Status     string
-	Tier       string
-	IsReversal bool
+	Status          string
+	Tier            string
+	IsReversal      bool
+	PrimaryApprover string
 }
 
 // foldActionEvent applies one action event to the per-action state map. Kept
@@ -159,6 +195,7 @@ func foldActionEvent(actions map[uuid.UUID]actionState, e Event) error {
 			return fmt.Errorf("fold action.approved seq %d: %w", e.SequenceNo, err)
 		}
 		s := get(p.ActionID)
+		s.PrimaryApprover = p.Authorization.PrimaryApproverRef
 		if p.Authorization.Mode == AuthModeTwoParty && p.Authorization.Stage == AuthStagePrimary {
 			s.Status = ActionStatusPendingSecondary
 		} else {
@@ -181,6 +218,38 @@ func foldActionEvent(actions map[uuid.UUID]actionState, e Event) error {
 		s := get(p.ActionID)
 		s.Status = ActionStatusExpired
 		set(p.ActionID, s)
+	case EventTypeActionDispatched:
+		var p ActionDispatched
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return fmt.Errorf("fold action.dispatched seq %d: %w", e.SequenceNo, err)
+		}
+		s := get(p.ActionID)
+		s.Status = ActionStatusExecuting
+		set(p.ActionID, s)
+	case EventTypeActionResulted:
+		var p ActionResulted
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return fmt.Errorf("fold action.resulted seq %d: %w", e.SequenceNo, err)
+		}
+		s := get(p.ActionID)
+		// Status mapping per 08 §7.1: PARTIAL terminates SUCCEEDED (with the
+		// partial detail on the event); TIMEOUT terminates FAILED with no
+		// success inference (04 §6.2).
+		switch p.FinalOutcome {
+		case "SUCCEEDED", "PARTIAL":
+			s.Status = ActionStatusSucceeded
+		default: // FAILED, TIMEOUT
+			s.Status = ActionStatusFailed
+		}
+		set(p.ActionID, s)
+	case EventTypeActionReversed:
+		var p ActionReversed
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return fmt.Errorf("fold action.reversed seq %d: %w", e.SequenceNo, err)
+		}
+		s := get(p.OriginalActionID)
+		s.Status = ActionStatusReversed
+		set(p.OriginalActionID, s)
 	}
 	return nil
 }
@@ -236,7 +305,9 @@ type ApproveAction struct {
 // Kind returns "ApproveAction".
 func (ApproveAction) Kind() string { return "ApproveAction" }
 
-// Validate checks the envelope and the authorization shape.
+// Validate checks the envelope and the authorization shape, including the
+// 04 §3.3 mode/stage pairing — without it, a TWO_PARTY approval sent with
+// stage SOLO would fold straight to APPROVED, bypassing the secondary.
 func (c ApproveAction) Validate(env Envelope) error {
 	if err := validateEnvelope(env); err != nil {
 		return err
@@ -245,7 +316,17 @@ func (c ApproveAction) Validate(env Envelope) error {
 		return errors.New("ApproveAction: ActionID is zero")
 	}
 	switch c.Authorization.Mode {
-	case AuthModeManual, AuthModeAutoPolicy, AuthModeTwoParty, AuthModeExternalDelegated:
+	case AuthModeManual, AuthModeAutoPolicy, AuthModeExternalDelegated:
+		// Single-stage modes are always SOLO (04 §3.3).
+		if c.Authorization.Stage != AuthStageSolo {
+			return fmt.Errorf("ApproveAction: mode %s requires stage SOLO, got %q", c.Authorization.Mode, c.Authorization.Stage)
+		}
+	case AuthModeTwoParty:
+		// TWO_PARTY is exactly PRIMARY then SECONDARY — SOLO would collapse the
+		// two stages into one.
+		if c.Authorization.Stage != AuthStagePrimary && c.Authorization.Stage != AuthStageSecondary {
+			return fmt.Errorf("ApproveAction: mode TWO_PARTY requires stage PRIMARY or SECONDARY, got %q", c.Authorization.Stage)
+		}
 	default:
 		return fmt.Errorf("ApproveAction: invalid authorization mode %q", c.Authorization.Mode)
 	}
@@ -357,6 +438,21 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 	case act.Status == ActionStatusPendingSecondary && stage == AuthStageSecondary:
 	default:
 		return nil, fmt.Errorf("ApproveAction rejected: action %s is %s, cannot record a %s approval", c.ActionID, act.Status, stage)
+	}
+
+	// Two-party integrity (04 §3.2/§3.3): the secondary approver must be a
+	// DIFFERENT human than the primary — one analyst approving both stages
+	// defeats the mode — and the secondary event's primary_approver_ref must
+	// match the primary approval actually recorded in the stream (checked
+	// against folded state, never the caller's payload), so the audit chain
+	// cannot be rewritten at the second stage.
+	if stage == AuthStageSecondary {
+		if c.Authorization.SecondaryApproverRef == c.Authorization.PrimaryApproverRef {
+			return nil, fmt.Errorf("ApproveAction rejected: secondary approver %q must differ from the primary approver (TWO_PARTY requires two humans)", c.Authorization.SecondaryApproverRef)
+		}
+		if act.PrimaryApprover != "" && c.Authorization.PrimaryApproverRef != act.PrimaryApprover {
+			return nil, fmt.Errorf("ApproveAction rejected: primary_approver_ref %q does not match the recorded primary approval by %q", c.Authorization.PrimaryApproverRef, act.PrimaryApprover)
+		}
 	}
 
 	interpID := uuid.New()

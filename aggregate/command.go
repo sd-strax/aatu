@@ -145,12 +145,16 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return nil, err
 	}
 
-	// AI write-protection (04 §5.6): an AI_DELEGATED command may request an
-	// action but can never construct an Authorization record or advance action
-	// status. Enforced here at the aggregate boundary — the single write path —
-	// so it cannot be bypassed by an alternate code path.
-	if env.Actor.IsAIDelegated() && aiForbidden(cmd) {
-		return nil, fmt.Errorf("%s rejected: AI_DELEGATED actors cannot authorize or advance actions (04 §5.6)", cmd.Kind())
+	// AI write-protection (04 §5.6): AI_DELEGATED commands are validated against
+	// an ALLOWLIST — spec wording, deliberately, so any future command (C.4's
+	// dispatch/result/reversal, and everything after) is AI-denied by default
+	// until explicitly admitted. Enforced here at the aggregate boundary — the
+	// single write path — so it cannot be bypassed by an alternate code path.
+	// NOTE for the HTTP layer: Actor.Kind must be derived from the JWT's
+	// delegate_kind claim, never from the request body, or this guard is
+	// caller-spoofable.
+	if env.Actor.IsAIDelegated() && !aiAllowed(cmd) {
+		return nil, fmt.Errorf("%s rejected: not in the AI_DELEGATED command allowlist (04 §5.6)", cmd.Kind())
 	}
 
 	if _, isCreate := cmd.(CreateInvestigation); !isCreate {
@@ -219,12 +223,19 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 	}
 }
 
-// aiForbidden reports whether a command is off-limits to an AI_DELEGATED actor
-// because it constructs an Authorization record or advances action status
-// (04 §5.6). RequestAction is deliberately NOT here — the AI may propose.
-func aiForbidden(cmd Command) bool {
+// aiAllowed is the AI_DELEGATED command allowlist (04 §5.6). It admits exactly
+// the T1-annotate tier (04 §1: hypotheses, membership, evidence, lifecycle
+// DRAFT↔ACTIVE↔PAUSED — "the AI agent operates freely here") plus RequestAction
+// (the AI may PROPOSE a T2/T3 action; 08 §2). Everything else — approve /
+// reject / expire, conclude / reopen / archive, and any future command —
+// defaults to denied. Approving, and concluding an investigation, are human
+// acts.
+func aiAllowed(cmd Command) bool {
 	switch cmd.(type) {
-	case ApproveAction, RejectAction, ExpireAction:
+	case CreateInvestigation,
+		ActivateInvestigation, PauseInvestigation, ResumeInvestigation,
+		AddMember, RemoveMember, AttachEvidence,
+		RequestAction:
 		return true
 	default:
 		return false

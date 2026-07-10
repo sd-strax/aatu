@@ -63,7 +63,7 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 	return aggregate.RequestAction{
 		ActionID:     uuid.New(),
 		ActionType:   req.ActionType,
-		Tier:         EscalateTier(d.DefaultTier, len(req.Targets), DefaultBlastRadiusThreshold),
+		Tier:         EscalateTier(d.DefaultTier, distinctTargets(req.Targets), DefaultBlastRadiusThreshold),
 		Targets:      req.Targets,
 		Parameters:   req.Parameters,
 		EvidenceRefs: req.EvidenceRefs,
@@ -83,4 +83,19 @@ func EscalateTier(tier string, targetCount, threshold int) string {
 		return aggregate.TierT3
 	}
 	return tier
+}
+
+// distinctTargets counts DISTINCT entities (04 §1's escalator unit — not raw
+// target-list length, so duplicated entries neither over- nor under-count).
+// Keyed by entity_ref, falling back to resolved_identifier when unset.
+func distinctTargets(targets []aggregate.TargetSpec) int {
+	seen := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		key := t.EntityRef
+		if key == "" {
+			key = t.ResolvedIdentifier
+		}
+		seen[key] = true
+	}
+	return len(seen)
 }
