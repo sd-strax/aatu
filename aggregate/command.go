@@ -78,18 +78,20 @@ func (e ErrEnvelope) Error() string { return "envelope: " + string(e) }
 // to applyCommand so transition legality is checked against authoritative state
 // (not a projection that could lag or be mid-rebuild).
 type aggregateState struct {
-	Seq           int64     // sequence number of the last event (0 if none)
-	Exists        bool      // an investigation.created has been seen
-	TenantID      uuid.UUID // tenant stamped at creation; immutable thereafter
-	Status        string    // current lifecycle status
-	ConclusionRef string    // set while concluded, cleared on reopen
+	Seq           int64                     // sequence number of the last event (0 if none)
+	Exists        bool                      // an investigation.created has been seen
+	TenantID      uuid.UUID                 // tenant stamped at creation; immutable thereafter
+	Status        string                    // current lifecycle status
+	ConclusionRef string                    // set while concluded, cleared on reopen
+	Actions       map[uuid.UUID]actionState // per-x-action folded state (C.1)
 }
 
 // foldState replays an event stream into the current aggregateState. Only
-// lifecycle-bearing events move the state machine; interpretation and
-// membership events advance Seq but leave status unchanged.
+// lifecycle-bearing events move the investigation state machine; interpretation
+// and membership events advance Seq but leave status unchanged. Action events
+// fold into the per-action state map (foldActionEvent).
 func foldState(events []Event) (aggregateState, error) {
-	var s aggregateState
+	s := aggregateState{Actions: make(map[uuid.UUID]actionState)}
 	for _, e := range events {
 		s.Seq = e.SequenceNo
 		switch e.Type {
@@ -115,6 +117,12 @@ func foldState(events []Event) (aggregateState, error) {
 			s.ConclusionRef = ""
 		case EventTypeArchived:
 			s.Status = StatusArchived
+		case EventTypeActionRequested, EventTypeActionApproved, EventTypeActionRejected,
+			EventTypeActionExpired, EventTypeActionDispatched, EventTypeActionResulted,
+			EventTypeActionReversed:
+			if err := foldActionEvent(s.Actions, e); err != nil {
+				return aggregateState{}, err
+			}
 		}
 	}
 	return s, nil
@@ -135,6 +143,14 @@ const EventTypeCreated = "investigation.created"
 func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, error) {
 	if err := cmd.Validate(env); err != nil {
 		return nil, err
+	}
+
+	// AI write-protection (04 §5.6): an AI_DELEGATED command may request an
+	// action but can never construct an Authorization record or advance action
+	// status. Enforced here at the aggregate boundary — the single write path —
+	// so it cannot be bypassed by an alternate code path.
+	if env.Actor.IsAIDelegated() && aiForbidden(cmd) {
+		return nil, fmt.Errorf("%s rejected: AI_DELEGATED actors cannot authorize or advance actions (04 §5.6)", cmd.Kind())
 	}
 
 	if _, isCreate := cmd.(CreateInvestigation); !isCreate {
@@ -190,7 +206,27 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return membershipEvent(env, state, EventTypeMemberRemoved, MemberRemoved(c))
 	case AttachEvidence:
 		return membershipEvent(env, state, EventTypeEvidenceAttached, EvidenceAttached(c))
+	case RequestAction:
+		return applyRequestAction(env, state, c)
+	case ApproveAction:
+		return applyApproveAction(env, state, c)
+	case RejectAction:
+		return applyRejectAction(env, state, c)
+	case ExpireAction:
+		return applyExpireAction(env, state, c)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd.Kind())
+	}
+}
+
+// aiForbidden reports whether a command is off-limits to an AI_DELEGATED actor
+// because it constructs an Authorization record or advances action status
+// (04 §5.6). RequestAction is deliberately NOT here — the AI may propose.
+func aiForbidden(cmd Command) bool {
+	switch cmd.(type) {
+	case ApproveAction, RejectAction, ExpireAction:
+		return true
+	default:
+		return false
 	}
 }

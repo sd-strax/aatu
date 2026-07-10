@@ -182,6 +182,7 @@ func serve(cfg config.Config) error {
 	defer aggDB.Close()
 	handler := aggregate.NewHandler(aggregate.NewStore(aggDB),
 		aggregate.InvestigationCurrentProjector{},
+		aggregate.ActionCurrentProjector{},
 	)
 
 	// Build the read-side capability layer when a tenant capability config is

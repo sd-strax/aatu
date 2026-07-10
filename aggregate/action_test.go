@@ -1,0 +1,205 @@
+package aggregate
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// activeStateWithAction returns a folded state for an ACTIVE investigation that
+// optionally already carries one action in the given status.
+func activeStateWithAction(env Envelope, actionID uuid.UUID, status string) aggregateState {
+	s := aggregateState{
+		Seq: 4, Exists: true, TenantID: env.TenantID, Status: StatusActive,
+		Actions: map[uuid.UUID]actionState{},
+	}
+	if status != "" {
+		s.Actions[actionID] = actionState{Status: status, Tier: TierT2}
+	}
+	return s
+}
+
+func sampleRequest(id uuid.UUID) RequestAction {
+	return RequestAction{
+		ActionID:   id,
+		ActionType: "host.isolate",
+		Tier:       TierT2,
+		Targets:    []TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-DC01"}},
+		ExpiresAt:  time.Now().Add(time.Hour),
+		Rationale:  "contain lateral movement",
+	}
+}
+
+// TestRequestAction_ProducesPairedEvents: a request emits (ActionRequested,
+// action-request Interpretation) sharing a correlation_id, with the domain
+// event pointing at the producing interpretation.
+func TestRequestAction_ProducesPairedEvents(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+	events, err := applyCommand(env, sampleRequest(id), activeStateWithAction(env, id, ""))
+	if err != nil {
+		t.Fatalf("applyCommand: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("produced %d events; want 2 (domain + interpretation)", len(events))
+	}
+	domain, interp := events[0], events[1]
+	if domain.Type != EventTypeActionRequested {
+		t.Errorf("domain type = %q; want %q", domain.Type, EventTypeActionRequested)
+	}
+	if interp.Type != EventTypeInterpretationRecorded {
+		t.Errorf("paired type = %q; want %q", interp.Type, EventTypeInterpretationRecorded)
+	}
+	if domain.CorrelationID != env.CorrelationID || interp.CorrelationID != env.CorrelationID {
+		t.Error("paired events do not share the command's correlation_id")
+	}
+
+	var req ActionRequested
+	if err := json.Unmarshal(domain.Payload, &req); err != nil {
+		t.Fatal(err)
+	}
+	var ir InterpretationRecorded
+	if err := json.Unmarshal(interp.Payload, &ir); err != nil {
+		t.Fatal(err)
+	}
+	if ir.InterpretationType != InterpretationActionRequest {
+		t.Errorf("interpretation_type = %q; want %q", ir.InterpretationType, InterpretationActionRequest)
+	}
+	if req.RequestingInterpretationID != ir.InterpretationID {
+		t.Errorf("action's requesting_interpretation_id %s != interpretation id %s",
+			req.RequestingInterpretationID, ir.InterpretationID)
+	}
+	if req.ActionID != id {
+		t.Errorf("action_id = %s; want %s", req.ActionID, id)
+	}
+}
+
+// TestRequestAction_StatePreconditions: allowed only on ACTIVE, or CONCLUDED for
+// a reversal.
+func TestRequestAction_StatePreconditions(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+
+	draft := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusDraft, Actions: map[uuid.UUID]actionState{}}
+	if _, err := applyCommand(env, sampleRequest(id), draft); err == nil {
+		t.Error("RequestAction on DRAFT should be rejected")
+	}
+
+	concluded := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusConcluded, Actions: map[uuid.UUID]actionState{}}
+	if _, err := applyCommand(env, sampleRequest(id), concluded); err == nil {
+		t.Error("non-reversal RequestAction on CONCLUDED should be rejected")
+	}
+	rev := sampleRequest(id)
+	rev.IsReversal = true
+	if _, err := applyCommand(env, rev, concluded); err != nil {
+		t.Errorf("reversal RequestAction on CONCLUDED should be allowed: %v", err)
+	}
+}
+
+// TestApproveAction_ActorApproverInvariant: the acting principal must be the
+// approver (04 §3.3).
+func TestApproveAction_ActorApproverInvariant(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+	state := activeStateWithAction(env, id, ActionStatusRequested)
+
+	// Approver != acting principal → rejected.
+	mismatch := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeManual, Stage: AuthStageSolo, PrimaryApproverRef: "bob", PrimaryApprovedAt: time.Now(),
+	}}
+	if _, err := applyCommand(env, mismatch, state); err == nil {
+		t.Error("approval by a non-approver principal should be rejected")
+	}
+
+	// Approver == acting principal → APPROVED.
+	ok := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeManual, Stage: AuthStageSolo, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+	}}
+	events, err := applyCommand(env, ok, state)
+	if err != nil {
+		t.Fatalf("valid approval rejected: %v", err)
+	}
+	if events[0].Type != EventTypeActionApproved {
+		t.Errorf("domain type = %q; want %q", events[0].Type, EventTypeActionApproved)
+	}
+}
+
+// TestApproveAction_TwoPartyStages: a TWO_PARTY primary approval pends secondary;
+// the secondary (a different approver) finalizes.
+func TestApproveAction_TwoPartyStages(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+
+	// Primary approval on a REQUESTED action.
+	reqState := activeStateWithAction(env, id, ActionStatusRequested)
+	primary := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeTwoParty, Stage: AuthStagePrimary, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+	}}
+	events, err := applyCommand(env, primary, reqState)
+	if err != nil {
+		t.Fatalf("primary approval: %v", err)
+	}
+	// Fold the emitted events: status should be PENDING_SECONDARY.
+	folded := foldInto(reqState.Actions, events)
+	if folded[id].Status != ActionStatusPendingSecondary {
+		t.Fatalf("after primary, status = %q; want PENDING_SECONDARY", folded[id].Status)
+	}
+
+	// Secondary approval by a different principal on the pending action.
+	env2 := newTestEnvelope("bob")
+	env2.AggregateID = env.AggregateID
+	pendState := aggregateState{Seq: 6, Exists: true, TenantID: env.TenantID, Status: StatusActive, Actions: folded}
+	secTime := time.Now()
+	secondary := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeTwoParty, Stage: AuthStageSecondary,
+		PrimaryApproverRef: "alice", SecondaryApproverRef: "bob", SecondaryApprovedAt: &secTime,
+	}}
+	events2, err := applyCommand(env2, secondary, pendState)
+	if err != nil {
+		t.Fatalf("secondary approval: %v", err)
+	}
+	if foldInto(pendState.Actions, events2)[id].Status != ActionStatusApproved {
+		t.Error("after secondary, status should be APPROVED")
+	}
+}
+
+// TestAIWriteProtection: an AI_DELEGATED actor may request an action but can
+// never approve, reject, or expire one (04 §5.6).
+func TestAIWriteProtection(t *testing.T) {
+	env := newTestEnvelope("alice")
+	env.Actor.Kind = ActorAIDelegated
+	id := uuid.New()
+
+	// Request is permitted for the AI.
+	if _, err := applyCommand(env, sampleRequest(id), activeStateWithAction(env, id, "")); err != nil {
+		t.Errorf("AI RequestAction should be allowed: %v", err)
+	}
+
+	// Approve/Reject/Expire are all forbidden for the AI.
+	state := activeStateWithAction(env, id, ActionStatusRequested)
+	forbidden := []Command{
+		ApproveAction{ActionID: id, Authorization: Authorization{Mode: AuthModeManual, Stage: AuthStageSolo, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now()}},
+		RejectAction{ActionID: id, Reason: "no"},
+		ExpireAction{ActionID: id},
+	}
+	for _, cmd := range forbidden {
+		if _, err := applyCommand(env, cmd, state); err == nil {
+			t.Errorf("AI_DELEGATED %s should be rejected", cmd.Kind())
+		}
+	}
+}
+
+// foldInto applies events onto a copy of the given action state map, returning
+// the result (test helper for pure fold assertions).
+func foldInto(base map[uuid.UUID]actionState, events []Event) map[uuid.UUID]actionState {
+	out := make(map[uuid.UUID]actionState, len(base))
+	for k, v := range base {
+		out[k] = v
+	}
+	for _, e := range events {
+		_ = foldActionEvent(out, e)
+	}
+	return out
+}

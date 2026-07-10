@@ -83,6 +83,18 @@ type Envelope struct {
 	OccurredAt    time.Time
 }
 
+// Actor kinds (02-persistence.md §7). The principal is ALWAYS a named human —
+// the AI is a delegate, never a principal. Kind records who *initiated* the
+// command so the action command handler can enforce the AI write-protection
+// (04 §5.6): an AI_DELEGATED command may request an action but can never
+// construct an Authorization record or advance action status. An empty Kind is
+// treated as HUMAN (the safe default) so pre-C.1 commands are unaffected.
+const (
+	ActorHuman       = "HUMAN"
+	ActorAIDelegated = "AI_DELEGATED"
+	ActorSystem      = "SYSTEM" // system-emitted (Temporal workflows: expiry, dispatch, result)
+)
+
 // Actor records who made a command. The AI delegate, when present, is
 // captured separately — every event records a human principal per the
 // architectural commitment "AI is a delegate, never a principal."
@@ -91,8 +103,13 @@ type Envelope struct {
 // commitments" → "AI is a delegate, never a principal."
 type Actor struct {
 	PrincipalID string      `json:"principal_id"`
+	Kind        string      `json:"kind,omitempty"` // HUMAN | AI_DELEGATED | SYSTEM; empty = HUMAN
 	Delegate    *AIDelegate `json:"delegate,omitempty"`
 }
+
+// IsAIDelegated reports whether the command was initiated by the AI on the
+// principal's behalf (as opposed to a human acting directly or the system).
+func (a Actor) IsAIDelegated() bool { return a.Kind == ActorAIDelegated }
 
 // AIDelegate names the LLM (and its specific call) that produced the
 // command on the principal's behalf.

@@ -90,14 +90,14 @@ func resetTables(t *testing.T) {
 	if !testReady {
 		t.Skip("embedded postgres not available")
 	}
-	_, err := testDB.Exec(`TRUNCATE events, investigation_current`)
+	_, err := testDB.Exec(`TRUNCATE events, investigation_current, action_current`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }
 
 func newTestHandler() *Handler {
-	return NewHandler(NewStore(testDB), InvestigationCurrentProjector{})
+	return NewHandler(NewStore(testDB), InvestigationCurrentProjector{}, ActionCurrentProjector{})
 }
 
 // testTenantID is the tenant stamped on envelopes built by the aggregate
@@ -202,13 +202,13 @@ func TestStoreConcurrentInsert(t *testing.T) {
 
 	evt1 := Event{
 		AggregateID: aggID, SequenceNo: 1, TenantID: testTenantID, Type: "test.event",
-		Payload:    []byte(`{"n":1}`),
-		Actor:      actor, OccurredAt: now,
+		Payload: []byte(`{"n":1}`),
+		Actor:   actor, OccurredAt: now,
 	}
 	evt2 := Event{
 		AggregateID: aggID, SequenceNo: 1, TenantID: testTenantID, Type: "test.event",
-		Payload:    []byte(`{"n":2}`),
-		Actor:      actor, OccurredAt: now,
+		Payload: []byte(`{"n":2}`),
+		Actor:   actor, OccurredAt: now,
 	}
 
 	tx1, _ := testDB.BeginTx(ctx, nil)
@@ -257,9 +257,9 @@ func TestReplayFromCold(t *testing.T) {
 		t.Fatal(err)
 	}
 	type ICRow struct {
-		AggID  AggregateID
-		Title  string
-		Status string
+		AggID   AggregateID
+		Title   string
+		Status  string
 		LastSeq int64
 	}
 	var before []ICRow

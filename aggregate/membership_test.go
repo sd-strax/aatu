@@ -90,10 +90,10 @@ func TestMembership_Validation(t *testing.T) {
 	mustHandle(t, h, cmdEnv(aggID), CreateInvestigation{Title: "INV-MV"})
 
 	cases := []Command{
-		AddMember{},                                          // empty ref
-		RemoveMember{},                                       // empty ref
-		AttachEvidence{InterpretationRef: uuid.New(), Role: RoleSupports, Weight: WeightStrong}, // empty evidence ref
-		AttachEvidence{EvidenceRef: "e", Role: RoleSupports, Weight: WeightStrong},              // zero interpretation ref
+		AddMember{},    // empty ref
+		RemoveMember{}, // empty ref
+		AttachEvidence{InterpretationRef: uuid.New(), Role: RoleSupports, Weight: WeightStrong},              // empty evidence ref
+		AttachEvidence{EvidenceRef: "e", Role: RoleSupports, Weight: WeightStrong},                           // zero interpretation ref
 		AttachEvidence{EvidenceRef: "e", InterpretationRef: uuid.New(), Role: "maybe", Weight: WeightStrong}, // bad role
 		AttachEvidence{EvidenceRef: "e", InterpretationRef: uuid.New(), Role: RoleSupports, Weight: "HUGE"},  // bad weight
 	}
