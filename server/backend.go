@@ -25,6 +25,7 @@ import (
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
 	"github.com/sd-strax/reckon/capability"
+	"github.com/sd-strax/reckon/knowledge"
 	"github.com/sd-strax/reckon/supervisor"
 	"github.com/sd-strax/reckon/temporal"
 )
@@ -92,6 +93,10 @@ type BackendConfig struct {
 	// auto-approval.
 	Gate2         *action.Gate2
 	ActionCatalog *action.ActionCatalog
+
+	// Knowledge, when non-nil, enables the SOP corpus routes (/api/sops,
+	// /api/knowledge/recall_sops — Phase C.5). Nil leaves them unregistered.
+	Knowledge *knowledge.Store
 }
 
 // Backend is the in-process HTTP server.
@@ -277,6 +282,13 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	api.Handle("/actions", authz.RequireAuth(verifier)(
 		http.HandlerFunc(b.actionsCollection),
 	))
+
+	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval.
+	if b.cfg.Knowledge != nil {
+		api.Handle("/knowledge/recall_sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSOPs)))
+		api.Handle("/sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsCollection)))
+		api.Handle("/sops/", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsItem)))
+	}
 
 	// /stream — projection-delta WebSocket. Authenticated at the handshake
 	// inside the handler (a WS upgrade can't go through RequireAuth, which

@@ -170,6 +170,16 @@ func serve(cfg config.Config) error {
 		aggregate.ActionCurrentProjector{},
 	)
 
+	// The knowledge service uses its own database (reckon_knowledge); open it
+	// lazily like the aggregate DB. Migrations are applied by the supervisor's
+	// Postgres component per-database.
+	knowledgeDB, err := sql.Open("postgres", pg.DSN("reckon_knowledge"))
+	if err != nil {
+		return fmt.Errorf("open knowledge db: %w", err)
+	}
+	defer knowledgeDB.Close()
+	knowledgeStore := knowledge.NewStore(knowledgeDB)
+
 	// The Temporal worker runs in-process (05 §3.3): it registers the OSS
 	// workflow inventory on the `reckon` task queue and — when write bindings
 	// are configured — the ActionLifecycle activities (handler + action
@@ -221,6 +231,7 @@ func serve(cfg config.Config) error {
 		CapabilityCatalog:  capCatalog,
 		Gate2:              gate2,
 		ActionCatalog:      actionCatalog,
+		Knowledge:          knowledgeStore,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()
