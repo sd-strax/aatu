@@ -152,6 +152,10 @@ func ApplyDecision(cmd aggregate.RequestAction, d Decision) aggregate.RequestAct
 	}
 	cmd.PolicyEvaluations = records
 	cmd.MatchedPolicyRef = d.MatchedPolicyRef
+	// Freeze the authorization requirement onto the action (08 §8.1) so the
+	// approval surface enforces TWO_PARTY without re-evaluating policy later.
+	cmd.RequiredMode = d.Mode
+	cmd.SecondaryApproverPool = d.SecondaryApproverPool
 	return cmd
 }
 

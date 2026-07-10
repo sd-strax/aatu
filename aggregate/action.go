@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,6 +135,14 @@ type ActionRequested struct {
 	IsReversal                 bool            `json:"is_reversal,omitempty"`
 	ReversalOfRef              uuid.UUID       `json:"reversal_of_ref,omitempty"`
 	RequestingInterpretationID uuid.UUID       `json:"requesting_interpretation_id"`
+
+	// RequiredMode + SecondaryApproverPool freeze the Gate 2 authorization
+	// requirement at request time (08 §8.1 — resolution is frozen), so the
+	// approval surface enforces it later without re-evaluating (which could
+	// drift). RequiredMode == TWO_PARTY makes a solo approval illegal at the
+	// aggregate boundary; the pool bounds who may be the secondary approver.
+	RequiredMode          string   `json:"required_mode,omitempty"`
+	SecondaryApproverPool []string `json:"secondary_approver_pool,omitempty"`
 }
 
 // ActionApproved advances an action to APPROVED (or PENDING_SECONDARY for a
@@ -197,10 +206,12 @@ type ActionReversed struct {
 // can enforce two-party integrity (distinct approvers, consistent audit record)
 // against authoritative state rather than trusting the caller's payload.
 type actionState struct {
-	Status          string
-	Tier            string
-	IsReversal      bool
-	PrimaryApprover string
+	Status                string
+	Tier                  string
+	IsReversal            bool
+	PrimaryApprover       string
+	RequiredMode          string   // Gate 2 requirement, frozen at request time
+	SecondaryApproverPool []string // who may be the secondary approver (TWO_PARTY)
 }
 
 // foldActionEvent applies one action event to the per-action state map. Kept
@@ -216,7 +227,10 @@ func foldActionEvent(actions map[uuid.UUID]actionState, e Event) error {
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return fmt.Errorf("fold action.requested seq %d: %w", e.SequenceNo, err)
 		}
-		set(p.ActionID, actionState{Status: ActionStatusRequested, Tier: p.Tier, IsReversal: p.IsReversal})
+		set(p.ActionID, actionState{
+			Status: ActionStatusRequested, Tier: p.Tier, IsReversal: p.IsReversal,
+			RequiredMode: p.RequiredMode, SecondaryApproverPool: p.SecondaryApproverPool,
+		})
 	case EventTypeActionApproved:
 		var p ActionApproved
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
@@ -300,6 +314,12 @@ type RequestAction struct {
 	// ReversalOfRef points at the original x-action this action reverses
 	// (04 §7). Set only when IsReversal; drives the ReversalSaga.
 	ReversalOfRef uuid.UUID `json:"reversal_of_ref,omitempty"`
+
+	// RequiredMode + SecondaryApproverPool carry the Gate 2 authorization
+	// requirement (04 §4), frozen onto the action so the approval surface can
+	// enforce TWO_PARTY without re-evaluating. Set by action.ApplyDecision.
+	RequiredMode          string   `json:"required_mode,omitempty"`
+	SecondaryApproverPool []string `json:"secondary_approver_pool,omitempty"`
 
 	// PolicyEvaluations + MatchedPolicyRef carry the Gate 2 result (04 §4), so
 	// the PolicyEvaluated audit event is recorded in the same transaction as
@@ -530,6 +550,8 @@ func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]
 		ExpiresAt:                  c.ExpiresAt,
 		IsReversal:                 c.IsReversal,
 		ReversalOfRef:              c.ReversalOfRef,
+		RequiredMode:               c.RequiredMode,
+		SecondaryApproverPool:      c.SecondaryApproverPool,
 		RequestingInterpretationID: interpID,
 	})
 	if err != nil {
@@ -572,6 +594,15 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 		return nil, err
 	}
 
+	// Two-party requirement (04 §5.6, the Phase D approval seam): an action whose
+	// frozen Gate 2 requirement is TWO_PARTY can NEVER be approved with a solo
+	// (MANUAL/AUTO_POLICY) authorization — that would collapse the two-person
+	// integrity the policy demanded into one. Enforced here at the aggregate
+	// boundary, the single write path, so no approval surface can bypass it.
+	if act.RequiredMode == AuthModeTwoParty && c.Authorization.Mode != AuthModeTwoParty {
+		return nil, fmt.Errorf("ApproveAction rejected: action %s requires TWO_PARTY authorization, got a %s approval", c.ActionID, c.Authorization.Mode)
+	}
+
 	// Legal source states: REQUESTED for a solo/primary approval; PENDING_SECONDARY
 	// for a two-party secondary approval.
 	switch {
@@ -593,6 +624,12 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 		}
 		if act.PrimaryApprover != "" && c.Authorization.PrimaryApproverRef != act.PrimaryApprover {
 			return nil, fmt.Errorf("ApproveAction rejected: primary_approver_ref %q does not match the recorded primary approval by %q", c.Authorization.PrimaryApproverRef, act.PrimaryApprover)
+		}
+		// When the policy declared a secondary approver pool, the secondary must
+		// be drawn from it (04 §5.6): the policy author bounded who can complete
+		// the two-party approval, and that bound is frozen on the action.
+		if len(act.SecondaryApproverPool) > 0 && !slices.Contains(act.SecondaryApproverPool, c.Authorization.SecondaryApproverRef) {
+			return nil, fmt.Errorf("ApproveAction rejected: secondary approver %q is not in the action's secondary approver pool", c.Authorization.SecondaryApproverRef)
 		}
 	}
 

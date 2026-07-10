@@ -283,6 +283,13 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.actionsCollection),
 	))
 
+	// POST /api/actions/{id}/approve|reject — the manual approval surface
+	// (04 §5, Phase D): honors REQUIRE_TWO_PARTY, triggers dispatch on final
+	// approval. Analyst role.
+	api.Handle("/actions/", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.actionsItem),
+	))
+
 	// POST /api/interpretations — the agent loop's write into the reasoning
 	// thread (05 §3.4): record one reasoning act + its transcript/tool-call side
 	// store. Analyst role (the AI authors as a delegate, never a principal).

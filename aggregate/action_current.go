@@ -14,16 +14,20 @@ import (
 // targets, and where it sits in the lifecycle. Drives the action review queue
 // (a REQUESTED/PENDING_SECONDARY row is a pending approval) and the audit view.
 type ActionCurrent struct {
-	ActionID          uuid.UUID
-	AggregateID       AggregateID
-	ActionType        string
-	Tier              string
-	Status            string
-	Mode              string // empty until approved
-	PrimaryApprover   string // empty until approved
-	IsReversal        bool
-	Targets           []TargetSpec
-	LastEventSequence int64
+	ActionID              uuid.UUID
+	AggregateID           AggregateID
+	ActionType            string
+	Tier                  string
+	Status                string
+	Mode                  string // empty until approved
+	PrimaryApprover       string // empty until approved
+	IsReversal            bool
+	ReversalOfRef         uuid.UUID // set for reversals; drives the ReversalSaga
+	RequiredMode          string    // frozen Gate 2 requirement (MANUAL|TWO_PARTY|AUTO_POLICY)
+	SecondaryApproverPool []string  // who may complete a two-party approval
+	Parameters            json.RawMessage
+	Targets               []TargetSpec
+	LastEventSequence     int64
 }
 
 // ActionCurrentProjector populates the action_current table — one row per
@@ -47,14 +51,26 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		if err != nil {
 			return fmt.Errorf("marshal targets: %w", err)
 		}
+		var pool []byte
+		if len(p.SecondaryApproverPool) > 0 {
+			if pool, err = json.Marshal(p.SecondaryApproverPool); err != nil {
+				return fmt.Errorf("marshal secondary_approver_pool: %w", err)
+			}
+		}
+		var params []byte
+		if len(p.Parameters) > 0 {
+			params = p.Parameters
+		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO action_current (
 				action_id, aggregate_id, tenant_id, action_type, tier, status,
-				is_reversal, targets, expires_at, created_at, updated_at, last_event_sequence
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
+				is_reversal, reversal_of_ref, required_mode, secondary_approver_pool,
+				parameters, targets, expires_at, created_at, updated_at, last_event_sequence
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $15)
 			ON CONFLICT (action_id) DO NOTHING
 		`, p.ActionID, evt.AggregateID, evt.TenantID, p.ActionType, p.Tier, ActionStatusRequested,
-			p.IsReversal, targets, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
+			p.IsReversal, nullUUID(p.ReversalOfRef), nullString(p.RequiredMode), pool,
+			params, targets, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
 		if err != nil {
 			return fmt.Errorf("insert action_current: %w", err)
 		}
@@ -159,22 +175,43 @@ func (ActionCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) error {
 // sql.ErrNoRows if it has not been projected.
 func LoadActionCurrent(ctx context.Context, db *sql.DB, actionID uuid.UUID) (ActionCurrent, error) {
 	var a ActionCurrent
-	var mode, approver sql.NullString
-	var targets []byte
+	var mode, approver, requiredMode sql.NullString
+	var reversalOf uuid.NullUUID
+	var targets, pool, params []byte
 	err := db.QueryRowContext(ctx, `
 		SELECT action_id, aggregate_id, action_type, tier, status, mode,
-		       primary_approver_ref, is_reversal, targets, last_event_sequence
+		       primary_approver_ref, is_reversal, reversal_of_ref, required_mode,
+		       secondary_approver_pool, parameters, targets, last_event_sequence
 		FROM action_current
 		WHERE action_id = $1
 	`, actionID).Scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
-		&mode, &approver, &a.IsReversal, &targets, &a.LastEventSequence)
+		&mode, &approver, &a.IsReversal, &reversalOf, &requiredMode,
+		&pool, &params, &targets, &a.LastEventSequence)
 	if err != nil {
 		return ActionCurrent{}, err
 	}
 	a.Mode = mode.String
 	a.PrimaryApprover = approver.String
+	a.RequiredMode = requiredMode.String
+	if reversalOf.Valid {
+		a.ReversalOfRef = reversalOf.UUID
+	}
+	if len(pool) > 0 {
+		_ = json.Unmarshal(pool, &a.SecondaryApproverPool)
+	}
+	if len(params) > 0 {
+		a.Parameters = params
+	}
 	if len(targets) > 0 {
 		_ = json.Unmarshal(targets, &a.Targets)
 	}
 	return a, nil
+}
+
+// nullUUID maps the zero UUID to SQL NULL.
+func nullUUID(id uuid.UUID) uuid.NullUUID {
+	if id == (uuid.UUID{}) {
+		return uuid.NullUUID{}
+	}
+	return uuid.NullUUID{UUID: id, Valid: true}
 }

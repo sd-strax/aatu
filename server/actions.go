@@ -243,34 +243,79 @@ func (b *Backend) autoApproveAndDispatch(ctx context.Context, reqEnv aggregate.E
 	// Trigger the durable dispatch workflow (C.4). If the client isn't wired or
 	// the trigger fails, the action is APPROVED and durable in the event log —
 	// a supervisor sweep or manual retrigger can pick it up.
+	wfID := b.startActionWorkflow(ctx, dispatchSpec{
+		ActionID:      cmd.ActionID,
+		AggregateID:   reqEnv.AggregateID,
+		TenantID:      reqEnv.TenantID,
+		ApproverID:    decision.PolicyAccountable,
+		ActionType:    cmd.ActionType,
+		Targets:       cmd.Targets,
+		Parameters:    cmd.Parameters,
+		ReversalOfRef: cmd.ReversalOfRef,
+	})
+	return "APPROVED", wfID
+}
+
+// dispatchSpec is the frozen action content needed to start the durable
+// dispatch workflow — shared by the auto-approval path and the manual approval
+// endpoint so both trigger dispatch identically.
+type dispatchSpec struct {
+	ActionID      uuid.UUID
+	AggregateID   uuid.UUID
+	TenantID      uuid.UUID
+	ApproverID    string
+	ActionType    string
+	Targets       []aggregate.TargetSpec
+	Parameters    json.RawMessage
+	ReversalOfRef uuid.UUID
+}
+
+// startActionWorkflow triggers the ActionLifecycle (or ReversalSaga for a
+// reversal, 04 §7) for a now-APPROVED action. Returns the workflow id, or ""
+// when the dispatch client is not wired or the trigger fails — in which case the
+// action is APPROVED and durable in the event log for a later retrigger.
+func (b *Backend) startActionWorkflow(ctx context.Context, s dispatchSpec) string {
 	client := b.getActionClient()
 	if client == nil {
-		return "APPROVED", ""
+		return ""
 	}
-
 	lifecycle := temporal.ActionLifecycleInput{
-		ActionID:    cmd.ActionID.String(),
-		AggregateID: reqEnv.AggregateID.String(),
-		TenantID:    reqEnv.TenantID.String(),
-		ApproverID:  decision.PolicyAccountable,
-		ActionType:  cmd.ActionType,
-		Targets:     cmd.Targets,
+		ActionID:    s.ActionID.String(),
+		AggregateID: s.AggregateID.String(),
+		TenantID:    s.TenantID.String(),
+		ApproverID:  s.ApproverID,
+		ActionType:  s.ActionType,
+		Targets:     s.Targets,
+		Parameters:  paramsMap(s.Parameters),
 	}
-
-	// A reversal runs the ReversalSaga (dispatch the inverse, then mark the
-	// original REVERSED); a normal action runs ActionLifecycle directly (04 §7).
-	var wfID string
-	if cmd.ReversalOfRef != uuid.Nil {
+	var (
+		wfID string
+		err  error
+	)
+	if s.ReversalOfRef != uuid.Nil {
 		wfID, err = client.StartReversalSaga(ctx, temporal.ReversalSagaInput{
-			OriginalActionID: cmd.ReversalOfRef.String(),
+			OriginalActionID: s.ReversalOfRef.String(),
 			Reversing:        lifecycle,
 		})
 	} else {
 		wfID, err = client.StartActionLifecycle(ctx, lifecycle)
 	}
 	if err != nil {
-		log.Printf("action %s: approved but workflow trigger failed: %v", cmd.ActionID, err)
-		return "APPROVED", ""
+		log.Printf("action %s: approved but workflow trigger failed: %v", s.ActionID, err)
+		return ""
 	}
-	return "APPROVED", wfID
+	return wfID
+}
+
+// paramsMap decodes frozen action parameters (JSON object by contract) into the
+// map the workflow input carries. A malformed/absent value yields nil.
+func paramsMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
 }
