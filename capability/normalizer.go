@@ -152,7 +152,7 @@ func (b *resultBuilder) addRel(relType string, src, tgt identity.STIXID) {
 // edge, and returns the assembled result. extensions carries custom fields
 // (e.g. logon_type/status).
 func (b *resultBuilder) finish(extensions map[string]any) NormalizationResult {
-	odID := b.r.ObservedData(b.evt.ClassUID, b.evt.Time, b.evt.SourceTool, b.evt.Payload)
+	odID := b.r.ObservedData(b.evt.ClassUID, b.evt.Time, b.evt.SourceTool, b.prov.NormalizerVersion, b.evt.Payload)
 	b.edges = append(b.edges, Edge{Type: EdgeDerivedFrom, SourceRef: odID, OcsfEventID: b.evt.ID.String()})
 	return NormalizationResult{
 		ObservedData: []ObservedData{{

@@ -109,6 +109,14 @@ func TestDetectionNormalizerNoEvidence(t *testing.T) {
 	if len(res.SCOs) != 0 {
 		t.Errorf("no evidence should yield no SCOs; got %d", len(res.SCOs))
 	}
+	// §4.12: the raw "this was seen" signal must survive even without evidence —
+	// one ObservedData, referenced by the Sighting.
+	if len(res.ObservedData) != 1 {
+		t.Fatalf("ObservedData = %d; want 1 (raw signal preserved)", len(res.ObservedData))
+	}
+	if len(res.Sightings[0].ObservedDataRefs) != 1 || res.Sightings[0].ObservedDataRefs[0] != res.ObservedData[0].ID {
+		t.Error("Sighting does not reference the detection's raw ObservedData")
+	}
 }
 
 // TestDetectionDeterministicIds: re-ingesting the same detection dedupes the

@@ -135,6 +135,21 @@ func TestResolveCoverageClasses(t *testing.T) {
 		}
 	})
 
+	t.Run("unavailable_transient_invoke_unhealthy", func(t *testing.T) {
+		// Adapter passes the health pre-check but Invoke reveals it is
+		// unhealthy: still TRANSIENT (recoverable), never UNAVAILABLE_TENANT
+		// (structural) — the binding WAS applicable.
+		flaky := &stubAdapter{name: "s", healthy: true, err: adapterErrorf(ErrUnhealthy, "auth expired")}
+		res := newResolver(
+			map[string][]Binding{"v": {{Adapter: "s", Operation: "op", Priority: 1}}},
+			map[string]Adapter{"s": flaky},
+		)
+		out, _ := res.Resolve(context.Background(), "v", CallInput{})
+		if out.Coverage != CoverageUnavailableTransient {
+			t.Errorf("coverage = %q; want UNAVAILABLE_TRANSIENT", out.Coverage)
+		}
+	})
+
 	t.Run("failed_call_errors", func(t *testing.T) {
 		bad := &stubAdapter{name: "s", healthy: true, err: adapterErrorf(ErrFallthrough, "no data")}
 		res := newResolver(

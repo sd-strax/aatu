@@ -57,6 +57,19 @@ func (n *detectionNormalizer) Normalize(evt OcsfEvent) (NormalizationResult, err
 		}
 	}
 
+	// 1b. §4.12 requires an ObservedData preserving the raw "this was seen"
+	// signal separate from the Sighting. With evidence, the recursion produced
+	// it; without, emit the detection event's own (DIRECT) ObservedData so the
+	// raw signal is never lost and the Sighting has evidence to reference.
+	if len(odRefs) == 0 {
+		raw := newBuilder(n.r, evt, "detection_finding", n.Version()).finish(nil)
+		result.ObservedData = append(result.ObservedData, raw.ObservedData...)
+		result.Edges = append(result.Edges, raw.Edges...)
+		for _, od := range raw.ObservedData {
+			odRefs = append(odRefs, od.ID)
+		}
+	}
+
 	// 2. Vendor Identity (created_by_ref target), auto-created per tenant.
 	vendor := detectionVendor(p, evt.SourceTool)
 	vendorID := n.r.Identity(vendor)

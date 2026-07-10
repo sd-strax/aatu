@@ -37,7 +37,7 @@ func TestFormatAndVersion(t *testing.T) {
 		TypeEmailAddr:    r.EmailAddr("a@b.com"),
 		TypeUserAccount:  r.UserAccount("contoso\\jdoe", "S-1-5", "windows-domain"),
 		TypeHost:         r.Host(HostIdentity{Hostname: "win-dc01"}),
-		TypeObservedData: r.ObservedData(1007, time.Now(), "fixture", map[string]any{"a": 1}),
+		TypeObservedData: r.ObservedData(1007, time.Now(), "fixture", 1, map[string]any{"a": 1}),
 	}
 	for wantType, id := range cases {
 		gotType, u := splitID(t, id)
@@ -178,6 +178,17 @@ func TestProcessDeviation(t *testing.T) {
 	if typ, _ := splitID(t, z1); typ != TypeProcess {
 		t.Errorf("anonymous process id has type %q; want %q", typ, TypeProcess)
 	}
+
+	// Empty host_ref → anonymous too: hashing ("", pid, time) would false-merge
+	// same-pid processes across different hosts.
+	h1, okH1 := r.Process("", 900, base)
+	h2, okH2 := r.Process("", 900, base)
+	if okH1 || okH2 {
+		t.Error("empty host_ref should be non-deterministic (ok=false)")
+	}
+	if h1 == h2 {
+		t.Error("hostless processes should get distinct random ids, never merge")
+	}
 }
 
 // TestUserAccountTypeNotFolded: account_login case folds, but a different
@@ -198,18 +209,23 @@ func TestObservedDataIdentity(t *testing.T) {
 	ts := time.Date(2026, 4, 20, 14, 32, 11, 500_000, time.UTC)
 	payload := map[string]any{"src": "1.2.3.4", "n": 3}
 
-	base := r.ObservedData(4001, ts, "crowdstrike", payload)
-	sameSecond := r.ObservedData(4001, ts.Add(400*time.Millisecond), "crowdstrike", payload)
+	base := r.ObservedData(4001, ts, "crowdstrike", 1, payload)
+	sameSecond := r.ObservedData(4001, ts.Add(400*time.Millisecond), "crowdstrike", 1, payload)
 	if base != sameSecond {
 		t.Error("ObservedData not stable within the same second")
 	}
-	if base == r.ObservedData(4001, ts, "splunk", payload) {
+	if base == r.ObservedData(4001, ts, "splunk", 1, payload) {
 		t.Error("different source_tool produced same ObservedData id")
 	}
-	if base == r.ObservedData(4001, ts, "crowdstrike", map[string]any{"src": "9.9.9.9"}) {
+	if base == r.ObservedData(4001, ts, "crowdstrike", 1, map[string]any{"src": "9.9.9.9"}) {
 		t.Error("different payload produced same ObservedData id")
 	}
-	if base == r.ObservedData(2004, ts, "crowdstrike", payload) {
+	if base == r.ObservedData(2004, ts, "crowdstrike", 1, payload) {
 		t.Error("different class_uid produced same ObservedData id")
+	}
+	// Re-normalization: a newer normalizer version must mint a NEW id (§4.13) —
+	// old ObservedData stays valid, the new id reflects the new interpretation.
+	if base == r.ObservedData(4001, ts, "crowdstrike", 2, payload) {
+		t.Error("newer normalizer version produced the same ObservedData id; re-normalization would be a no-op")
 	}
 }

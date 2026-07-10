@@ -179,11 +179,13 @@ func (r *Resolver) UserAccount(accountLogin, userID, accountType string) STIXID 
 // Process resolves a process SCO. Deviation: strict STIX assigns processes a
 // random UUID; we stitch on (host_ref, pid, created_time truncated to the
 // second) because cross-tool process stitching is load-bearing. When
-// createdTime is zero (no tool reported a start time) the process is treated as
-// a transient anonymous SCO with a random id and ok=false — matching strict
-// STIX, no stitching but no false merge.
+// createdTime is zero (no tool reported a start time) OR hostRef is empty (the
+// event carried no device identity — hashing ("", pid, time) would false-merge
+// same-pid processes across different hosts), the process degrades to a
+// transient anonymous SCO with a random id and deterministic=false — matching
+// strict STIX, no stitching but no false merge.
 func (r *Resolver) Process(hostRef STIXID, pid int, createdTime time.Time) (id STIXID, deterministic bool) {
-	if createdTime.IsZero() {
+	if createdTime.IsZero() || hostRef == "" {
 		return STIXID(TypeProcess + "--" + uuid.NewString()), false
 	}
 	return r.mint(TypeProcess, map[string]any{
@@ -291,18 +293,20 @@ func (r *Resolver) Group(directory, groupName string) STIXID {
 
 // --- SDOs -------------------------------------------------------------------
 
-// ObservedData resolves an observed-data SDO id from
-// (class_uid, time truncated to the second, source_tool, content_hash(payload)).
-// Two adapters observing the same OCSF event in the same tenant produce the
-// same id, supporting cross-investigation dedup (§7.3). A newer normalizer
-// version changes the payload/inputs and thus the id — old ObservedData stays
-// valid.
-func (r *Resolver) ObservedData(classUID int, observed time.Time, sourceTool string, payload any) STIXID {
+// ObservedData resolves an observed-data SDO id from (class_uid, time truncated
+// to the second, source_tool, normalizer_version, content_hash(payload)).
+// Two adapters observing the same OCSF event in the same tenant — normalized at
+// the same version — produce the same id, supporting cross-investigation dedup
+// (§7.3). The normalizer version participates in the computation so that
+// re-normalizing with a newer version produces a NEW ObservedData id (§4.13);
+// version-in-provenance alone could never change the id.
+func (r *Resolver) ObservedData(classUID int, observed time.Time, sourceTool string, normalizerVersion int, payload any) STIXID {
 	return r.mint(TypeObservedData, map[string]any{
-		"class_uid":    classUID,
-		"time":         observed.UTC().Truncate(time.Second).Format(time.RFC3339),
-		"source_tool":  strings.TrimSpace(sourceTool),
-		"content_hash": contentHash(payload),
+		"class_uid":          classUID,
+		"time":               observed.UTC().Truncate(time.Second).Format(time.RFC3339),
+		"source_tool":        strings.TrimSpace(sourceTool),
+		"normalizer_version": normalizerVersion,
+		"content_hash":       contentHash(payload),
 	})
 }
 

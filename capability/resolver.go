@@ -140,6 +140,9 @@ func (r *Resolver) Resolve(ctx context.Context, verb string, input CallInput) (C
 	}
 
 	tctx := r.templateContext(verb, input)
+	// §3.4 specifies parallel fan-out invocation; v0 runs bindings
+	// sequentially — a latency-only simplification against fixtures.
+	// Parallelize when real adapters land (Phase E).
 	fanout := anyFanOut(bindings)
 
 	var applicable, succeeded, failed int
@@ -181,8 +184,11 @@ func (r *Resolver) Resolve(ctx context.Context, verb string, input CallInput) (C
 				case ErrFatal:
 					return CapabilityResult{}, err
 				case ErrUnhealthy:
+					// The binding WAS applicable — the adapter turning out
+					// unhealthy at invoke time is transient, not structural, so
+					// applicable stays counted and the classifier yields
+					// UNAVAILABLE_TRANSIENT, never UNAVAILABLE_TENANT (§6.1).
 					unhealthy[b.Adapter] = true
-					applicable-- // reclassify: this binding could not run
 					res.note("binding %s/%s: adapter became unhealthy: %v", verb, b.Adapter, ae.Err)
 					continue
 				}

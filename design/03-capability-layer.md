@@ -1138,12 +1138,13 @@ deferred from v0.
 
 **ObservedData id rule.** ObservedData ids are deterministic UUIDv5 within
 the tenant namespace, computed from
-`(class_uid, time_truncated_to_second, source_tool, content_hash(payload))`.
-Two adapters observing the same OCSF event in the same tenant produce the
-same ObservedData id, supporting cross-investigation deduplication within
-that tenant. Re-normalization with a newer normalizer version produces a
-*new* ObservedData with a different id (the version is part of the
-provenance; the new id reflects the new interpretation). Random UUIDv4
+`(class_uid, time_truncated_to_second, source_tool, normalizer_version, content_hash(payload))`.
+Two adapters observing the same OCSF event in the same tenant — normalized at
+the same normalizer version — produce the same ObservedData id, supporting
+cross-investigation deduplication within that tenant. Re-normalization with a
+newer normalizer version produces a *new* ObservedData with a different id
+precisely because the version participates in the id computation (it is also
+recorded in provenance; provenance alone could not change the id). Random UUIDv4
 ObservedData is also permitted for cases where deterministic identity is
 undesirable (e.g., one-off opaque enrichment results); the resolver records
 which mode was used in provenance.
