@@ -201,6 +201,13 @@ func serve(cfg config.Config) error {
 		return err
 	}
 
+	// The write-side authorization path (Phase C): Gate 2 + the action catalog
+	// enable the request_action route.
+	gate2, actionCatalog, err := buildGate2(cfg)
+	if err != nil {
+		return err
+	}
+
 	backendCfg := server.BackendConfig{
 		HTTPPort:         cfg.Backend.HTTPPort,
 		PgDSN:            pg.DSN("reckon_main"),
@@ -212,6 +219,8 @@ func serve(cfg config.Config) error {
 		Middleware:         tel.HTTPMiddleware,
 		CapabilityResolver: capResolver,
 		CapabilityCatalog:  capCatalog,
+		Gate2:              gate2,
+		ActionCatalog:      actionCatalog,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()
@@ -227,6 +236,28 @@ func serve(cfg config.Config) error {
 	}
 	log.Printf("%s: stopped", branding.CLI)
 	return nil
+}
+
+// buildGate2 constructs the Gate 2 engine (baseline DENY + any tenant policies)
+// and the action catalog, enabling the request_action route. Returns
+// (nil, nil, nil) when no capability config is set — the action layer is off.
+func buildGate2(cfg config.Config) (*action.Gate2, *action.ActionCatalog, error) {
+	if cfg.Capability.ConfigPath == "" {
+		return nil, nil, nil
+	}
+	var policies []action.Policy
+	if dir := cfg.Capability.PolicyDir; dir != "" {
+		p, err := action.LoadPolicies(dir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load Gate 2 policies: %w", err)
+		}
+		policies = p
+	}
+	gate2, err := action.NewGate2(policies)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build Gate 2: %w", err)
+	}
+	return gate2, action.DefaultActionCatalog(), nil
 }
 
 // buildActionActivities constructs the ActionLifecycle activities (aggregate

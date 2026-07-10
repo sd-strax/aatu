@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 		cleanupDir()
 		log.Fatalf("sql.Open: %v", err)
 	}
-	testHandler = aggregate.NewHandler(aggregate.NewStore(testDB), aggregate.InvestigationCurrentProjector{})
+	testHandler = aggregate.NewHandler(aggregate.NewStore(testDB), aggregate.InvestigationCurrentProjector{}, aggregate.ActionCurrentProjector{})
 
 	// Mock OIDC issuer that signs RS256 tokens. Used by every test that
 	// needs to drive an authenticated request through the router.
@@ -129,7 +129,7 @@ func resetInvestigations(t *testing.T) {
 	if !testReady {
 		t.Skip("integration setup unavailable")
 	}
-	if _, err := testDB.Exec(`TRUNCATE events, investigation_current`); err != nil {
+	if _, err := testDB.Exec(`TRUNCATE events, investigation_current, action_current`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

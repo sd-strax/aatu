@@ -62,11 +62,12 @@ func (g *Gate2) Evaluate(input EvalInput) (Decision, error) {
 	activation := map[string]any{"ctx": input.toContext()}
 
 	var (
-		evals        []PolicyEvaluation
-		denyRef      string
-		twoPartyRef  string
-		twoPartyPool []string
-		autoRef      string
+		evals           []PolicyEvaluation
+		denyRef         string
+		twoPartyRef     string
+		twoPartyPool    []string
+		autoRef         string
+		autoAccountable string
 	)
 	for _, cp := range g.policies {
 		if !cp.matchesType(input.ActionType) || !cp.active(input.Now) {
@@ -101,6 +102,7 @@ func (g *Gate2) Evaluate(input EvalInput) (Decision, error) {
 		case EffectAutoApprove:
 			if autoRef == "" {
 				autoRef = cp.ID
+				autoAccountable = accountableHuman(cp.Policy)
 			}
 		}
 	}
@@ -113,10 +115,19 @@ func (g *Gate2) Evaluate(input EvalInput) (Decision, error) {
 	case twoPartyRef != "":
 		return Decision{Effect: EffectRequireTwoParty, Mode: ModeTwoParty, MatchedPolicyRef: twoPartyRef, SecondaryApproverPool: twoPartyPool, Evaluations: evals}, nil
 	case autoRef != "":
-		return Decision{Effect: EffectAutoApprove, Mode: ModeAutoPolicy, MatchedPolicyRef: autoRef, Evaluations: evals}, nil
+		return Decision{Effect: EffectAutoApprove, Mode: ModeAutoPolicy, MatchedPolicyRef: autoRef, PolicyAccountable: autoAccountable, Evaluations: evals}, nil
 	default:
 		return Decision{Effect: "", Mode: ModeManual, Evaluations: evals}, nil
 	}
+}
+
+// accountableHuman returns the analyst an AUTO_POLICY approval is attributed to:
+// the last signed-off-by, else the authored-by (04 §3.3).
+func accountableHuman(p Policy) string {
+	if n := len(p.SignedOffBy); n > 0 {
+		return p.SignedOffBy[n-1]
+	}
+	return p.AuthoredBy
 }
 
 // ApplyDecision attaches a Decision's audit trail to a RequestAction command,

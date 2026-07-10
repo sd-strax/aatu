@@ -51,6 +51,24 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // Close releases the underlying Temporal client.
 func (c *Client) Close() { c.c.Close() }
 
+// StartActionLifecycle starts (fire-and-forget) the ActionLifecycle workflow
+// for an approved action and returns the workflow id (which becomes the
+// adapter_request_id, 05 §6.2). The workflow id is derived from the action id,
+// so a duplicate trigger while one is running is rejected by Temporal — a second
+// idempotency layer above the dispatch-ledger guard (08 §6b). Does not block on
+// the workflow's completion; the lifecycle runs durably.
+func (c *Client) StartActionLifecycle(ctx context.Context, in ActionLifecycleInput) (string, error) {
+	id := "action-lifecycle-" + in.ActionID
+	run, err := c.c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        id,
+		TaskQueue: c.taskQueue,
+	}, WorkflowActionLifecycle, in)
+	if err != nil {
+		return "", fmt.Errorf("start ActionLifecycle for %s: %w", in.ActionID, err)
+	}
+	return run.GetID(), nil
+}
+
 // Ping executes the Ping workflow and returns its result, proving the round
 // trip command → Temporal → worker → result. Blocks until the workflow
 // completes.

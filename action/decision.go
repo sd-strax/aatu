@@ -30,7 +30,12 @@ type Decision struct {
 	Mode                  string // AUTO_POLICY | TWO_PARTY | MANUAL
 	MatchedPolicyRef      string // "" when manual
 	SecondaryApproverPool []string
-	Evaluations           []PolicyEvaluation
+	// PolicyAccountable is the human an AUTO_POLICY approval is attributed to —
+	// the matched policy's signed-off-by (or authored-by) analyst (04 §3.3:
+	// "primary_approver_ref points at the human who authored or last signed off
+	// on the policy, not the system"). Empty unless Mode == AUTO_POLICY.
+	PolicyAccountable string
+	Evaluations       []PolicyEvaluation
 }
 
 // AutoApproves reports whether the decision is a clean auto-approval (the

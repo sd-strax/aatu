@@ -21,10 +21,12 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/supervisor"
+	"github.com/sd-strax/reckon/temporal"
 )
 
 // BackendConfig configures the in-process reckon HTTP backend.
@@ -82,6 +84,14 @@ type BackendConfig struct {
 	// capability config.
 	CapabilityResolver *capability.Resolver
 	CapabilityCatalog  *capability.Catalog
+
+	// Gate2 and ActionCatalog, when both non-nil, enable the POST /api/actions
+	// (request_action) route (the write-side authorization path, Phase C). Nil
+	// leaves it a 503. When TemporalHostPort is reachable, the Backend also
+	// starts an action-dispatch client at Start to trigger ActionLifecycle on
+	// auto-approval.
+	Gate2         *action.Gate2
+	ActionCatalog *action.ActionCatalog
 }
 
 // Backend is the in-process HTTP server.
@@ -89,10 +99,11 @@ type Backend struct {
 	cfg BackendConfig
 	sup *supervisor.Supervisor
 
-	mu       sync.Mutex
-	srv      *http.Server
-	started  bool
-	verifier *authz.Verifier
+	mu           sync.Mutex
+	srv          *http.Server
+	started      bool
+	verifier     *authz.Verifier
+	actionClient *temporal.Client // starts ActionLifecycle on auto-approval; nil until Start when action layer is on
 
 	// hub fans projection deltas out to subscribed WebSocket clients. Set at
 	// construction so it outlives individual Start/Stop cycles.
@@ -136,6 +147,16 @@ func (b *Backend) Start(ctx context.Context) error {
 		return fmt.Errorf("init verifier: %w", err)
 	}
 
+	// When the action layer is on, open the dispatch client (Temporal is already
+	// probed reachable above) so auto-approvals can trigger ActionLifecycle.
+	var actionClient *temporal.Client
+	if b.cfg.Gate2 != nil && b.cfg.ActionCatalog != nil {
+		actionClient, err = temporal.NewClient(temporal.ClientConfig{HostPort: b.cfg.TemporalHostPort})
+		if err != nil {
+			return fmt.Errorf("start action dispatch client: %w", err)
+		}
+	}
+
 	mux := b.buildRouter(verifier)
 
 	addr := fmt.Sprintf("localhost:%d", b.cfg.HTTPPort)
@@ -146,6 +167,7 @@ func (b *Backend) Start(ctx context.Context) error {
 
 	b.mu.Lock()
 	b.verifier = verifier
+	b.actionClient = actionClient
 	b.srv = &http.Server{
 		Addr:              addr,
 		Handler:           mux,
@@ -170,11 +192,16 @@ func (b *Backend) Start(ctx context.Context) error {
 func (b *Backend) Stop(ctx context.Context) error {
 	b.mu.Lock()
 	srv := b.srv
+	actionClient := b.actionClient
 	b.srv = nil
 	b.started = false
 	b.verifier = nil
+	b.actionClient = nil
 	b.mu.Unlock()
 
+	if actionClient != nil {
+		actionClient.Close()
+	}
 	if srv == nil {
 		return nil
 	}
@@ -182,6 +209,14 @@ func (b *Backend) Stop(ctx context.Context) error {
 		b.hub.closeAll()
 	}
 	return srv.Shutdown(ctx)
+}
+
+// getActionClient returns the dispatch client under lock (it is nil unless the
+// action layer is configured and Start has run).
+func (b *Backend) getActionClient() *temporal.Client {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.actionClient
 }
 
 // Health reports whether the HTTP server is up. The rich "are deps healthy"
@@ -235,6 +270,12 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	// this tenant and their availability. Any authenticated reader.
 	api.Handle("/capabilities", authz.RequireAuth(verifier)(
 		http.HandlerFunc(b.listCapabilities),
+	))
+
+	// POST /api/actions — request_action (08 §2): propose a state-changing
+	// action; runs Gate 2 and (on auto-approval) triggers dispatch. Analyst role.
+	api.Handle("/actions", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.actionsCollection),
 	))
 
 	// /stream — projection-delta WebSocket. Authenticated at the handshake

@@ -118,6 +118,10 @@ type Capability struct {
 	// (design/03 §7.1). Defaults to a fixed OSS namespace; multi-tenant
 	// deployments assign a fresh UUID per tenant via the tenancy module.
 	TenantNamespace string `yaml:"tenant_namespace"`
+	// PolicyDir holds the Gate 2 auto-approval policies (*.policy.yaml,
+	// design/04 §4). Empty means baseline-only (the non-deletable AI-no-T3 DENY
+	// still applies; every other action falls through to manual approval).
+	PolicyDir string `yaml:"policy_dir"`
 }
 
 // Paid groups the activation flags for paid modules. Ignored when the
