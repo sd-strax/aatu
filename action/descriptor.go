@@ -16,7 +16,11 @@ type ActionDescriptor struct {
 	Inputs        []capability.InputParam `json:"inputs"`        // schema for request_action.parameters
 	DefaultTier   string                  `json:"default_tier"`  // T2 | T3 (04 §2)
 	Reversibility string                  `json:"reversibility"` // reversible | irreversible (04 §7)
-	D3FEND        string                  `json:"d3fend,omitempty"`
+	// ReversibleBy is the inverse action type (04 §7); empty when irreversible.
+	// A reversal request creates an x-action of this type against the original's
+	// targets, at the SAME tier (reversing is never lower-tier than the original).
+	ReversibleBy string `json:"reversible_by,omitempty"`
+	D3FEND       string `json:"d3fend,omitempty"`
 }
 
 // ActionCatalog holds the registered action descriptors, keyed by action_type.
@@ -60,14 +64,23 @@ func DefaultActionCatalog() *ActionCatalog {
 			Inputs:        []capability.InputParam{{Name: "host", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
 			Reversibility: "reversible",
+			ReversibleBy:  "host.unisolate",
 			D3FEND:        "D3-NI",
 		},
 		{
+			ActionType:    "host.unisolate",
+			Intent:        "Restore a host's network connectivity — the inverse of host.isolate.",
+			Inputs:        []capability.InputParam{{Name: "host", Type: "entity", Required: true}},
+			DefaultTier:   "T2", // reversing is the same tier as the original (04 §7)
+			Reversibility: "reversible",
+			ReversibleBy:  "host.isolate",
+		},
+		{
 			ActionType:    "account.disable",
-			Intent:        "Disable a user account, blocking new sessions. Reversible (re-enable).",
+			Intent:        "Disable a user account, blocking new sessions. The disable record is permanent in the audit sense; re-enabling is a new authorization decision.",
 			Inputs:        []capability.InputParam{{Name: "account", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
-			Reversibility: "reversible",
+			Reversibility: "irreversible", // 04 §7: reversible_by null
 			D3FEND:        "D3-ANCI",
 		},
 		{
@@ -76,6 +89,15 @@ func DefaultActionCatalog() *ActionCatalog {
 			Inputs:        []capability.InputParam{{Name: "message", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
 			Reversibility: "reversible",
+			ReversibleBy:  "email.release",
+		},
+		{
+			ActionType:    "email.release",
+			Intent:        "Release a quarantined message back to its mailbox — the inverse of email.quarantine.",
+			Inputs:        []capability.InputParam{{Name: "message", Type: "entity", Required: true}},
+			DefaultTier:   "T2",
+			Reversibility: "reversible",
+			ReversibleBy:  "email.quarantine",
 		},
 		{
 			ActionType:    "email.purge",

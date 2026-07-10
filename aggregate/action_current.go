@@ -113,9 +113,15 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		}
 		return setActionStatus(ctx, tx, evt, p.ActionID, status)
 
+	case EventTypeActionReversed:
+		var p ActionReversed
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal ActionReversed: %w", err)
+		}
+		return setActionStatus(ctx, tx, evt, p.OriginalActionID, ActionStatusReversed)
+
 	default:
-		// action.reversed lands with ReversalSaga; every non-action event is a
-		// no-op here.
+		// Every non-action event is a no-op here.
 		return nil
 	}
 }

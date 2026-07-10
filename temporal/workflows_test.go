@@ -36,7 +36,6 @@ func TestPingWorkflow(t *testing.T) {
 // a premature call must not look like success.
 func TestSkeletonWorkflowsUnimplemented(t *testing.T) {
 	skeletons := map[string]func(workflow.Context) error{
-		WorkflowReversalSaga:               ReversalSaga,
 		WorkflowRenormalizePass:            RenormalizePass,
 		WorkflowArchiveInvestigation:       ArchiveInvestigation,
 		WorkflowPostConclusionPipeline:     PostConclusionPipeline,

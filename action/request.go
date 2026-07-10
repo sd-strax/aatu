@@ -23,7 +23,10 @@ type ActionRequest struct {
 	EvidenceRefs     []string               `json:"evidence_refs,omitempty"`
 	Rationale        string                 `json:"rationale"`
 	InvestigationRef uuid.UUID              `json:"investigation_ref"`
-	IsReversal       bool                   `json:"is_reversal,omitempty"`
+	// ReversalOfRef, when set, makes this a reversal of that original x-action
+	// (04 §7): IsReversal is implied, and the endpoint triggers the ReversalSaga
+	// instead of a plain ActionLifecycle on auto-approval.
+	ReversalOfRef uuid.UUID `json:"reversal_of_ref,omitempty"`
 	// TTL bounds how long the request stays pending before ActionExpired; 0
 	// applies DefaultRequestTTL.
 	TTL time.Duration `json:"-"`
@@ -61,15 +64,16 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 	}
 
 	return aggregate.RequestAction{
-		ActionID:     uuid.New(),
-		ActionType:   req.ActionType,
-		Tier:         EscalateTier(d.DefaultTier, distinctTargets(req.Targets), DefaultBlastRadiusThreshold),
-		Targets:      req.Targets,
-		Parameters:   req.Parameters,
-		EvidenceRefs: req.EvidenceRefs,
-		ExpiresAt:    now.Add(ttl),
-		Rationale:    req.Rationale,
-		IsReversal:   req.IsReversal,
+		ActionID:      uuid.New(),
+		ActionType:    req.ActionType,
+		Tier:          EscalateTier(d.DefaultTier, distinctTargets(req.Targets), DefaultBlastRadiusThreshold),
+		Targets:       req.Targets,
+		Parameters:    req.Parameters,
+		EvidenceRefs:  req.EvidenceRefs,
+		ExpiresAt:     now.Add(ttl),
+		Rationale:     req.Rationale,
+		IsReversal:    req.ReversalOfRef != uuid.Nil,
+		ReversalOfRef: req.ReversalOfRef,
 	}, nil
 }
 

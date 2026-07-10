@@ -270,6 +270,39 @@ func TestDispatchResult_SystemOnlyAndTransitions(t *testing.T) {
 	}
 }
 
+// TestReverseAction: SYSTEM-only, legal only from SUCCEEDED, moves the original
+// to REVERSED (04 §7).
+func TestReverseAction(t *testing.T) {
+	origID, revID := uuid.New(), uuid.New()
+
+	sys := newTestEnvelope("alice")
+	sys.Actor.Kind = ActorSystem
+	succeeded := activeStateWithAction(sys, origID, ActionStatusSucceeded)
+
+	events, err := applyCommand(sys, ReverseAction{OriginalActionID: origID, ReversingActionID: revID}, succeeded)
+	if err != nil {
+		t.Fatalf("reverse: %v", err)
+	}
+	if events[0].Type != EventTypeActionReversed {
+		t.Errorf("domain type = %q; want reversed", events[0].Type)
+	}
+	if foldInto(succeeded.Actions, events)[origID].Status != ActionStatusReversed {
+		t.Error("original status should be REVERSED")
+	}
+
+	// Only a SUCCEEDED action can be reversed.
+	req := activeStateWithAction(sys, origID, ActionStatusRequested)
+	if _, err := applyCommand(sys, ReverseAction{OriginalActionID: origID, ReversingActionID: revID}, req); err == nil {
+		t.Error("reversing a non-SUCCEEDED action should be rejected")
+	}
+
+	// System-only: a human cannot forge a reversal.
+	human := newTestEnvelope("alice")
+	if _, err := applyCommand(human, ReverseAction{OriginalActionID: origID, ReversingActionID: revID}, succeeded); err == nil {
+		t.Error("human ReverseAction should be rejected (system-only)")
+	}
+}
+
 // TestAIAllowlist: the AI guard is an ALLOWLIST (04 §5.6) — T1-annotate
 // commands and RequestAction pass; conclude/archive and any unlisted command
 // default to denied.

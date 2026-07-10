@@ -24,6 +24,10 @@ type RequestActionBody struct {
 	EvidenceRefs     []string               `json:"evidence_refs,omitempty"`
 	Rationale        string                 `json:"rationale"`
 	InvestigationRef string                 `json:"investigation_ref"`
+	// ReversalOfRef, when set, makes this request a reversal of that original
+	// action (04 §7): action_type should be the inverse, and auto-approval
+	// triggers the ReversalSaga instead of a plain dispatch.
+	ReversalOfRef string `json:"reversal_of_ref,omitempty"`
 }
 
 // RequestActionResponse reports the created x-action and how authorization
@@ -92,6 +96,16 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
+	// A reversal targets an original action id.
+	var reversalOf uuid.UUID
+	if body.ReversalOfRef != "" {
+		reversalOf, err = uuid.Parse(body.ReversalOfRef)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "reversal_of_ref is not a valid id")
+			return
+		}
+	}
+
 	// Build the x-action command (validates against the catalog, applies the
 	// blast-radius escalator).
 	cmd, err := action.BuildRequestCommand(b.cfg.ActionCatalog, action.ActionRequest{
@@ -101,6 +115,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 		EvidenceRefs:     body.EvidenceRefs,
 		Rationale:        body.Rationale,
 		InvestigationRef: investigationID,
+		ReversalOfRef:    reversalOf,
 	}, now)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -197,16 +212,29 @@ func (b *Backend) autoApproveAndDispatch(ctx context.Context, reqEnv aggregate.E
 	if client == nil {
 		return "APPROVED", ""
 	}
-	wfID, err := client.StartActionLifecycle(ctx, temporal.ActionLifecycleInput{
+
+	lifecycle := temporal.ActionLifecycleInput{
 		ActionID:    cmd.ActionID.String(),
 		AggregateID: reqEnv.AggregateID.String(),
 		TenantID:    reqEnv.TenantID.String(),
 		ApproverID:  decision.PolicyAccountable,
 		ActionType:  cmd.ActionType,
 		Targets:     cmd.Targets,
-	})
+	}
+
+	// A reversal runs the ReversalSaga (dispatch the inverse, then mark the
+	// original REVERSED); a normal action runs ActionLifecycle directly (04 §7).
+	var wfID string
+	if cmd.ReversalOfRef != uuid.Nil {
+		wfID, err = client.StartReversalSaga(ctx, temporal.ReversalSagaInput{
+			OriginalActionID: cmd.ReversalOfRef.String(),
+			Reversing:        lifecycle,
+		})
+	} else {
+		wfID, err = client.StartActionLifecycle(ctx, lifecycle)
+	}
 	if err != nil {
-		log.Printf("action %s: approved but ActionLifecycle trigger failed: %v", cmd.ActionID, err)
+		log.Printf("action %s: approved but workflow trigger failed: %v", cmd.ActionID, err)
 		return "APPROVED", ""
 	}
 	return "APPROVED", wfID

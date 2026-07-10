@@ -232,6 +232,8 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return applyDispatchAction(env, state, c)
 	case ResultAction:
 		return applyResultAction(env, state, c)
+	case ReverseAction:
+		return applyReverseAction(env, state, c)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd.Kind())
 	}

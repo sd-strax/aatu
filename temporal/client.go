@@ -69,6 +69,21 @@ func (c *Client) StartActionLifecycle(ctx context.Context, in ActionLifecycleInp
 	return run.GetID(), nil
 }
 
+// StartReversalSaga starts (fire-and-forget) the ReversalSaga for a reversal
+// action, returning the workflow id. Like StartActionLifecycle, the id is
+// derived from the reversing action id so a duplicate trigger is rejected.
+func (c *Client) StartReversalSaga(ctx context.Context, in ReversalSagaInput) (string, error) {
+	id := "reversal-saga-" + in.Reversing.ActionID
+	run, err := c.c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        id,
+		TaskQueue: c.taskQueue,
+	}, WorkflowReversalSaga, in)
+	if err != nil {
+		return "", fmt.Errorf("start ReversalSaga for %s: %w", in.Reversing.ActionID, err)
+	}
+	return run.GetID(), nil
+}
+
 // Ping executes the Ping workflow and returns its result, proving the round
 // trip command → Temporal → worker → result. Blocks until the workflow
 // completes.

@@ -57,13 +57,9 @@ func unimplemented(ctx workflow.Context, name string) error {
 	return sdktemporal.NewApplicationError(name+" is not implemented until Phase C", unimplementedErrType)
 }
 
-// The OSS domain workflow inventory (05 §3.3). ActionLifecycle has its real
-// body in action_lifecycle.go (C.4); the rest are skeletons whose bodies land
-// in later phases — each spec owns its real input/output shape.
-
-// ReversalSaga compensates a dispatched action along its `reverses` edge.
-// (Phase C.4 continuation; skeleton until then.)
-func ReversalSaga(ctx workflow.Context) error { return unimplemented(ctx, WorkflowReversalSaga) }
+// The OSS domain workflow inventory (05 §3.3). ActionLifecycle (dispatch) and
+// ReversalSaga have their real bodies in action_lifecycle.go / reversal_saga.go
+// (C.4); the rest are skeletons whose bodies land in later phases.
 
 // RenormalizePass re-runs normalizers over stored telemetry when a normalizer
 // version changes. (Phase C+.)

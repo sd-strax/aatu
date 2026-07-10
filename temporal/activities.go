@@ -184,6 +184,38 @@ func (a *Activities) EmitResulted(ctx context.Context, in EmitResultedInput) err
 	return err
 }
 
+// EmitReversedInput carries what EmitReversed needs to mark the original
+// action REVERSED.
+type EmitReversedInput struct {
+	OriginalActionID  string
+	ReversingActionID string
+	AggregateID       string
+	TenantID          string
+	ApproverID        string
+}
+
+// EmitReversed records ActionReversed on the original action once its reversing
+// action succeeded (04 §7). System-emitted by the ReversalSaga.
+func (a *Activities) EmitReversed(ctx context.Context, in EmitReversedInput) error {
+	env, err := systemEnvelope(in.AggregateID, in.TenantID, in.ApproverID)
+	if err != nil {
+		return err
+	}
+	origID, err := uuid.Parse(in.OriginalActionID)
+	if err != nil {
+		return err
+	}
+	revID, err := uuid.Parse(in.ReversingActionID)
+	if err != nil {
+		return err
+	}
+	_, err = a.handler.Handle(ctx, env, aggregate.ReverseAction{
+		OriginalActionID:  origID,
+		ReversingActionID: revID,
+	})
+	return err
+}
+
 // systemEnvelope builds the SYSTEM-actor envelope the workflow uses to emit
 // lifecycle events. The principal is the action's approver (a named human, per
 // the actor invariant); Kind is SYSTEM. uuid/time here are fine — activities are

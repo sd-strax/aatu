@@ -132,6 +132,7 @@ type ActionRequested struct {
 	EvidenceRefs               []string        `json:"evidence_refs,omitempty"`
 	ExpiresAt                  time.Time       `json:"expires_at"`
 	IsReversal                 bool            `json:"is_reversal,omitempty"`
+	ReversalOfRef              uuid.UUID       `json:"reversal_of_ref,omitempty"`
 	RequestingInterpretationID uuid.UUID       `json:"requesting_interpretation_id"`
 }
 
@@ -296,6 +297,9 @@ type RequestAction struct {
 	ExpiresAt    time.Time       `json:"expires_at"`
 	Rationale    string          `json:"rationale"`
 	IsReversal   bool            `json:"is_reversal,omitempty"`
+	// ReversalOfRef points at the original x-action this action reverses
+	// (04 §7). Set only when IsReversal; drives the ReversalSaga.
+	ReversalOfRef uuid.UUID `json:"reversal_of_ref,omitempty"`
 
 	// PolicyEvaluations + MatchedPolicyRef carry the Gate 2 result (04 §4), so
 	// the PolicyEvaluated audit event is recorded in the same transaction as
@@ -464,14 +468,35 @@ func (c ResultAction) Validate(env Envelope) error {
 	return nil
 }
 
+// ReverseAction records the ORIGINAL action moving to REVERSED once its
+// reversing action succeeded (02 §3, 04 §7). System-emitted by the ReversalSaga.
+type ReverseAction struct {
+	OriginalActionID  uuid.UUID `json:"original_action_id"`
+	ReversingActionID uuid.UUID `json:"reversing_action_id"`
+}
+
+// Kind returns "ReverseAction".
+func (ReverseAction) Kind() string { return "ReverseAction" }
+
+// Validate checks the envelope and both action ids.
+func (c ReverseAction) Validate(env Envelope) error {
+	if err := validateEnvelope(env); err != nil {
+		return err
+	}
+	if c.OriginalActionID == (uuid.UUID{}) || c.ReversingActionID == (uuid.UUID{}) {
+		return errors.New("ReverseAction: both action ids required")
+	}
+	return nil
+}
+
 // systemOnly reports whether a command may be issued only by a SYSTEM actor
-// (the Temporal workflows / timers). Dispatch, result, and expiry are lifecycle
-// transitions no human or AI issues directly — routing them through SYSTEM keeps
-// the workflow the single emitter and prevents a spoofed human command from
-// forging a dispatch or outcome.
+// (the Temporal workflows / timers). Dispatch, result, expiry, and reversal are
+// lifecycle transitions no human or AI issues directly — routing them through
+// SYSTEM keeps the workflows the single emitter and prevents a spoofed human
+// command from forging a dispatch, outcome, or reversal.
 func systemOnly(cmd Command) bool {
 	switch cmd.(type) {
-	case DispatchAction, ResultAction, ExpireAction:
+	case DispatchAction, ResultAction, ExpireAction, ReverseAction:
 		return true
 	default:
 		return false
@@ -504,6 +529,7 @@ func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]
 		EvidenceRefs:               c.EvidenceRefs,
 		ExpiresAt:                  c.ExpiresAt,
 		IsReversal:                 c.IsReversal,
+		ReversalOfRef:              c.ReversalOfRef,
 		RequestingInterpretationID: interpID,
 	})
 	if err != nil {
@@ -694,6 +720,36 @@ func applyResultAction(env Envelope, state aggregateState, c ResultAction) ([]Ev
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionResulted, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionResult,
 		fmt.Sprintf("action %s: %s", c.ActionID, c.FinalOutcome), nil)
+	if err != nil {
+		return nil, err
+	}
+	return []Event{domain, interp}, nil
+}
+
+// applyReverseAction builds the (ActionReversed, action-reversal Interpretation)
+// pair on the ORIGINAL action. Legal only from SUCCEEDED — you can only reverse
+// an action that actually took effect (04 §7).
+func applyReverseAction(env Envelope, state aggregateState, c ReverseAction) ([]Event, error) {
+	orig, ok := state.Actions[c.OriginalActionID]
+	if !ok {
+		return nil, fmt.Errorf("ReverseAction rejected: original action %s does not exist", c.OriginalActionID)
+	}
+	if orig.Status != ActionStatusSucceeded {
+		return nil, fmt.Errorf("ReverseAction rejected: original action %s is %s, not SUCCEEDED", c.OriginalActionID, orig.Status)
+	}
+
+	interpID := uuid.New()
+	payload, err := json.Marshal(ActionReversed{
+		OriginalActionID:         c.OriginalActionID,
+		ReversingActionID:        c.ReversingActionID,
+		ReversalInterpretationID: interpID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionReversed, payload)
+	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionReversal,
+		fmt.Sprintf("action %s reversed by %s", c.OriginalActionID, c.ReversingActionID), nil)
 	if err != nil {
 		return nil, err
 	}

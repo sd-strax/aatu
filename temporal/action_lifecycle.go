@@ -43,7 +43,7 @@ type ActionLifecycleInput struct {
 // approval-wait (signal-on-approve / expiry-timer, 05 §6.2 step 1) and the
 // adapter name on the ledger entry (needs binding selection split from dispatch)
 // are v1 refinements; the idempotency core is complete.
-func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) error {
+func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, error) {
 	log := workflow.GetLogger(ctx)
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
@@ -53,11 +53,11 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) error {
 	// 1. Dispatch-ledger guard.
 	var alreadyDispatched bool
 	if err := workflow.ExecuteActivity(ctx, a.CheckDispatched, in.ActionID).Get(ctx, &alreadyDispatched); err != nil {
-		return err
+		return "", err
 	}
 	if alreadyDispatched {
 		log.Info("action already dispatched; short-circuiting (idempotency guard)", "action_id", in.ActionID)
-		return nil
+		return "", nil
 	}
 
 	requestID := workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -70,7 +70,7 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) error {
 		ApproverID:       in.ApproverID,
 		AdapterRequestID: requestID,
 	}).Get(ctx, nil); err != nil {
-		return err
+		return "", err
 	}
 
 	// 3. Dispatch under the retry budget.
@@ -119,7 +119,10 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) error {
 		// info), never a fabricated 1.
 		result.Attempts = out.Attempts
 	}
-	return workflow.ExecuteActivity(ctx, a.EmitResulted, result).Get(ctx, nil)
+	if err := workflow.ExecuteActivity(ctx, a.EmitResulted, result).Get(ctx, nil); err != nil {
+		return "", err
+	}
+	return result.FinalOutcome, nil
 }
 
 // unknownTargets marks every target UNKNOWN — the residual outcome when a
