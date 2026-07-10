@@ -119,7 +119,9 @@ func foldState(events []Event) (aggregateState, error) {
 			s.Status = StatusArchived
 		case EventTypeActionRequested, EventTypeActionApproved, EventTypeActionRejected,
 			EventTypeActionExpired, EventTypeActionDispatched, EventTypeActionResulted,
-			EventTypeActionReversed:
+			EventTypeActionReversed, EventTypeActionPolicyEvaluated:
+			// PolicyEvaluated is audit-only (no status change); foldActionEvent
+			// ignores it. The rest drive the per-action state machine.
 			if err := foldActionEvent(s.Actions, e); err != nil {
 				return aggregateState{}, err
 			}

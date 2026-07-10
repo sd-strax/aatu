@@ -76,6 +76,41 @@ func TestRequestAction_ProducesPairedEvents(t *testing.T) {
 	}
 }
 
+// TestRequestAction_EmitsPolicyEvaluated: when Gate 2 ran (evaluations present),
+// the PolicyEvaluated audit event is written in the SAME transaction as
+// ActionRequested (02 §3), sharing the correlation_id, and is audit-only (does
+// not move the action off REQUESTED).
+func TestRequestAction_EmitsPolicyEvaluated(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+	cmd := sampleRequest(id)
+	cmd.PolicyEvaluations = []PolicyEvaluationRecord{
+		{PolicyRef: "policy/ai-no-tier3/1.0.0", PolicyVersion: "abc", WouldHaveFired: false, Effect: "DENY"},
+	}
+	cmd.MatchedPolicyRef = ""
+
+	events, err := applyCommand(env, cmd, activeStateWithAction(env, id, ""))
+	if err != nil {
+		t.Fatalf("applyCommand: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("produced %d events; want 3 (requested + interpretation + policy_evaluated)", len(events))
+	}
+	pe := events[2]
+	if pe.Type != EventTypeActionPolicyEvaluated {
+		t.Errorf("third event = %q; want %q", pe.Type, EventTypeActionPolicyEvaluated)
+	}
+	if pe.CorrelationID != env.CorrelationID {
+		t.Error("policy_evaluated does not share the request's correlation_id")
+	}
+
+	// Audit-only: folding the whole batch leaves the action REQUESTED.
+	folded := foldInto(map[uuid.UUID]actionState{}, events)
+	if folded[id].Status != ActionStatusRequested {
+		t.Errorf("after request+policy_evaluated, status = %q; want REQUESTED", folded[id].Status)
+	}
+}
+
 // TestRequestAction_StatePreconditions: allowed only on ACTIVE, or CONCLUDED for
 // a reversal.
 func TestRequestAction_StatePreconditions(t *testing.T) {

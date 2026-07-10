@@ -22,6 +22,13 @@ const (
 	EventTypeActionDispatched = "action.dispatched" // system-emitted (C.4)
 	EventTypeActionResulted   = "action.resulted"   // system-emitted (C.4)
 	EventTypeActionReversed   = "action.reversed"   // system-emitted (C.4)
+
+	// EventTypeActionPolicyEvaluated records the Gate 2 policy evaluation
+	// (04 §4, 02 §3). Recorded once per action-request in the SAME transaction
+	// as ActionRequested — the shared-tx requirement is why the evaluation
+	// result travels on the RequestAction command rather than being a separate
+	// command. Audit-only: it does not move the action's status.
+	EventTypeActionPolicyEvaluated = "action.policy_evaluated"
 )
 
 // The action-* Interpretation type tags (04 §3.2), members of the canonical
@@ -90,6 +97,26 @@ type Authorization struct {
 	PolicyRef            string     `json:"policy_ref,omitempty"`
 	PolicyVersion        string     `json:"policy_version,omitempty"`
 	ChallengeResponse    string     `json:"challenge_response,omitempty"`
+}
+
+// PolicyEvaluationRecord is one policy's outcome in the PolicyEvaluated audit
+// (02 §3). Mirrors action.PolicyEvaluation; kept as a plain aggregate type so
+// the aggregate never imports the action package (which imports it).
+type PolicyEvaluationRecord struct {
+	PolicyRef      string `json:"policy_ref"`
+	PolicyVersion  string `json:"policy_version"`
+	WouldHaveFired bool   `json:"would_have_fired"`
+	Effect         string `json:"effect"`
+	Shadow         bool   `json:"shadow"`
+}
+
+// ActionPolicyEvaluated is the payload of the policy-evaluation audit event.
+// matched_policy_ref is the policy whose effect drove authorization, or empty
+// when all matching policies were shadow and the action fell through to manual.
+type ActionPolicyEvaluated struct {
+	ActionID         uuid.UUID                `json:"action_id"`
+	Evaluations      []PolicyEvaluationRecord `json:"evaluations"`
+	MatchedPolicyRef string                   `json:"matched_policy_ref,omitempty"`
 }
 
 // --- event payloads (02 §3) --------------------------------------------------
@@ -269,6 +296,13 @@ type RequestAction struct {
 	ExpiresAt    time.Time       `json:"expires_at"`
 	Rationale    string          `json:"rationale"`
 	IsReversal   bool            `json:"is_reversal,omitempty"`
+
+	// PolicyEvaluations + MatchedPolicyRef carry the Gate 2 result (04 §4), so
+	// the PolicyEvaluated audit event is recorded in the same transaction as
+	// ActionRequested (02 §3). Empty when Gate 2 did not run (e.g. a request
+	// built before the endpoint wires it in).
+	PolicyEvaluations []PolicyEvaluationRecord `json:"policy_evaluations,omitempty"`
+	MatchedPolicyRef  string                   `json:"matched_policy_ref,omitempty"`
 }
 
 // Kind returns "RequestAction".
@@ -414,7 +448,21 @@ func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]
 	if err != nil {
 		return nil, err
 	}
-	return []Event{domain, interp}, nil
+	events := []Event{domain, interp}
+
+	// If Gate 2 ran, record its evaluation in the same transaction (02 §3).
+	if len(c.PolicyEvaluations) > 0 {
+		pePayload, err := json.Marshal(ActionPolicyEvaluated{
+			ActionID:         c.ActionID,
+			Evaluations:      c.PolicyEvaluations,
+			MatchedPolicyRef: c.MatchedPolicyRef,
+		})
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, lifecycleDomainEvent(env, state.Seq+3, EventTypeActionPolicyEvaluated, pePayload))
+	}
+	return events, nil
 }
 
 // applyApproveAction builds the (ActionApproved, action-approval Interpretation)
