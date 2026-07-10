@@ -3,6 +3,7 @@ package temporal
 import (
 	"time"
 
+	sdktemporal "go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -34,15 +35,23 @@ func ReversalSaga(ctx workflow.Context, in ReversalSagaInput) error {
 		return err
 	}
 
-	// 2. Only a real effect reverses the original (SUCCEEDED or PARTIAL). A
-	// FAILED/TIMEOUT reversing action leaves the original SUCCEEDED.
-	if outcome != "SUCCEEDED" && outcome != "PARTIAL" {
-		log.Warn("reversing action did not take effect; original stays SUCCEEDED",
+	// 2. Only a FULL effect reverses the original. PARTIAL means some targets
+	// were NOT undone — marking the original REVERSED would overclaim the undo
+	// (the honest-state principle, 04 §7). A PARTIAL/FAILED/TIMEOUT reversing
+	// action leaves the original SUCCEEDED; the reversing action's own record
+	// carries the per-target detail for the analyst to act on.
+	if outcome != "SUCCEEDED" {
+		log.Warn("reversing action did not fully take effect; original stays SUCCEEDED",
 			"original", in.OriginalActionID, "reversing", in.Reversing.ActionID, "outcome", outcome)
 		return nil
 	}
 
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 30 * time.Second})
+	// Bounded retries: a permanent domain rejection (e.g. the original vanished)
+	// must fail the saga visibly, not spin forever.
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &sdktemporal.RetryPolicy{MaximumAttempts: 10},
+	})
 	var a *Activities
 	return workflow.ExecuteActivity(ctx, a.EmitReversed, EmitReversedInput{
 		OriginalActionID:  in.OriginalActionID,

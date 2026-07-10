@@ -96,14 +96,43 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	// A reversal targets an original action id.
-	var reversalOf uuid.UUID
+	// A reversal targets an original action id. Validate it BEFORE anything
+	// else (04 §7): the original must exist and be SUCCEEDED (you can only
+	// reverse an action that took effect), and the requested action_type must
+	// be the original descriptor's declared inverse — otherwise the eventual
+	// action.reversed would claim an undo that never happened.
+	var (
+		reversalOf   uuid.UUID
+		originalTier string
+	)
 	if body.ReversalOfRef != "" {
 		reversalOf, err = uuid.Parse(body.ReversalOfRef)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "reversal_of_ref is not a valid id")
 			return
 		}
+		orig, err := aggregate.LoadActionCurrent(r.Context(), b.cfg.Handler.DB(), reversalOf)
+		if err != nil {
+			writeJSONError(w, http.StatusUnprocessableEntity, "reversal_of_ref: original action not found")
+			return
+		}
+		if orig.Status != aggregate.ActionStatusSucceeded {
+			writeJSONError(w, http.StatusUnprocessableEntity,
+				"reversal_of_ref: original action is "+orig.Status+", only a SUCCEEDED action can be reversed")
+			return
+		}
+		origDesc, ok := b.cfg.ActionCatalog.Descriptor(orig.ActionType)
+		if !ok || origDesc.ReversibleBy == "" {
+			writeJSONError(w, http.StatusUnprocessableEntity,
+				"reversal_of_ref: action type "+orig.ActionType+" is irreversible")
+			return
+		}
+		if origDesc.ReversibleBy != body.ActionType {
+			writeJSONError(w, http.StatusUnprocessableEntity,
+				"reversal of "+orig.ActionType+" must use action_type "+origDesc.ReversibleBy)
+			return
+		}
+		originalTier = orig.Tier
 	}
 
 	// Build the x-action command (validates against the catalog, applies the
@@ -120,6 +149,12 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// 04 §7: reversing is the same tier as the original, NOT lower — enforce
+	// tier parity before Gate 2 evaluates, so policies see the true tier.
+	if originalTier != "" {
+		cmd.Tier = action.MaxTier(cmd.Tier, originalTier)
 	}
 
 	// Gate 2: evaluate policies over the (post-escalator) request.

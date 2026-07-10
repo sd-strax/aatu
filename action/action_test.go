@@ -159,6 +159,19 @@ func TestBuildRequestCommandRejections(t *testing.T) {
 	}
 }
 
+// TestMaxTier: reversal tier parity (04 §7) — never lower than the original.
+func TestMaxTier(t *testing.T) {
+	if MaxTier(aggregate.TierT2, aggregate.TierT3) != aggregate.TierT3 {
+		t.Error("T2 inverse of a T3 original must be T3")
+	}
+	if MaxTier(aggregate.TierT3, aggregate.TierT2) != aggregate.TierT3 {
+		t.Error("T3 inverse of a T2 original stays T3")
+	}
+	if MaxTier(aggregate.TierT2, aggregate.TierT2) != aggregate.TierT2 {
+		t.Error("equal tiers stay equal")
+	}
+}
+
 // --- resolver ----------------------------------------------------------------
 
 func TestActionResolverDispatches(t *testing.T) {

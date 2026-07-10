@@ -89,6 +89,29 @@ func EscalateTier(tier string, targetCount, threshold int) string {
 	return tier
 }
 
+// MaxTier returns the higher of two tiers (T3 > T2 > T1). Used to enforce
+// 04 §7: "reversing an action is the same tier as the original, not lower" —
+// the reversal's tier is max(inverse descriptor's tier, original action's tier).
+func MaxTier(a, b string) string {
+	if tierRank(a) >= tierRank(b) {
+		return a
+	}
+	return b
+}
+
+func tierRank(t string) int {
+	switch t {
+	case aggregate.TierT3:
+		return 3
+	case aggregate.TierT2:
+		return 2
+	case aggregate.TierT1:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // distinctTargets counts DISTINCT entities (04 §1's escalator unit — not raw
 // target-list length, so duplicated entries neither over- nor under-count).
 // Keyed by entity_ref, falling back to resolved_identifier when unset.

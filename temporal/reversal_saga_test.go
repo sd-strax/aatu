@@ -35,6 +35,26 @@ func TestReversalSaga_SucceededReverses(t *testing.T) {
 	}
 }
 
+// TestReversalSaga_PartialDoesNotReverse: PARTIAL means some targets were NOT
+// undone — marking the original REVERSED would overclaim (honest-state, 04 §7).
+func TestReversalSaga_PartialDoesNotReverse(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	env.OnWorkflow(ActionLifecycle, mock.Anything, mock.Anything).Return("PARTIAL", nil)
+	// EmitReversed intentionally NOT mocked — calling it fails the test.
+
+	env.ExecuteWorkflow(ReversalSaga, ReversalSagaInput{
+		OriginalActionID: "orig-42",
+		Reversing:        lifecycleInput(),
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("saga not clean: err=%v", env.GetWorkflowError())
+	}
+	env.AssertNotCalled(t, "EmitReversed", mock.Anything, mock.Anything)
+}
+
 // TestReversalSaga_FailedDoesNotReverse: a FAILED reversing action leaves the
 // original SUCCEEDED — EmitReversed is never called (we never claim to have
 // undone something we didn't, 04 §7).

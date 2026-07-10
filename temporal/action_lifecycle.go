@@ -45,8 +45,12 @@ type ActionLifecycleInput struct {
 // are v1 refinements; the idempotency core is complete.
 func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, error) {
 	log := workflow.GetLogger(ctx)
+	// Ledger/emit activities: bounded retries (a DB restart survives; a
+	// PERMANENT domain rejection fails the workflow visibly in the Temporal UI
+	// instead of spinning forever on an unlimited default policy).
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &sdktemporal.RetryPolicy{MaximumAttempts: 10},
 	})
 	var a *Activities // nil receiver — Temporal resolves activities by name
 

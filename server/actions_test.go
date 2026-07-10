@@ -130,6 +130,89 @@ func TestRequestAction_ManualFallThrough(t *testing.T) {
 	}
 }
 
+// succeededAction drives an x-action through request → approve → dispatch →
+// result SUCCEEDED on the given investigation, returning its id.
+func succeededAction(t *testing.T, invID uuid.UUID) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	actionID := uuid.New()
+	env := func(kind string) aggregate.Envelope {
+		return aggregate.Envelope{
+			AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
+			Actor: aggregate.Actor{PrincipalID: "test-subject", Kind: kind}, OccurredAt: time.Now().UTC(),
+		}
+	}
+	mustDo := func(e aggregate.Envelope, cmd aggregate.Command) {
+		t.Helper()
+		if _, err := testHandler.Handle(ctx, e, cmd); err != nil {
+			t.Fatalf("%s: %v", cmd.Kind(), err)
+		}
+	}
+	mustDo(env(""), aggregate.RequestAction{
+		ActionID: actionID, ActionType: "host.isolate", Tier: aggregate.TierT2,
+		Targets:   []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-A"}},
+		ExpiresAt: time.Now().Add(time.Hour), Rationale: "contain",
+	})
+	mustDo(env(""), aggregate.ApproveAction{
+		ActionID: actionID,
+		Authorization: aggregate.Authorization{
+			Mode: aggregate.AuthModeManual, Stage: aggregate.AuthStageSolo,
+			PrimaryApproverRef: "test-subject", PrimaryApprovedAt: time.Now(),
+		},
+	})
+	mustDo(env(aggregate.ActorSystem), aggregate.DispatchAction{ActionID: actionID, Adapter: "fx", AdapterRequestID: "wf"})
+	mustDo(env(aggregate.ActorSystem), aggregate.ResultAction{ActionID: actionID, FinalOutcome: "SUCCEEDED", Attempts: 1})
+	return actionID
+}
+
+// TestRequestAction_ReversalValidation: a reversal request must name a real,
+// SUCCEEDED original whose descriptor's reversible_by matches the requested
+// action_type (04 §7) — otherwise the eventual action.reversed would lie.
+func TestRequestAction_ReversalValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	origID := succeededAction(t, invID)
+	b := actionBackend(t) // baseline only — reversal lands PENDING_MANUAL
+
+	post := func(body RequestActionBody) (*http.Response, RequestActionResponse) {
+		return postAction(t, b, mintToken(t, nil), body)
+	}
+	revTarget := []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-A"}}
+
+	// Nonexistent original → 422.
+	resp, _ := post(RequestActionBody{
+		ActionType: "host.unisolate", Targets: revTarget, Rationale: "undo",
+		InvestigationRef: invID.String(), ReversalOfRef: uuid.NewString(),
+	})
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("nonexistent original: status %d; want 422", resp.StatusCode)
+	}
+
+	// Wrong inverse type (email.release does not reverse host.isolate) → 422.
+	resp, _ = post(RequestActionBody{
+		ActionType: "email.release", Targets: revTarget, Rationale: "undo",
+		InvestigationRef: invID.String(), ReversalOfRef: origID.String(),
+	})
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("wrong inverse type: status %d; want 422", resp.StatusCode)
+	}
+
+	// Correct inverse → 201, REQUESTED, tier parity held (both T2 here).
+	resp, out := post(RequestActionBody{
+		ActionType: "host.unisolate", Targets: revTarget, Rationale: "undo",
+		InvestigationRef: invID.String(), ReversalOfRef: origID.String(),
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("valid reversal: status %d; want 201", resp.StatusCode)
+	}
+	if out.Tier != aggregate.TierT2 || out.Status != "PENDING_MANUAL" {
+		t.Errorf("valid reversal: tier=%q status=%q; want T2/PENDING_MANUAL", out.Tier, out.Status)
+	}
+}
+
 // TestRequestAction_AIDelegatedT3BaselineDeny: an AI-delegated request that
 // escalates to T3 can never auto-approve — the baseline DENY forces manual,
 // even with a matching AUTO_APPROVE policy. Actor.Kind comes from the JWT
