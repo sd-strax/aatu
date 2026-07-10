@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -116,6 +117,50 @@ func TestRecordInterpretation_BadType(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d; want 422", resp.StatusCode)
+	}
+}
+
+// TestRecordInterpretation_BadTranscriptID: a malformed transcript_id is
+// rejected (400), never silently replaced — a coerced fresh UUID would sever
+// the turn from its conversation in the audit record.
+func TestRecordInterpretation_BadTranscriptID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	b := newTestBackend(t)
+
+	resp, _ := postInterpretation(t, b, mintToken(t, nil), RecordInterpretationBody{
+		InvestigationRef:   invID.String(),
+		InterpretationType: "hypothesis",
+		Rationale:          "valid otherwise",
+		Transcript:         &TranscriptInput{TranscriptID: "not-a-uuid", Body: "hi"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d; want 400", resp.StatusCode)
+	}
+}
+
+// TestRecordInterpretation_BodyTooLarge: the route carries transcript bytes by
+// design, so it is explicitly bounded — an over-limit body is a 400, not an
+// unbounded read into memory and the side store.
+func TestRecordInterpretation_BodyTooLarge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	b := newTestBackend(t)
+
+	resp, _ := postInterpretation(t, b, mintToken(t, nil), RecordInterpretationBody{
+		InvestigationRef:   invID.String(),
+		InterpretationType: "hypothesis",
+		Rationale:          "huge transcript",
+		Transcript:         &TranscriptInput{Body: strings.Repeat("x", maxInterpretationBodyBytes+1)},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d; want 400", resp.StatusCode)
 	}
 }
 

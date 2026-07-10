@@ -64,6 +64,16 @@ var reasoningTypes = map[string]bool{
 // detail lives in the side store, not the rationale.
 const rationaleMaxRunes = 500
 
+// Bounds on the reference lists a single reasoning act may carry. InputRefs/
+// OutputRefs/ToolCallRefs land in the event payload — the event log is not the
+// bulk store, so a runaway agent turn must not bloat it. One reasoning act over
+// dozens of nodes should be decomposed into multiple acts (or is an extraction
+// batch that belongs upstream). Generous for real use, hard against abuse.
+const (
+	maxRefsPerInterpretation      = 100
+	maxToolCallsPerInterpretation = 100
+)
+
 // Confidence values (01-domain-model.md §Interpretation schema). Optional.
 const (
 	ConfidenceHigh   = "HIGH"
@@ -189,6 +199,22 @@ func (c RecordInterpretation) Validate(env Envelope) error {
 	default:
 		return fmt.Errorf("RecordInterpretation: invalid confidence %q", c.Confidence)
 	}
+	if len(c.InputRefs) > maxRefsPerInterpretation || len(c.OutputRefs) > maxRefsPerInterpretation {
+		return fmt.Errorf("RecordInterpretation: input/output refs exceed %d (decompose into multiple reasoning acts)", maxRefsPerInterpretation)
+	}
+	if len(c.ToolCalls) > maxToolCallsPerInterpretation {
+		return fmt.Errorf("RecordInterpretation: tool calls exceed %d per reasoning act", maxToolCallsPerInterpretation)
+	}
+	for i := range c.ToolCalls {
+		// A tool_call_ref without a call id is a dangling reference — the event
+		// would carry a hash nothing can be correlated back to.
+		if c.ToolCalls[i].CallID == "" {
+			return fmt.Errorf("RecordInterpretation: tool call %d has no call_id", i)
+		}
+		if c.ToolCalls[i].ToolName == "" {
+			return fmt.Errorf("RecordInterpretation: tool call %q has no tool_name", c.ToolCalls[i].CallID)
+		}
+	}
 	return nil
 }
 
@@ -228,9 +254,11 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 		}
 	}
 	for i := range c.ToolCalls {
+		// Hash the NORMALIZED args — the exact bytes WriteReasoningTx stores —
+		// so the event's content address always verifies against the stored row.
 		rec.ToolCallRefs = append(rec.ToolCallRefs, ToolCallRef{
 			CallID:      c.ToolCalls[i].CallID,
-			ContentHash: HashContent(c.ToolCalls[i].Args),
+			ContentHash: HashContent(normalizeArgs(c.ToolCalls[i].Args)),
 		})
 	}
 

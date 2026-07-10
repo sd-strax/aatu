@@ -12,6 +12,11 @@ import (
 	"github.com/sd-strax/reckon/module"
 )
 
+// maxInterpretationBodyBytes bounds the /api/interpretations request body
+// (transcript + tool calls for ONE turn). 10MB is far beyond any real turn;
+// the cap exists so a runaway client can't exhaust memory or the side store.
+const maxInterpretationBodyBytes = 10 << 20
+
 // RecordInterpretationBody is the /api/interpretations request: one reasoning
 // act the agent loop (or analyst) is committing to the thread (05 §3.4 — the
 // extension posts the final Interpretation command plus the transcript bytes;
@@ -81,6 +86,11 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This route carries transcript bytes by design — bound the body so a
+	// runaway client cannot exhaust memory or the side store. 10MB is generous
+	// for a single turn's transcript + tool calls.
+	r.Body = http.MaxBytesReader(w, r.Body, maxInterpretationBodyBytes)
+
 	var body RecordInterpretationBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
@@ -111,11 +121,18 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		Confidence:         body.Confidence,
 	}
 	if body.Transcript != nil {
+		// transcript_id groups the turns of one conversation in the audit
+		// record. A malformed id is REJECTED, never silently replaced — a
+		// coerced fresh UUID would sever the turn from its conversation while
+		// telling the client everything is fine.
 		tID := uuid.New()
 		if body.Transcript.TranscriptID != "" {
-			if parsed, perr := uuid.Parse(body.Transcript.TranscriptID); perr == nil {
-				tID = parsed
+			parsed, perr := uuid.Parse(body.Transcript.TranscriptID)
+			if perr != nil {
+				writeJSONError(w, http.StatusBadRequest, "transcript.transcript_id is not a valid id")
+				return
 			}
+			tID = parsed
 		}
 		cmd.Transcript = &aggregate.TranscriptContent{
 			TranscriptID: tID,

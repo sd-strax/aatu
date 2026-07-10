@@ -52,6 +52,28 @@ func TestRecordInterpretation_Validate(t *testing.T) {
 	if err := badConf.Validate(env); err == nil {
 		t.Error("invalid confidence accepted")
 	}
+
+	// Tool calls need a call_id (else the event's tool_call_ref dangles) and a
+	// tool_name.
+	noCallID := base
+	noCallID.ToolCalls = []ToolCallContent{{ToolName: "list_processes"}}
+	if err := noCallID.Validate(env); err == nil {
+		t.Error("tool call without call_id accepted")
+	}
+	noToolName := base
+	noToolName.ToolCalls = []ToolCallContent{{CallID: "c1"}}
+	if err := noToolName.Validate(env); err == nil {
+		t.Error("tool call without tool_name accepted")
+	}
+
+	// Ref lists are bounded — the event log is not the bulk store.
+	manyRefs := base
+	for i := 0; i <= maxRefsPerInterpretation; i++ {
+		manyRefs.InputRefs = append(manyRefs.InputRefs, "process--x")
+	}
+	if err := manyRefs.Validate(env); err == nil {
+		t.Error("over-cap input_refs accepted")
+	}
 }
 
 // activeInvestigation drives a fresh aggregate to ACTIVE via h and returns its
@@ -151,6 +173,82 @@ func TestRecordInterpretation_RecordsEventAndSideStore(t *testing.T) {
 	}
 	if toolName != "list_processes" || eventID != res.AppliedEvents[0].EventID {
 		t.Errorf("tool call = (%s, %s); want (list_processes, %s)", toolName, eventID, res.AppliedEvents[0].EventID)
+	}
+}
+
+// TestRecordInterpretation_ArgsHashMatchesStore: the event's content_hash must
+// equal the hash of exactly the bytes the side store holds — for EMPTY args
+// (both sides normalize through normalizeArgs; without it the event addresses
+// SHA256("") while the store holds "{}") and for NON-CANONICAL JSON args (the
+// store must preserve bytes exactly — TEXT, not JSONB, which re-serializes with
+// different whitespace/key order; migration 0010). Either mismatch is a false
+// tamper alarm for a verifier recomputing hashes.
+func TestRecordInterpretation_ArgsHashMatchesStore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetTables(t)
+	tenantID := uuid.New()
+	h := NewHandler(NewStore(testDB), InvestigationCurrentProjector{}, ActionCurrentProjector{}).
+		WithSideStore(NewSideStore(testDB))
+	invID := activeInvestigation(t, h, tenantID)
+
+	env := Envelope{
+		AggregateID: invID, TenantID: tenantID, CorrelationID: uuid.New(),
+		Actor: Actor{PrincipalID: "analyst-1"}, OccurredAt: newTestEnvelope("").OccurredAt,
+	}
+	res, err := h.Handle(context.Background(), env, RecordInterpretation{
+		InterpretationID:   uuid.New(),
+		InterpretationType: InterpretationPivot,
+		Rationale:          "pivoting to the peer host",
+		ToolCalls: []ToolCallContent{
+			{CallID: "c1", ToolName: "list_hosts"}, // no args → normalized {}
+			// Compact JSON with unsorted keys: JSONB storage would re-serialize
+			// this ({"b": 1, "a": 2} with spaces, keys sorted) and break the hash.
+			{CallID: "c2", ToolName: "query", Args: json.RawMessage(`{"b":1,"a":2}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("record interpretation: %v", err)
+	}
+
+	var rec InterpretationRecorded
+	if err := json.Unmarshal(res.AppliedEvents[0].Payload, &rec); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	if len(rec.ToolCallRefs) != 2 {
+		t.Fatalf("tool_call_refs = %+v; want 2", rec.ToolCallRefs)
+	}
+	refByCall := map[string]string{}
+	for _, ref := range rec.ToolCallRefs {
+		refByCall[ref.CallID] = ref.ContentHash
+	}
+
+	// Recompute each hash from the STORED bytes — they must match the event.
+	rows, err := testDB.Query(`SELECT tool_args FROM ai_tool_calls WHERE investigation_id=$1 ORDER BY id`, invID)
+	if err != nil {
+		t.Fatalf("stored tool calls: %v", err)
+	}
+	defer rows.Close()
+	var stored [][]byte
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			t.Fatal(err)
+		}
+		stored = append(stored, b)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored tool calls = %d; want 2", len(stored))
+	}
+	if got, want := HashContent(stored[0]), refByCall["c1"]; got != want {
+		t.Errorf("empty args: hash of stored %q = %s; event ref %s", stored[0], got, want)
+	}
+	if got, want := HashContent(stored[1]), refByCall["c2"]; got != want {
+		t.Errorf("non-canonical args: hash of stored %q = %s; event ref %s (storage must be byte-exact)", stored[1], got, want)
 	}
 }
 

@@ -40,7 +40,12 @@ type TranscriptContent struct {
 
 // ToolCallContent is one tool dispatch the LLM made during the turn, carried on
 // a RecordInterpretation command and logged to ai_tool_calls. Args is stored
-// inline (JSONB); ResultHash references the (separately stored) raw result.
+// inline byte-exact (TEXT, migration 0010 — JSONB would re-serialize and break
+// the content address; cast tool_args::jsonb to query it). ResultHash is
+// CALLER-CLAIMED provenance: it names content the backend has not (yet) stored,
+// so it is recorded verbatim but is not a verifiable content address until the
+// tool-result store lands (v1 — results are served by /capability/<verb>
+// responses today and not retained). Treat it as a client assertion, not proof.
 type ToolCallContent struct {
 	CallID     string          `json:"call_id"`
 	ToolName   string          `json:"tool_name"`
@@ -74,6 +79,18 @@ func HashContent(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// normalizeArgs maps empty/nil tool-call args to the canonical empty JSON
+// object. Both the event's tool_call_refs hash (applyRecordInterpretation) and
+// the stored ai_tool_calls row (WriteReasoningTx) go through this SAME helper —
+// the content address on the event must be the hash of exactly the bytes the
+// side store holds, or a verifier recomputing hashes gets a false tamper alarm.
+func normalizeArgs(args json.RawMessage) json.RawMessage {
+	if len(args) == 0 {
+		return json.RawMessage("{}")
+	}
+	return args
+}
+
 // WriteReasoningTx persists the transcript + tool-call side stores for one
 // RecordInterpretation inside tx, linking the tool-call rows to the
 // interpretation event that was just appended (interpEventID). Content-addressed
@@ -94,10 +111,7 @@ func (s *SideStore) WriteReasoningTx(ctx context.Context, tx *sql.Tx, env Envelo
 
 	for i := range c.ToolCalls {
 		tc := c.ToolCalls[i]
-		args := tc.Args
-		if len(args) == 0 {
-			args = json.RawMessage("{}")
-		}
+		args := normalizeArgs(tc.Args)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO ai_tool_calls (
 				id, tenant_id, investigation_id, event_id, tool_name, tool_args,

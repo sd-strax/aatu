@@ -1,0 +1,13 @@
+-- 0010_tool_args_byte_exact: tool_args JSONB → TEXT
+--
+-- The interpretation event's tool_call_refs carry a SHA-256 content address of
+-- the tool-call arguments; the audit property is that hashing the STORED bytes
+-- reproduces the event's hash. JSONB storage breaks that byte-exactness: it
+-- re-serializes on output (whitespace inserted after ':' and ',', object keys
+-- sorted and deduplicated), so the round-tripped bytes hash differently than
+-- what the event recorded — a false tamper alarm for any verifier.
+--
+-- TEXT preserves the exact bytes that were hashed. The content is still JSON
+-- (it arrives through a decoded JSON request body); queries that want to
+-- inspect it can cast tool_args::jsonb.
+ALTER TABLE ai_tool_calls ALTER COLUMN tool_args TYPE TEXT;
