@@ -283,6 +283,13 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.actionsCollection),
 	))
 
+	// POST /api/interpretations — the agent loop's write into the reasoning
+	// thread (05 §3.4): record one reasoning act + its transcript/tool-call side
+	// store. Analyst role (the AI authors as a delegate, never a principal).
+	api.Handle("/interpretations", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.interpretationsCollection),
+	))
+
 	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval.
 	if b.cfg.Knowledge != nil {
 		api.Handle("/knowledge/recall_sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSOPs)))

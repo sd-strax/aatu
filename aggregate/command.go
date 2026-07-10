@@ -234,6 +234,8 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return applyResultAction(env, state, c)
 	case ReverseAction:
 		return applyReverseAction(env, state, c)
+	case RecordInterpretation:
+		return applyRecordInterpretation(env, state, c)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd.Kind())
 	}
@@ -241,16 +243,18 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 
 // aiAllowed is the AI_DELEGATED command allowlist (04 §5.6). It admits exactly
 // the T1-annotate tier (04 §1: hypotheses, membership, evidence, lifecycle
-// DRAFT↔ACTIVE↔PAUSED — "the AI agent operates freely here") plus RequestAction
-// (the AI may PROPOSE a T2/T3 action; 08 §2). Everything else — approve /
-// reject / expire, conclude / reopen / archive, and any future command —
-// defaults to denied. Approving, and concluding an investigation, are human
-// acts.
+// DRAFT↔ACTIVE↔PAUSED — "the AI agent operates freely here"), RecordInterpretation
+// (the AI is the legal author of x-interpretation — reasoning is annotate-tier,
+// 03 §1), plus RequestAction (the AI may PROPOSE a T2/T3 action; 08 §2).
+// Everything else — approve / reject / expire, conclude / reopen / archive, and
+// any future command — defaults to denied. Approving, and concluding an
+// investigation, are human acts.
 func aiAllowed(cmd Command) bool {
 	switch cmd.(type) {
 	case CreateInvestigation,
 		ActivateInvestigation, PauseInvestigation, ResumeInvestigation,
 		AddMember, RemoveMember, AttachEvidence,
+		RecordInterpretation,
 		RequestAction:
 		return true
 	default:

@@ -24,6 +24,7 @@ var tracer = otel.Tracer("reckon/aggregate")
 type Handler struct {
 	store      *Store
 	projectors []Projector
+	sideStore  *SideStore // optional; required only for interpretations carrying transcript/tool-call blobs
 }
 
 // NewHandler constructs a Handler with the given store and projectors.
@@ -31,6 +32,15 @@ type Handler struct {
 // projections read from each other (none today).
 func NewHandler(store *Store, projectors ...Projector) *Handler {
 	return &Handler{store: store, projectors: projectors}
+}
+
+// WithSideStore attaches the AI reasoning side store (02 §6 Layer B), enabling
+// RecordInterpretation commands that carry transcript/tool-call bytes. Returns
+// the handler for chaining. Without it, an interpretation carrying blobs is
+// rejected at Handle rather than silently dropping the audit content.
+func (h *Handler) WithSideStore(s *SideStore) *Handler {
+	h.sideStore = s
+	return h
 }
 
 // Result is what Handle returns: the events that were persisted and the
@@ -118,6 +128,19 @@ func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (res Re
 			}
 		}
 		pspan.End()
+
+		// Persist the reasoning side stores (02 §6 Layer B) in the SAME tx as the
+		// interpretation event, linked to its just-minted event id, so the audit
+		// trail can never reference a transcript that failed to commit. Content-
+		// addressed and idempotent.
+		if ri, ok := cmd.(RecordInterpretation); ok && ri.hasBlobs() && events[i].Type == EventTypeInterpretationRecorded {
+			if h.sideStore == nil {
+				return Result{}, fmt.Errorf("RecordInterpretation carries side-store content but no side store is configured on the handler")
+			}
+			if err := h.sideStore.WriteReasoningTx(ctx, tx, env, events[i].EventID, ri); err != nil {
+				return Result{}, err
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
