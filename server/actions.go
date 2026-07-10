@@ -141,6 +141,12 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	case action.ModeAutoPolicy:
 		resp.Status, resp.WorkflowID = b.autoApproveAndDispatch(r.Context(), env, cmd, decision, now)
 	case action.ModeTwoParty:
+		// SEAM OBLIGATION (Phase D approve endpoint): Gate 2's REQUIRE_TWO_PARTY
+		// demand lives in the policy_evaluated event and this response — the
+		// future approval surface MUST honor it (mode TWO_PARTY, secondary from
+		// decision.SecondaryApproverPool), not accept a MANUAL solo approval.
+		// Re-derive from the action's policy_evaluated event or re-evaluate
+		// Gate 2 at approval time.
 		resp.Status = "PENDING_TWO_PARTY"
 	}
 

@@ -1,6 +1,7 @@
 package action
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -75,6 +76,10 @@ func (g *Gate2) Evaluate(input EvalInput) (Decision, error) {
 		}
 		out, _, err := cp.program.Eval(activation)
 		if err != nil {
+			// FAIL-CLOSED by design: a predicate erroring at eval time (e.g. a
+			// missing context field) fails the whole evaluation rather than
+			// being skipped — silently skipping an erroring DENY would be
+			// fail-open. The action request errors; the policy gets fixed.
 			return Decision{}, fmt.Errorf("policy %s eval: %w", cp.ID, err)
 		}
 		fired, ok := out.Value().(bool)
@@ -151,14 +156,23 @@ func ApplyDecision(cmd aggregate.RequestAction, d Decision) aggregate.RequestAct
 }
 
 // EvalInputForCommand builds the action.* portion of the evaluation context from
-// a built RequestAction command plus the requesting actor. The endpoint enriches
-// the result with the investigation/evidence/similarity/SOP projections it
-// assembles from the graph before calling Evaluate.
+// a built RequestAction command plus the requesting actor — including decoding
+// the command's Parameters so ctx.action.parameters is populated (a policy
+// conditioning on it must never silently see an empty object). The endpoint
+// enriches the result with the investigation/evidence/similarity/SOP projections
+// it assembles from the graph before calling Evaluate.
 func EvalInputForCommand(cmd aggregate.RequestAction, actorKind, actorID string, now time.Time) EvalInput {
+	var params map[string]any
+	if len(cmd.Parameters) > 0 {
+		// Best-effort: request_action parameters are JSON objects by contract
+		// (08 §2); a non-object leaves ctx.action.parameters empty.
+		_ = json.Unmarshal(cmd.Parameters, &params)
+	}
 	return EvalInput{
 		ActionType:      cmd.ActionType,
 		Tier:            cmd.Tier,
 		Targets:         cmd.Targets,
+		Parameters:      params,
 		RequestedByKind: actorKind,
 		RequestedByID:   actorID,
 		Now:             now,
@@ -282,26 +296,32 @@ func orEmptyStrings(s []string) []any {
 // buildCELEnv declares the ctx variable and the any_in/all_in membership
 // helpers (04 §4.2). ctx is dyn-typed so predicates navigate the projection maps
 // without a compiled schema; predicates still type-check to bool.
+//
+// any_in/all_in accept a dyn receiver so both the spec's declared surface —
+// `ctx.targets.any_in("prod-critical")` (04 §4.2, and its §4.3 example
+// policies) — and the explicit list form
+// `ctx.targets.criticality_classes.any_in(...)` work: a map receiver resolves
+// through its criticality_classes; a list receiver is used as-is.
 func buildCELEnv() (*cel.Env, error) {
 	return cel.NewEnv(
 		cel.Variable("ctx", cel.DynType),
 		cel.Function("any_in",
-			cel.MemberOverload("list_any_in_string",
-				[]*cel.Type{cel.ListType(cel.DynType), cel.StringType}, cel.BoolType,
-				cel.BinaryBinding(listAnyIn)),
+			cel.MemberOverload("dyn_any_in_string",
+				[]*cel.Type{cel.DynType, cel.StringType}, cel.BoolType,
+				cel.BinaryBinding(anyIn)),
 		),
 		cel.Function("all_in",
-			cel.MemberOverload("list_all_in_string",
-				[]*cel.Type{cel.ListType(cel.DynType), cel.StringType}, cel.BoolType,
-				cel.BinaryBinding(listAllIn)),
+			cel.MemberOverload("dyn_all_in_string",
+				[]*cel.Type{cel.DynType, cel.StringType}, cel.BoolType,
+				cel.BinaryBinding(allIn)),
 		),
 	)
 }
 
-// listAnyIn implements `<list>.any_in(<class>)`: true when the class appears in
-// the list (e.g. the union of target criticality classes contains it).
-func listAnyIn(list, class ref.Val) ref.Val {
-	items, err := toStringSlice(list)
+// anyIn implements `<recv>.any_in(<class>)`: true when the class appears in the
+// receiver's membership list.
+func anyIn(recv, class ref.Val) ref.Val {
+	items, err := membershipStrings(recv)
 	if err != nil {
 		return types.NewErr("any_in: %v", err)
 	}
@@ -314,11 +334,11 @@ func listAnyIn(list, class ref.Val) ref.Val {
 	return types.Bool(false)
 }
 
-// listAllIn implements `<list>.all_in(<class>)`: true when the list is non-empty
-// and every element equals the class (v0 approximation of "all targets in
-// class"; sharper per-target modeling is a v1 custom-type enhancement).
-func listAllIn(list, class ref.Val) ref.Val {
-	items, err := toStringSlice(list)
+// allIn implements `<recv>.all_in(<class>)`: true when the membership list is
+// non-empty and every element equals the class (v0 approximation of "all
+// targets in class"; sharper per-target modeling is a v1 enhancement).
+func allIn(recv, class ref.Val) ref.Val {
+	items, err := membershipStrings(recv)
 	if err != nil {
 		return types.NewErr("all_in: %v", err)
 	}
@@ -334,18 +354,36 @@ func listAllIn(list, class ref.Val) ref.Val {
 	return types.Bool(true)
 }
 
-func toStringSlice(list ref.Val) ([]string, error) {
-	native, err := list.ConvertToNative(reflect.TypeOf([]any{}))
+// membershipStrings resolves a receiver to its membership list: a map (the
+// ctx.targets object) via its criticality_classes field, a list as-is.
+func membershipStrings(recv ref.Val) ([]string, error) {
+	if native, err := recv.ConvertToNative(reflect.TypeOf(map[string]any{})); err == nil {
+		m := native.(map[string]any)
+		cc, ok := m["criticality_classes"]
+		if !ok {
+			return nil, fmt.Errorf("receiver map has no criticality_classes")
+		}
+		return toStrings(cc)
+	}
+	native, err := recv.ConvertToNative(reflect.TypeOf([]any{}))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("receiver is neither a targets object nor a list: %w", err)
 	}
-	items, ok := native.([]any)
-	if !ok {
-		return nil, fmt.Errorf("expected a list, got %T", native)
+	return toStrings(native)
+}
+
+// toStrings coerces a []any (or []string) into strings.
+func toStrings(v any) ([]string, error) {
+	switch items := v.(type) {
+	case []string:
+		return items, nil
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			out = append(out, fmt.Sprintf("%v", item))
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("expected a list, got %T", v)
 	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		out = append(out, fmt.Sprintf("%v", item))
-	}
-	return out, nil
 }

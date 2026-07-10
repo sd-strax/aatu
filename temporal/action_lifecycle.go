@@ -1,6 +1,8 @@
 package temporal
 
 import (
+	"errors"
+	"strconv"
 	"time"
 
 	sdktemporal "go.temporal.io/sdk/temporal"
@@ -99,40 +101,35 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) error {
 	}
 	if dispErr != nil {
 		// Exhausted retries or FATAL: the honest residual (08 §6c). No success
-		// is ever inferred for an effect reckon cannot confirm.
+		// is ever inferred for an effect reckon cannot confirm. The audit's
+		// attempt count is real (04 §6.1): a FATAL error is non-retryable, so
+		// exactly one attempt ran; anything else exhausted the 3-attempt budget.
 		log.Warn("dispatch failed; recording FAILED with UNKNOWN targets", "action_id", in.ActionID, "error", dispErr)
 		result.FinalOutcome = "FAILED"
 		result.PerTargetResults = unknownTargets(in.Targets)
 		result.Attempts = 3
+		var appErr *sdktemporal.ApplicationError
+		if errors.As(dispErr, &appErr) && appErr.Type() == fatalErrorType {
+			result.Attempts = 1
+		}
 	} else {
 		result.FinalOutcome = out.FinalOutcome
 		result.PerTargetResults = out.PerTargetResults
-		result.Attempts = 1
+		// The real attempt number the dispatch succeeded on (from activity
+		// info), never a fabricated 1.
+		result.Attempts = out.Attempts
 	}
 	return workflow.ExecuteActivity(ctx, a.EmitResulted, result).Get(ctx, nil)
 }
 
 // unknownTargets marks every target UNKNOWN — the residual outcome when a
 // dispatch left reckon without a confirmable per-target result (08 §6c).
+// (strconv is deterministic and fine in workflow code — the determinism
+// constraint covers time/rand/goroutines/IO, not pure computation.)
 func unknownTargets(targets []aggregate.TargetSpec) map[string]string {
 	out := make(map[string]string, len(targets))
 	for i := range targets {
-		out[itoa(i)] = "UNKNOWN"
+		out[strconv.Itoa(i)] = "UNKNOWN"
 	}
 	return out
-}
-
-// itoa is a tiny int→string without importing strconv into workflow code.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	return string(b[pos:])
 }

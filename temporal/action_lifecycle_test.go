@@ -29,10 +29,12 @@ func TestActionLifecycle_HappyPath(t *testing.T) {
 
 	env.OnActivity(a.CheckDispatched, mock.Anything, mock.Anything).Return(false, nil)
 	env.OnActivity(a.EmitDispatched, mock.Anything, mock.Anything).Return(nil)
+	// The dispatch succeeded on its 2nd attempt: the audit record must carry the
+	// REAL attempt number, never a fabricated 1.
 	env.OnActivity(a.DoDispatch, mock.Anything, mock.Anything).Return(
-		DispatchOutput{FinalOutcome: "SUCCEEDED", PerTargetResults: map[string]string{"0": "OK"}}, nil)
+		DispatchOutput{FinalOutcome: "SUCCEEDED", PerTargetResults: map[string]string{"0": "OK"}, Attempts: 2}, nil)
 	env.OnActivity(a.EmitResulted, mock.Anything, mock.MatchedBy(func(in EmitResultedInput) bool {
-		return in.FinalOutcome == "SUCCEEDED"
+		return in.FinalOutcome == "SUCCEEDED" && in.Attempts == 2
 	})).Return(nil)
 
 	env.ExecuteWorkflow(ActionLifecycle, lifecycleInput())
@@ -82,10 +84,11 @@ func TestActionLifecycle_FatalDispatch(t *testing.T) {
 	env.OnActivity(a.DoDispatch, mock.Anything, mock.Anything).Return(
 		DispatchOutput{}, sdktemporal.NewApplicationError("no fixture matches", fatalErrorType))
 
-	var gotFailed, gotUnknown bool
+	var gotFailed, gotUnknown, gotOneAttempt bool
 	env.OnActivity(a.EmitResulted, mock.Anything, mock.MatchedBy(func(in EmitResultedInput) bool {
 		gotFailed = in.FinalOutcome == "FAILED"
 		gotUnknown = in.PerTargetResults["0"] == "UNKNOWN"
+		gotOneAttempt = in.Attempts == 1 // FATAL is non-retryable: exactly one attempt ran
 		return true
 	})).Return(nil)
 
@@ -94,8 +97,9 @@ func TestActionLifecycle_FatalDispatch(t *testing.T) {
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
 		t.Fatalf("workflow not clean: completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
 	}
-	if !gotFailed || !gotUnknown {
-		t.Errorf("FATAL dispatch → result failed=%v unknown=%v; want FAILED / UNKNOWN", gotFailed, gotUnknown)
+	if !gotFailed || !gotUnknown || !gotOneAttempt {
+		t.Errorf("FATAL dispatch → failed=%v unknown=%v oneAttempt=%v; want FAILED / UNKNOWN / attempts=1",
+			gotFailed, gotUnknown, gotOneAttempt)
 	}
 	// DoDispatch is FATAL → called exactly once (no retry).
 	env.AssertNumberOfCalls(t, "DoDispatch", 1)

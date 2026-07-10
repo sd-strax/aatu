@@ -127,14 +127,17 @@ func TestFallThroughToManual(t *testing.T) {
 // TestCELExamplePredicates exercises real predicate shapes from 04 §4.3:
 // hypothesis existence with a strong sighting, and criticality any_in.
 func TestCELExamplePredicates(t *testing.T) {
-	// Example 1 shape: auto-isolate on a strong-evidence supported hypothesis.
+	// Example 1 shape, SPEC-VERBATIM (04 §4.3): auto-isolate on a
+	// strong-evidence supported hypothesis. `ctx.targets.any_in(...)` is the
+	// spec's declared surface (04 §4.2) — policies copied from the spec's
+	// examples must work as written.
 	g := mustGate2(t, Policy{
 		ID: "p/cobalt/1", ActionMatch: []string{"host.isolate"}, Effect: EffectAutoApprove,
 		Predicate: `ctx.action.target_count == 1 &&
 			ctx.evidence.hypotheses.exists(h, h.status == "SUPPORTED" &&
 				h.supporting_sightings.exists(s, s.weight == "STRONG")) &&
 			ctx.evidence.all_direct &&
-			!ctx.targets.criticality_classes.any_in("prod-critical")`,
+			!ctx.targets.any_in("prod-critical")`,
 	})
 	in := baseInput()
 	in.Hypotheses = []map[string]any{{
@@ -152,16 +155,49 @@ func TestCELExamplePredicates(t *testing.T) {
 		t.Error("predicate should not fire when target is prod-critical")
 	}
 
-	// Example 3 shape: require two-party for domain controllers.
+	// Example 3 shape, spec-verbatim: require two-party for domain controllers.
 	gdc := mustGate2(t, Policy{
 		ID: "p/dc/1", ActionMatch: []string{"host.isolate"}, Effect: EffectRequireTwoParty,
-		Predicate:             `ctx.targets.criticality_classes.any_in("domain-controller")`,
+		Predicate:             `ctx.targets.any_in("domain-controller")`,
 		SecondaryApproverPool: []string{"senior"},
 	})
 	in2 := baseInput()
 	in2.CriticalityClasses = []string{"domain-controller"}
 	if d, _ := gdc.Evaluate(in2); d.Mode != ModeTwoParty {
 		t.Errorf("DC two-party predicate → mode %q; want TWO_PARTY", d.Mode)
+	}
+
+	// The explicit list form works too.
+	glist := mustGate2(t, Policy{
+		ID: "p/dc-list/1", ActionMatch: []string{"host.isolate"}, Effect: EffectRequireTwoParty,
+		Predicate: `ctx.targets.criticality_classes.any_in("domain-controller")`,
+	})
+	if d, _ := glist.Evaluate(in2); d.Mode != ModeTwoParty {
+		t.Errorf("list-form any_in → mode %q; want TWO_PARTY", d.Mode)
+	}
+}
+
+// TestCELParametersAvailable: ctx.action.parameters is populated from the
+// command's JSON parameters — a policy conditioning on it must see the values.
+func TestCELParametersAvailable(t *testing.T) {
+	g := mustGate2(t, Policy{
+		ID: "p/short-isolation/1", ActionMatch: []string{"host.isolate"}, Effect: EffectAutoApprove,
+		Predicate: `ctx.action.parameters.duration_hours <= 4.0`,
+	})
+	cmd := aggregate.RequestAction{
+		ActionType: "host.isolate",
+		Tier:       aggregate.TierT2,
+		Targets:    []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-A"}},
+		Parameters: []byte(`{"duration_hours": 2}`),
+	}
+	in := EvalInputForCommand(cmd, "HUMAN", "alice", time.Now())
+	in.AllDirect = true
+	d, err := g.Evaluate(in)
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if !d.AutoApproves() {
+		t.Errorf("parameters-conditioned policy did not fire: %+v", d)
 	}
 }
 

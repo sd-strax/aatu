@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.temporal.io/sdk/activity"
 	sdktemporal "go.temporal.io/sdk/temporal"
 
 	"github.com/sd-strax/reckon/action"
@@ -95,12 +96,15 @@ type DispatchInput struct {
 	Parameters map[string]any
 }
 
-// DispatchOutput is the classified outcome the workflow records.
+// DispatchOutput is the classified outcome the workflow records. Attempts is
+// the REAL attempt number this dispatch succeeded on (from activity info), so
+// the Execution audit record (04 §6.1) never carries a fabricated count.
 type DispatchOutput struct {
 	FinalOutcome     string
 	PerTargetResults map[string]string
 	Adapter          string
 	AdapterRequestID string
+	Attempts         int
 }
 
 // DoDispatch runs the actual outbound write via the action resolver. A FATAL
@@ -134,7 +138,20 @@ func (a *Activities) DoDispatch(ctx context.Context, in DispatchInput) (Dispatch
 		PerTargetResults: perTarget,
 		Adapter:          binding.Adapter,
 		AdapterRequestID: res.AdapterRequestID,
+		Attempts:         activityAttempt(ctx),
 	}, nil
+}
+
+// activityAttempt reads the current attempt number from activity info,
+// defaulting to 1 outside an activity context (unit tests), where
+// activity.GetInfo panics.
+func activityAttempt(ctx context.Context) (n int) {
+	n = 1
+	defer func() { _ = recover() }()
+	if a := int(activity.GetInfo(ctx).Attempt); a > 0 {
+		n = a
+	}
+	return n
 }
 
 // EmitResultedInput carries the terminal outcome to record.
