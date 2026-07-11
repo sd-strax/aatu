@@ -50,25 +50,47 @@ client-supplied. Two invariants the token-minting flow has to guarantee:
    (whose `sub` is the service account) is architecturally wrong: it would record
    the AI as the principal.
 
-### Required minting flow (IdP configuration — not yet built)
+### Minting flow — two-client realm (provisioned)
 
-The shape that satisfies both invariants is **RFC 8693 token exchange**:
+The bundled realm (`supervisor/keycloak_realm.json`, imported on first start)
+ships **two public clients** that together satisfy both invariants without any
+preview features:
 
-- The interactive surface (VS Code extension / CLI) holds the analyst's session
-  token.
-- Before driving an agent turn, it exchanges that token at a dedicated
-  `reckon-agent` client whose protocol mapper stamps `delegate_kind=<vendor>`.
-- The exchange **preserves `sub`** (the analyst) and the analyst's roles, and the
-  `reckon-agent` client only ever issues delegated tokens — so a caller can
-  neither forge nor strip the claim.
+- **`reckon`** — the human principal path. Carries the audience mapper and
+  **no** `delegate_kind` mapper. A token from this client is a human acting
+  directly.
+- **`reckon-agent`** — the AI-delegate path. Carries an
+  `oidc-hardcoded-claim-mapper` that stamps `delegate_kind` (v0: `claude`)
+  **issuer-side**, plus the same audience mapper. The surface obtains agent-turn
+  tokens through this client: `sub` stays the analyst and the realm roles carry
+  (realm roles are on the user, included in any client's token), so AI is a
+  delegate on the human's behalf — never a principal.
 
-This flow, plus realm provisioning (the three roles, the `tenant_id` /
-`delegate_kind` protocol mappers, and the PKCE client for the surfaces), is a
-**deployment obligation the code assumes but does not create**. It lands with
-the surface auth work and `reckon init` (first-run realm setup). Tests today
-bypass it with a mock OIDC issuer that mints tokens directly.
+The two invariants hold structurally:
 
-Until it exists, the honest posture is: the *engine-side* enforcement is
-complete and unspoofable **given a correctly-minted token**; the minting
-discipline is an IdP-configuration obligation, recorded here so it is not
-mistaken for done.
+1. **Issuer-minted, not caller-chosen** — the value comes from the client's
+   mapper; a public client cannot inject arbitrary claims, so a caller can
+   neither forge `delegate_kind` on the `reckon` client nor override its value on
+   `reckon-agent`.
+2. **`sub` preserved** — both clients authenticate the same analyst user, so a
+   delegated token still records the human as principal.
+
+Neither direction of abuse works: a human token (from `reckon`) can never gain
+the claim, and an agent token (from `reckon-agent`) can never shed it. Getting a
+non-delegated token requires the analyst's own `reckon`-client credentials —
+i.e. the human is present — so `delegate_kind` only ever *reduces* privilege
+(the AI-write-protection allowlist + baseline DENY), never escalates.
+
+`supervisor/keycloak_realm_test.go` guards this contract structurally: every
+`authz.AllRoles` role is defined, the human client omits the delegate mapper,
+and the agent client stamps `delegate_kind` onto the access token. A bad edit to
+the realm fails at `go test`, not at an analyst's first login.
+
+**Still a deployment obligation:** the *interactive login* that drives the two
+clients — the PKCE/browser flow, and choosing `reckon` vs `reckon-agent` per
+turn — belongs to the surface (VS Code extension / CLI auth), not the engine.
+`reckon init` provisions the realm on first start; the surface wires the login.
+Tests bypass both with a mock OIDC issuer. The v1 refinement, when multiple
+delegate vendors matter, is to make the mapper read a user attribute (or add a
+per-vendor client) instead of the v0 hardcoded value — the engine side does not
+change, it already reads whatever `delegate_kind` the realm mints.
