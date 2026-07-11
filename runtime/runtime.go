@@ -249,6 +249,9 @@ func serve(cfg config.Config) error {
 		Gate2:              gate2,
 		ActionCatalog:      actionCatalog,
 		Knowledge:          knowledgeStore,
+
+		TenantNamespace:         cfg.Capability.TenantNamespace,
+		ExportIncludeSideStores: cfg.Export.IncludeSideStores,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()

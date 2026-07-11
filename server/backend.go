@@ -97,6 +97,16 @@ type BackendConfig struct {
 	// Knowledge, when non-nil, enables the SOP corpus routes (/api/sops,
 	// /api/knowledge/recall_sops — Phase C.5). Nil leaves them unregistered.
 	Knowledge *knowledge.Store
+
+	// TenantNamespace is this install's identity namespace UUID (03 §7.1),
+	// stamped onto export bundles + their archive path (D.5).
+	TenantNamespace string
+
+	// ExportIncludeSideStores is the tenant policy for whether export bundles
+	// carry the Layer B side stores (07 §2.2). Sourced from config, NOT the
+	// export requester — a compliance deployment's redaction cannot be overridden
+	// per-request.
+	ExportIncludeSideStores bool
 }
 
 // Backend is the in-process HTTP server.
@@ -109,6 +119,10 @@ type Backend struct {
 	started      bool
 	verifier     *authz.Verifier
 	actionClient *temporal.Client // starts ActionLifecycle on auto-approval; nil until Start when action layer is on
+
+	// pipelineOverride is a test-only injection point for the export endpoint's
+	// pipeline starter; nil in production (the live actionClient is used).
+	pipelineOverride pipelineStarter
 
 	// hub fans projection deltas out to subscribed WebSocket clients. Set at
 	// construction so it outlives individual Start/Stop cycles.
@@ -400,14 +414,26 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 }
 
 // /investigations/{id} handles GET (load one); the /hypotheses sub-resource
-// lists the investigation's reasoning nodes (D.2).
+// lists the investigation's reasoning nodes (D.2); the /export sub-resource
+// triggers the post-conclusion export bundle (D.5).
 func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/hypotheses") {
+	trimmed := strings.TrimSuffix(r.URL.Path, "/")
+	if strings.HasSuffix(trimmed, "/hypotheses") {
 		switch r.Method {
 		case http.MethodGet:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationHypotheses)
 		default:
 			w.Header().Set("Allow", "GET")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/export") {
+		switch r.Method {
+		case http.MethodPost:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.exportInvestigation)
+		default:
+			w.Header().Set("Allow", "POST")
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 		return

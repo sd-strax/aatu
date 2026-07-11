@@ -84,6 +84,25 @@ func (c *Client) StartReversalSaga(ctx context.Context, in ReversalSagaInput) (s
 	return run.GetID(), nil
 }
 
+// StartPostConclusionPipeline starts (fire-and-forget) the post-conclusion
+// pipeline for a concluded investigation, returning the workflow id. The id is
+// derived from the grouping id, so a duplicate trigger (a re-export while one is
+// already running) is rejected by Temporal rather than producing two concurrent
+// builds. The bundle is a pure function of the immutable concluded
+// investigation, so a re-export after completion simply rebuilds the same
+// artifact.
+func (c *Client) StartPostConclusionPipeline(ctx context.Context, in ArchiveInvestigationInput) (string, error) {
+	id := "post-conclusion-" + in.GroupingID
+	run, err := c.c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        id,
+		TaskQueue: c.taskQueue,
+	}, WorkflowPostConclusionPipeline, in)
+	if err != nil {
+		return "", fmt.Errorf("start PostConclusionPipeline for %s: %w", in.GroupingID, err)
+	}
+	return run.GetID(), nil
+}
+
 // Ping executes the Ping workflow and returns its result, proving the round
 // trip command → Temporal → worker → result. Blocks until the workflow
 // completes.

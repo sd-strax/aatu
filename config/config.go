@@ -21,7 +21,19 @@ type Config struct {
 	Backend    Backend    `yaml:"backend"`
 	Telemetry  Telemetry  `yaml:"telemetry"`
 	Capability Capability `yaml:"capability"`
+	Export     Export     `yaml:"export"`
 	Paid       Paid       `yaml:"paid"`
+}
+
+// Export configures the post-conclusion export bundle (design 07). Tenant
+// policy, not the requester, decides what a bundle may contain.
+type Export struct {
+	// IncludeSideStores controls whether the export bundle carries the Layer B
+	// side stores — AI transcripts and tool-call payloads (07 §2.2). Default
+	// true (complete bundles for solo); compliance deployments set it false so
+	// prompt content never leaves the production system. This is a tenant
+	// policy: the export requester cannot override it.
+	IncludeSideStores bool `yaml:"include_side_stores"`
 }
 
 // Deployment names the distribution shape.
@@ -179,6 +191,10 @@ func Default() Config {
 			// Fixed namespace for the OSS default tenant; multi-tenant
 			// deployments override per tenant.
 			TenantNamespace: "6f1b2c3d-0000-4000-8000-000000000001",
+		},
+		Export: Export{
+			// Solo default: complete bundles. Compliance deployments flip this.
+			IncludeSideStores: true,
 		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},
