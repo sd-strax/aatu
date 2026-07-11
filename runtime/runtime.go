@@ -19,6 +19,7 @@ import (
 
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/archive"
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/branding"
@@ -197,6 +198,11 @@ func serve(cfg config.Config) error {
 		worker.WithActivities(activities)
 		log.Printf("%s: action-lifecycle activities registered on the worker", branding.CLI)
 	}
+	archiveActivities, err := buildArchiveActivities(cfg, handler)
+	if err != nil {
+		return err
+	}
+	worker.WithArchiveActivities(archiveActivities)
 
 	sup := supervisor.New()
 	sup.Register(pg, supervisor.FatalOnExit)
@@ -293,6 +299,20 @@ func buildActionActivities(cfg config.Config, handler *aggregate.Handler) (*temp
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
 	return temporal.NewActivities(handler, resolver), nil
+}
+
+// buildArchiveActivities constructs the post-conclusion export activities: the
+// aggregate handler (event store + projections), the tenant signing key (07
+// §2.2, loaded/created under <data>/keys), and the archive root (07 §2.4 solo
+// default <data>/archive). Unlike the action activities, these need no tenant
+// config — every deployment can export.
+func buildArchiveActivities(cfg config.Config, handler *aggregate.Handler) (*temporal.ArchiveActivities, error) {
+	signer, err := archive.LoadOrCreateSigner(filepath.Join(cfg.Data.Dir, "keys", "signing.ed25519"))
+	if err != nil {
+		return nil, fmt.Errorf("load signing key: %w", err)
+	}
+	archiveDir := filepath.Join(cfg.Data.Dir, "archive")
+	return temporal.NewArchiveActivities(handler, signer, archiveDir), nil
 }
 
 // buildCapability constructs the capability resolver + catalog from the tenant

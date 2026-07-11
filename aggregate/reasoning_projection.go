@@ -353,3 +353,70 @@ func ListPredictions(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]
 	}
 	return out, rows.Err()
 }
+
+// ListReasoningStixPayloads returns the canonical STIX payloads of the
+// interpretation-layer nodes belonging to one investigation — the objects the
+// export bundle's stix-bundle.json carries (07 §2.1). The reasoning nodes'
+// _current tables key the node by its full STIX id (x-hypothesis--<uuid>);
+// stix_objects keys by the bare uuid, so we join on the uuid extracted from the
+// full id (split on the STIX "--" separator). Ordered by type+id for a stable
+// bundle.
+func ListReasoningStixPayloads(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]json.RawMessage, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT payload FROM stix_objects
+		WHERE id IN (
+			SELECT split_part(id, '--', 2)::uuid FROM hypothesis_current WHERE aggregate_id = $1
+			UNION
+			SELECT split_part(id, '--', 2)::uuid FROM prediction_current WHERE aggregate_id = $1
+		)
+		ORDER BY type, id
+	`, aggregateID)
+	if err != nil {
+		return nil, fmt.Errorf("query reasoning stix_objects: %w", err)
+	}
+	defer rows.Close()
+
+	var out []json.RawMessage
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, fmt.Errorf("scan stix payload: %w", err)
+		}
+		out = append(out, json.RawMessage(payload))
+	}
+	return out, rows.Err()
+}
+
+// ActionSummary is the lightweight view of an x-action for the export report
+// (07 §2.1) — what it was, its tier, and where it ended.
+type ActionSummary struct {
+	ActionID   uuid.UUID
+	ActionType string
+	Tier       string
+	Status     string
+}
+
+// ListActionSummaries returns every x-action of one investigation, oldest
+// first, for the export report + audit view.
+func ListActionSummaries(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]ActionSummary, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT action_id, action_type, tier, status
+		FROM action_current
+		WHERE aggregate_id = $1
+		ORDER BY created_at, action_id
+	`, aggregateID)
+	if err != nil {
+		return nil, fmt.Errorf("query action_current: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ActionSummary
+	for rows.Next() {
+		var a ActionSummary
+		if err := rows.Scan(&a.ActionID, &a.ActionType, &a.Tier, &a.Status); err != nil {
+			return nil, fmt.Errorf("scan action summary: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

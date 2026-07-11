@@ -38,7 +38,8 @@ type WorkerConfig struct {
 type Worker struct {
 	cfg WorkerConfig
 
-	activities *Activities // action-lifecycle activities; nil = workflows-only worker
+	activities        *Activities        // action-lifecycle activities; nil = workflows-only worker
+	archiveActivities *ArchiveActivities // post-conclusion export activities; nil = archive workflows inert
 
 	mu      sync.Mutex // guards client/worker/started; Health runs concurrently with watcher Stop/Start
 	client  client.Client
@@ -52,6 +53,14 @@ type Worker struct {
 // the bare worker (A.7) never triggers it.
 func (w *Worker) WithActivities(a *Activities) *Worker {
 	w.activities = a
+	return w
+}
+
+// WithArchiveActivities injects the post-conclusion export activities (handler +
+// signer + archive dir) so the worker can run ArchiveInvestigation /
+// PostConclusionPipeline. Nil leaves those workflows registered but inert.
+func (w *Worker) WithArchiveActivities(a *ArchiveActivities) *Worker {
+	w.archiveActivities = a
 	return w
 }
 
@@ -92,6 +101,9 @@ func (w *Worker) Start(ctx context.Context) error {
 	registerWorkflows(wk)
 	if w.activities != nil {
 		wk.RegisterActivity(w.activities)
+	}
+	if w.archiveActivities != nil {
+		wk.RegisterActivity(w.archiveActivities)
 	}
 
 	if err := wk.Start(); err != nil {

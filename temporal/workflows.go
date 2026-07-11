@@ -65,16 +65,8 @@ func unimplemented(ctx workflow.Context, name string) error {
 // version changes. (Phase C+.)
 func RenormalizePass(ctx workflow.Context) error { return unimplemented(ctx, WorkflowRenormalizePass) }
 
-// ArchiveInvestigation bundles a concluded investigation for cold storage. (Phase C+.)
-func ArchiveInvestigation(ctx workflow.Context) error {
-	return unimplemented(ctx, WorkflowArchiveInvestigation)
-}
-
-// PostConclusionPipeline runs the 07 post-conclusion outputs (export bundle,
-// IOC extraction, candidate SOPs, ticket handoff). (Phase C+.)
-func PostConclusionPipeline(ctx workflow.Context) error {
-	return unimplemented(ctx, WorkflowPostConclusionPipeline)
-}
+// ArchiveInvestigation and PostConclusionPipeline have their real bodies in
+// archive.go (Phase D.5).
 
 // SummarizeForKnowledgeIndex summarizes a concluded investigation for the
 // knowledge index and embeddings. (Phase G.)
