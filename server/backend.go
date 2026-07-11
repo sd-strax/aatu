@@ -107,6 +107,10 @@ type BackendConfig struct {
 	// export requester — a compliance deployment's redaction cannot be overridden
 	// per-request.
 	ExportIncludeSideStores bool
+
+	// ExportAutoOnConclude fires the post-conclusion export automatically when an
+	// investigation concludes (07 §2.3). When false, export is on-demand only.
+	ExportAutoOnConclude bool
 }
 
 // Backend is the in-process HTTP server.
@@ -415,7 +419,8 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 
 // /investigations/{id} handles GET (load one); the /hypotheses sub-resource
 // lists the investigation's reasoning nodes (D.2); the /export sub-resource
-// triggers the post-conclusion export bundle (D.5).
+// triggers the post-conclusion export bundle (D.5); the /lifecycle sub-resource
+// drives the state machine (activate/pause/resume/conclude/reopen/archive, D.5).
 func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimSuffix(r.URL.Path, "/")
 	if strings.HasSuffix(trimmed, "/hypotheses") {
@@ -432,6 +437,16 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.exportInvestigation)
+		default:
+			w.Header().Set("Allow", "POST")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/lifecycle") {
+		switch r.Method {
+		case http.MethodPost:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.investigationLifecycle)
 		default:
 			w.Header().Set("Allow", "POST")
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")

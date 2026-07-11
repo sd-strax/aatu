@@ -252,6 +252,7 @@ func serve(cfg config.Config) error {
 
 		TenantNamespace:         cfg.Capability.TenantNamespace,
 		ExportIncludeSideStores: cfg.Export.IncludeSideStores,
+		ExportAutoOnConclude:    cfg.Export.AutoOnConclude,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()

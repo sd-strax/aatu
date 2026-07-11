@@ -34,6 +34,12 @@ type Export struct {
 	// prompt content never leaves the production system. This is a tenant
 	// policy: the export requester cannot override it.
 	IncludeSideStores bool `yaml:"include_side_stores"`
+
+	// AutoOnConclude fires the post-conclusion pipeline automatically when an
+	// investigation concludes (07 §2.3, "triggered automatically on
+	// InvestigationConcluded; default on"). Set false to require an explicit
+	// POST .../export instead.
+	AutoOnConclude bool `yaml:"auto_on_conclude"`
 }
 
 // Deployment names the distribution shape.
@@ -193,8 +199,9 @@ func Default() Config {
 			TenantNamespace: "6f1b2c3d-0000-4000-8000-000000000001",
 		},
 		Export: Export{
-			// Solo default: complete bundles. Compliance deployments flip this.
+			// Solo default: complete bundles, auto-exported at conclusion.
 			IncludeSideStores: true,
+			AutoOnConclude:    true,
 		},
 		Paid: Paid{
 			Governance: PaidGovernance{Mode: "lightweight"},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -86,12 +87,7 @@ func (b *Backend) exportInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wfID, err := starter.StartPostConclusionPipeline(r.Context(), temporal.ArchiveInvestigationInput{
-		GroupingID:        id.String(),
-		TenantID:          module.SingleTenantUUID.String(),
-		TenantNamespace:   b.cfg.TenantNamespace,
-		IncludeSideStores: b.cfg.ExportIncludeSideStores,
-	})
+	wfID, err := starter.StartPostConclusionPipeline(r.Context(), b.exportInput(id))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "start export: "+err.Error())
 		return
@@ -103,6 +99,38 @@ func (b *Backend) exportInvestigation(w http.ResponseWriter, r *http.Request) {
 		WorkflowID:       wfID,
 		Status:           "STARTED",
 	})
+}
+
+// exportInput builds the pipeline input for one investigation, sourcing the
+// side-store policy from config (never a caller). Shared by the on-demand
+// endpoint and the auto-on-conclude trigger.
+func (b *Backend) exportInput(id uuid.UUID) temporal.ArchiveInvestigationInput {
+	return temporal.ArchiveInvestigationInput{
+		GroupingID:        id.String(),
+		TenantID:          module.SingleTenantUUID.String(),
+		TenantNamespace:   b.cfg.TenantNamespace,
+		IncludeSideStores: b.cfg.ExportIncludeSideStores,
+	}
+}
+
+// autoExportOnConclude fires the post-conclusion pipeline after a successful
+// conclude, when policy enables it and the dispatch client is wired. Best-effort
+// (07 §2.3, default on): a failure is logged, not surfaced — the conclusion
+// stands, and an operator can retrigger via POST .../export.
+func (b *Backend) autoExportOnConclude(ctx context.Context, id uuid.UUID) {
+	if !b.cfg.ExportAutoOnConclude {
+		return
+	}
+	starter := b.getPipelineStarter()
+	if starter == nil {
+		//nolint:gosec // G706: id is a parsed uuid.UUID (fixed hex format), not free-form input
+		log.Printf("investigation %s concluded but export pipeline is unavailable; export on demand", id)
+		return
+	}
+	if _, err := starter.StartPostConclusionPipeline(ctx, b.exportInput(id)); err != nil {
+		//nolint:gosec // G706: id is a parsed uuid.UUID (fixed hex format), not free-form input
+		log.Printf("investigation %s: auto-export failed to start: %v", id, err)
+	}
 }
 
 // exportInvestigationID parses the id out of `/investigations/{id}/export`
