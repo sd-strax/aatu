@@ -55,6 +55,12 @@ type ArchiveBundleOutput struct {
 // enough to retry: it overwrites the same content-named path, and the bundle is
 // a pure function of the (immutable, concluded) investigation.
 func (a *ArchiveActivities) ArchiveBundle(ctx context.Context, in ArchiveBundleInput) (ArchiveBundleOutput, error) {
+	// TenantNamespace becomes a path component under the archive root — require
+	// a well-formed UUID so a crafted workflow input cannot traverse out of it.
+	if _, err := uuid.Parse(in.TenantNamespace); err != nil {
+		return ArchiveBundleOutput{}, fmt.Errorf("tenant namespace %q is not a valid uuid: %w", in.TenantNamespace, err)
+	}
+
 	inv, err := a.loadInvestigation(ctx, in)
 	if err != nil {
 		return ArchiveBundleOutput{}, err
@@ -66,13 +72,22 @@ func (a *ArchiveActivities) ArchiveBundle(ctx context.Context, in ArchiveBundleI
 	}
 
 	// 07 §2.4 solo default: <archive-root>/<tenant-namespace>/<file>.tar.gz.
+	// Written atomically (temp + rename): a crash mid-write must never leave a
+	// truncated bundle at a legitimate-looking path for someone to trust later.
+	// The filename is conclusion-time-derived (BuildBundle), so a retried
+	// activity replaces the same file instead of accumulating siblings.
 	dir := filepath.Join(a.archiveDir, in.TenantNamespace)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return ArchiveBundleOutput{}, fmt.Errorf("create archive dir: %w", err)
 	}
 	path := filepath.Join(dir, res.Filename)
-	if err := os.WriteFile(path, res.Bytes, 0o644); err != nil {
-		return ArchiveBundleOutput{}, fmt.Errorf("write bundle %s: %w", path, err)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, res.Bytes, 0o644); err != nil {
+		return ArchiveBundleOutput{}, fmt.Errorf("write bundle %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return ArchiveBundleOutput{}, fmt.Errorf("finalize bundle %s: %w", path, err)
 	}
 
 	return ArchiveBundleOutput{

@@ -82,6 +82,16 @@ func activate(build ModuleBuilder) (config.Config, module.Registry, error) {
 		return config.Config{}, module.Registry{}, fmt.Errorf("load config: %w", err)
 	}
 
+	// Running without a config file means running on the SHARED fixed identity
+	// namespace — deterministic STIX ids minted now will diverge from those a
+	// later `init` (fresh namespace) produces for the same entities. Surface it
+	// loudly rather than let the namespace switch silently mid-install.
+	if p, perr := config.DefaultPath(); perr == nil {
+		if _, statErr := os.Stat(p); os.IsNotExist(statErr) {
+			log.Printf("WARN: no config at %s — running on defaults with the shared fixed identity namespace; run `%s init` first so this install gets its own immutable namespace", p, branding.CLI)
+		}
+	}
+
 	reg := build(cfg)
 
 	// Warn if paid keys are set but the registry has no real paid module —

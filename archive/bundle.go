@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,10 @@ import (
 
 // bundleFormatVersion is the manifest schema version. Bump on any breaking
 // change to the bundle layout so an importer can refuse an unknown format.
-const bundleFormatVersion = "1.0"
+// 2.0: length-prefixed content-hash framing + signature over the manifest
+// bytes (1.0's name\n framing was boundary-malleable and left the manifest
+// metadata outside the signed envelope).
+const bundleFormatVersion = "2.0"
 
 // Blob is one content-addressed side-store entry (07 §2.1 side-stores/): a
 // Layer B transcript or tool-call payload, keyed by its content hash.
@@ -69,9 +73,15 @@ type Investigation struct {
 	ToolCalls         []Blob
 }
 
-// Manifest is the bundle's manifest.json (07 §2.1). ContentHash is the hash the
-// signature covers; it is computed over every OTHER file in the bundle, so the
-// manifest itself is not self-referential.
+// Manifest is the bundle's manifest.json (07 §2.1). It is the SIGNED statement:
+// the detached signature (signatures/bundle.sig) is over the SHA-256 of the
+// manifest.json bytes exactly as shipped, and the manifest in turn binds the
+// content files via ContentHash + Files. So both the metadata (grouping id,
+// tenant namespace, timestamps) and every file byte are inside the signed
+// envelope, and verification never needs to re-canonicalize JSON:
+//
+//  1. sig := signatures/bundle.sig; verify(pubkey, sha256(manifest.json), sig)
+//  2. recompute contentHashOf(files listed in Files) == ContentHash
 type Manifest struct {
 	FormatVersion   string    `json:"format_version"`
 	GroupingID      string    `json:"grouping_id"`
@@ -83,15 +93,17 @@ type Manifest struct {
 	Files           []string  `json:"files"` // the content files, sorted
 	ContentHash     string    `json:"content_hash"`
 	HashAlg         string    `json:"hash_alg"`
-	Signature       *Chain    `json:"signature,omitempty"`
 }
 
-// Chain is signatures/chain.json (07 §2.1): who signed, when, with what.
+// Chain is signatures/chain.json (07 §2.1): who signed, when, with what. Sig
+// duplicates signatures/bundle.sig for one-file consumption. chain.json is
+// deliberately OUTSIDE the signed envelope (it cannot self-authenticate anyway);
+// the trust anchor is the out-of-band public key pinned by KeyID.
 type Chain struct {
 	KeyID    string    `json:"key_id"`
 	Alg      string    `json:"alg"`
 	SignedAt time.Time `json:"signed_at"`
-	Sig      string    `json:"sig"` // hex detached signature over ContentHash
+	Sig      string    `json:"sig"` // hex detached signature over sha256(manifest.json)
 }
 
 // Result is a built bundle: the tar.gz bytes, the suggested filename, and the
@@ -102,21 +114,21 @@ type Result struct {
 	ContentHash string
 }
 
-// Signer signs a bundle's content hash (07 §2.2). Detached, so verification is
-// independent of reckon. Injected so the builder stays pure and tests use an
+// Signer signs a bundle's manifest digest (07 §2.2). Detached, so verification
+// is independent of reckon. Injected so the builder stays pure and tests use an
 // in-memory key.
 type Signer interface {
 	KeyID() string
 	Alg() string
-	Sign(contentHash []byte) ([]byte, error)
+	Sign(digest []byte) ([]byte, error)
 }
 
 // BuildBundle renders, hashes, signs, and packs an investigation into the
 // export bundle (07 §2.3 steps 6–8; step 9 — writing to the archive target — is
 // the workflow's job). generatedAt is passed in (not read from the clock) so
 // the workflow stays deterministic and tests are reproducible. A nil signer
-// produces an unsigned bundle (the manifest omits the signature) — the workflow
-// always passes one; unsigned is for callers that sign out of band.
+// produces an unsigned bundle (no signatures/ files) — the workflow always
+// passes one; unsigned is for callers that sign out of band.
 func BuildBundle(inv Investigation, signer Signer, generatedAt time.Time) (Result, error) {
 	// The content files, built in a stable order. The manifest is added last,
 	// after its ContentHash is computed over these.
@@ -158,36 +170,51 @@ func BuildBundle(inv Investigation, signer Signer, generatedAt time.Time) (Resul
 		ContentHash:     contentHashHex,
 		HashAlg:         "sha256",
 	}
+	manifestBytes := mustJSON(manifest)
+	files["manifest.json"] = manifestBytes
+
+	// The signature is over the SHA-256 of the manifest bytes as shipped — so
+	// the metadata AND (via ContentHash) every file byte sit inside the signed
+	// envelope, and a verifier never re-canonicalizes JSON.
 	if signer != nil {
-		sig, err := signer.Sign(contentHash)
+		digest := sha256.Sum256(manifestBytes)
+		sig, err := signer.Sign(digest[:])
 		if err != nil {
 			return Result{}, fmt.Errorf("sign bundle: %w", err)
 		}
-		manifest.Signature = &Chain{
+		files["signatures/bundle.sig"] = []byte(hex.EncodeToString(sig))
+		files["signatures/chain.json"] = mustJSON(Chain{
 			KeyID:    signer.KeyID(),
 			Alg:      signer.Alg(),
 			SignedAt: generatedAt.UTC(),
 			Sig:      hex.EncodeToString(sig),
-		}
-		files["signatures/chain.json"] = mustJSON(manifest.Signature)
-		files["signatures/bundle.sig"] = []byte(hex.EncodeToString(sig))
+		})
 	}
-	files["manifest.json"] = mustJSON(manifest)
 
 	packed, err := packTarGz(files)
 	if err != nil {
 		return Result{}, err
 	}
+	// The filename timestamp is the CONCLUSION time, not the build clock: a
+	// retried build lands on the SAME path (overwriting an equivalent bundle)
+	// instead of accumulating clock-named siblings.
+	ts := inv.ConcludedAt
+	if ts.IsZero() {
+		ts = generatedAt
+	}
 	return Result{
-		Filename:    fmt.Sprintf("investigation-%s-%s.tar.gz", inv.GroupingID, generatedAt.UTC().Format("20060102T150405Z")),
+		Filename:    fmt.Sprintf("investigation-%s-%s.tar.gz", inv.GroupingID, ts.UTC().Format("20060102T150405Z")),
 		Bytes:       packed,
 		ContentHash: contentHashHex,
 	}, nil
 }
 
 // contentHashOf hashes a set of files deterministically: sorted by name, each
-// contribution framed by "name\n" + bytes so both a rename and a byte flip
-// change the digest. This is the exact input the bundle signature covers.
+// contribution framed as len(name) ‖ name ‖ len(body) ‖ body (uint64 big-
+// endian). The length prefixes make the encoding injective — no two distinct
+// file sets share a digest. (The 1.0 "name\n"+bytes framing was malleable:
+// {"a": "x\nb\ny"} and {"a": "x", "b": "y"} concatenated identically, so file
+// boundaries could be restructured under a valid signature.)
 func contentHashOf(files map[string][]byte) []byte {
 	names := make([]string, 0, len(files))
 	for n := range files {
@@ -195,9 +222,13 @@ func contentHashOf(files map[string][]byte) []byte {
 	}
 	sort.Strings(names)
 	h := sha256.New()
+	var lenBuf [8]byte
 	for _, n := range names {
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(n)))
+		h.Write(lenBuf[:])
 		h.Write([]byte(n))
-		h.Write([]byte{'\n'})
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(files[n])))
+		h.Write(lenBuf[:])
 		h.Write(files[n])
 	}
 	return h.Sum(nil)

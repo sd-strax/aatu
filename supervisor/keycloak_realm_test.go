@@ -129,6 +129,15 @@ func TestRealm_AgentClientStampsDelegateKind(t *testing.T) {
 	if cfg["access.token.claim"] != "true" {
 		t.Error("delegate_kind must be set on the access token (access.token.claim=true)")
 	}
+	// The agent client needs the audience mapper too, or delegated tokens fail
+	// every client_id-locked deployment while human tokens keep working.
+	audCfg, ok := agent.mapper("oidc-audience-mapper")
+	if !ok {
+		t.Fatal("`reckon-agent` client is missing the audience mapper")
+	}
+	if audCfg["included.client.audience"] != "reckon" {
+		t.Errorf("agent audience = %q; want reckon", audCfg["included.client.audience"])
+	}
 	// The engine reads delegate_kind out of the access token; assert the parser
 	// would actually see it by round-tripping a synthetic token body.
 	body := `{"sub":"analyst-1","delegate_kind":"` + cfg["claim.value"] + `","realm_access":{"roles":["analyst"]}}`

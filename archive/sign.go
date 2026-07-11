@@ -26,9 +26,10 @@ func (s *Ed25519Signer) KeyID() string { return s.keyID }
 // Alg names the signature algorithm.
 func (*Ed25519Signer) Alg() string { return "ed25519" }
 
-// Sign returns the detached signature over the content hash.
-func (s *Ed25519Signer) Sign(contentHash []byte) ([]byte, error) {
-	return ed25519.Sign(s.priv, contentHash), nil
+// Sign returns the detached signature over the given digest (the SHA-256 of
+// the manifest bytes).
+func (s *Ed25519Signer) Sign(digest []byte) ([]byte, error) {
+	return ed25519.Sign(s.priv, digest), nil
 }
 
 // PublicKey returns the verifying key, so callers can persist/publish it for

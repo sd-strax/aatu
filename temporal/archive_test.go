@@ -1,6 +1,7 @@
 package temporal
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -34,6 +35,21 @@ func TestArchiveInvestigation_RunsBundleActivity(t *testing.T) {
 	}
 	if res.ContentHash != "deadbeef" || res.SizeBytes != 2048 {
 		t.Errorf("result = %+v; want the activity's descriptor", res)
+	}
+}
+
+// TestArchiveBundle_RejectsTraversalNamespace: TenantNamespace becomes a path
+// component under the archive root — anything that is not a well-formed UUID
+// (e.g. "../../tmp/evil") is rejected before any filesystem or DB touch.
+func TestArchiveBundle_RejectsTraversalNamespace(t *testing.T) {
+	acts := NewArchiveActivities(nil, nil, t.TempDir())
+	_, err := acts.ArchiveBundle(context.Background(), ArchiveBundleInput{
+		GroupingID:      "11111111-1111-1111-1111-111111111111",
+		TenantID:        "22222222-2222-2222-2222-222222222222",
+		TenantNamespace: "../../../../tmp/evil",
+	})
+	if err == nil {
+		t.Fatal("traversal namespace accepted as an archive path component")
 	}
 }
 

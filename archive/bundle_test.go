@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -114,8 +115,9 @@ func TestBuildBundle_StructureAndSignature(t *testing.T) {
 		t.Errorf("stix-bundle.json = %s (%v); want a bundle with 1 object", files["stix-bundle.json"], err)
 	}
 
-	// The manifest's content hash must equal a recompute over every non-manifest,
-	// non-signature file — and the signature must verify over that hash.
+	// Full verification, exactly as a third party would do it (see Manifest doc):
+	// (1) the detached signature verifies over sha256(manifest.json as shipped);
+	// (2) the manifest's ContentHash equals a recompute over the listed files.
 	var m Manifest
 	if err := json.Unmarshal(files["manifest.json"], &m); err != nil {
 		t.Fatalf("manifest parse: %v", err)
@@ -123,25 +125,50 @@ func TestBuildBundle_StructureAndSignature(t *testing.T) {
 	if m.ContentHash != res.ContentHash {
 		t.Errorf("manifest hash %s != result hash %s", m.ContentHash, res.ContentHash)
 	}
-	if m.Signature == nil {
-		t.Fatal("manifest missing signature")
-	}
-	sig, err := hex.DecodeString(m.Signature.Sig)
+	sig, err := hex.DecodeString(string(files["signatures/bundle.sig"]))
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash, err := hex.DecodeString(m.ContentHash)
-	if err != nil {
+	digest := sha256.Sum256(files["manifest.json"])
+	if !ed25519.Verify(signer.PublicKey(), digest[:], sig) {
+		t.Error("signature does not verify over the manifest bytes")
+	}
+	content := map[string][]byte{}
+	for _, name := range m.Files {
+		body, ok := files[name]
+		if !ok {
+			t.Fatalf("manifest lists %s but the bundle lacks it", name)
+		}
+		content[name] = body
+	}
+	if hex.EncodeToString(contentHashOf(content)) != m.ContentHash {
+		t.Error("recomputed content hash does not match the manifest")
+	}
+	// chain.json carries the same signature + the signing key id.
+	var chain Chain
+	if err := json.Unmarshal(files["signatures/chain.json"], &chain); err != nil {
 		t.Fatal(err)
 	}
-	if !ed25519.Verify(signer.PublicKey(), hash, sig) {
-		t.Error("signature does not verify against the signer's public key")
+	if chain.KeyID != signer.KeyID() || chain.Sig != string(files["signatures/bundle.sig"]) {
+		t.Errorf("chain = %+v; want key %s and the detached sig", chain, signer.KeyID())
 	}
 }
 
-// TestBuildBundle_TamperDetected: flipping a byte in a content file changes the
-// recomputed hash, so the recorded signature no longer verifies — the bundle is
-// tamper-evident.
+// TestContentHash_FramingInjective: the length-prefixed framing must give
+// distinct digests to distinct file sets — the 1.0 framing collided on exactly
+// this pair, letting file boundaries be restructured under a valid signature.
+func TestContentHash_FramingInjective(t *testing.T) {
+	a := contentHashOf(map[string][]byte{"a": []byte("x\nb\ny")})
+	b := contentHashOf(map[string][]byte{"a": []byte("x"), "b": []byte("y")})
+	if bytes.Equal(a, b) {
+		t.Fatal("distinct file sets produced the same content hash (malleable framing)")
+	}
+}
+
+// TestBuildBundle_TamperDetected: both tamper directions are caught. Flipping a
+// byte in a content file breaks the manifest's content hash (step 2 of
+// verification); flipping a byte in the manifest — including its metadata
+// fields, which sit INSIDE the signed envelope — breaks the signature (step 1).
 func TestBuildBundle_TamperDetected(t *testing.T) {
 	signer, _ := GenerateEd25519Signer()
 	res, err := BuildBundle(sampleInvestigation(), signer, time.Unix(0, 0).UTC())
@@ -149,25 +176,33 @@ func TestBuildBundle_TamperDetected(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := untar(t, res.Bytes)
-
 	var m Manifest
 	if err := json.Unmarshal(files["manifest.json"], &m); err != nil {
 		t.Fatal(err)
 	}
-	sig, _ := hex.DecodeString(m.Signature.Sig)
+	sig, _ := hex.DecodeString(string(files["signatures/bundle.sig"]))
 
-	// Recompute the content hash the way BuildBundle does, but over a TAMPERED
-	// report — it must differ, and the original signature must fail against it.
-	tampered := append([]byte(nil), files["investigation.report.md"]...)
-	tampered = append(tampered, '!')
-	files["investigation.report.md"] = tampered
-
-	rehash := recomputeContentHash(files)
-	if hex.EncodeToString(rehash) == m.ContentHash {
+	// (a) Content tamper: the recomputed hash over the listed files diverges.
+	tampered := map[string][]byte{}
+	for _, name := range m.Files {
+		tampered[name] = files[name]
+	}
+	tampered["investigation.report.md"] = append(append([]byte(nil), tampered["investigation.report.md"]...), '!')
+	if hex.EncodeToString(contentHashOf(tampered)) == m.ContentHash {
 		t.Fatal("tampered content produced the same hash")
 	}
-	if ed25519.Verify(signer.PublicKey(), rehash, sig) {
-		t.Error("signature verified over tampered content — not tamper-evident")
+
+	// (b) Metadata tamper: re-attributing the manifest (e.g. its grouping id)
+	// changes the manifest bytes, so the signature over them fails.
+	badManifest := bytes.Replace(files["manifest.json"],
+		[]byte("11111111-1111-1111-1111-111111111111"),
+		[]byte("22222222-2222-2222-2222-222222222222"), 1)
+	if bytes.Equal(badManifest, files["manifest.json"]) {
+		t.Fatal("test setup: grouping id not found in manifest")
+	}
+	digest := sha256.Sum256(badManifest)
+	if ed25519.Verify(signer.PublicKey(), digest[:], sig) {
+		t.Error("signature verified over a re-attributed manifest — metadata is outside the envelope")
 	}
 }
 
@@ -186,27 +221,10 @@ func TestBuildBundle_RedactsSideStores(t *testing.T) {
 			t.Errorf("redacted bundle still contains %s", name)
 		}
 	}
-	// An unsigned build (nil signer) omits the signature files + manifest sig.
-	if _, ok := files["signatures/bundle.sig"]; ok {
-		t.Error("unsigned bundle carries a signature file")
-	}
-	var m Manifest
-	_ = json.Unmarshal(files["manifest.json"], &m)
-	if m.Signature != nil {
-		t.Error("unsigned manifest carries a signature block")
-	}
-}
-
-// recomputeContentHash mirrors BuildBundle's hashing over the content files
-// (everything except manifest.json and signatures/*), for the tamper test.
-func recomputeContentHash(files map[string][]byte) []byte {
-	content := map[string][]byte{}
-	for n, b := range files {
-		if n == "manifest.json" || strings.HasPrefix(n, "signatures/") {
-			continue
+	// An unsigned build (nil signer) omits the signatures/ files entirely.
+	for _, name := range []string{"signatures/bundle.sig", "signatures/chain.json"} {
+		if _, ok := files[name]; ok {
+			t.Errorf("unsigned bundle carries %s", name)
 		}
-		content[n] = b
 	}
-	// Reuse the same framing as BuildBundle via a throwaway build path.
-	return contentHashOf(content)
 }

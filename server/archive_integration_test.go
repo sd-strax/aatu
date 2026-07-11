@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -97,17 +98,18 @@ func TestArchiveBundle_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	namespace := uuid.NewString()
 	acts := temporal.NewArchiveActivities(testHandler, signer, t.TempDir())
 	out, err := acts.ArchiveBundle(ctx, temporal.ArchiveBundleInput{
 		GroupingID:        invID.String(),
 		TenantID:          module.SingleTenantUUID.String(),
-		TenantNamespace:   "test-namespace",
+		TenantNamespace:   namespace,
 		IncludeSideStores: true,
 	})
 	if err != nil {
 		t.Fatalf("ArchiveBundle: %v", err)
 	}
-	if !strings.Contains(out.Path, "test-namespace") || out.SizeBytes == 0 {
+	if !strings.Contains(out.Path, namespace) || out.SizeBytes == 0 {
 		t.Errorf("output = %+v; want a namespaced non-empty bundle", out)
 	}
 
@@ -144,17 +146,18 @@ func TestArchiveBundle_EndToEnd(t *testing.T) {
 		t.Error("no transcript in the bundle side stores")
 	}
 
-	// The signature verifies over the manifest's content hash.
+	// The detached signature verifies over the manifest bytes as shipped (the
+	// signed envelope covers the metadata AND, via ContentHash, every file).
 	var m archive.Manifest
 	if err := json.Unmarshal(files["manifest.json"], &m); err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
-	if m.ContentHash != out.ContentHash || m.Signature == nil {
-		t.Fatalf("manifest hash/signature mismatch: %+v", m)
+	if m.ContentHash != out.ContentHash {
+		t.Fatalf("manifest hash %s != activity hash %s", m.ContentHash, out.ContentHash)
 	}
-	sig, _ := hex.DecodeString(m.Signature.Sig)
-	hash, _ := hex.DecodeString(m.ContentHash)
-	if !ed25519.Verify(signer.PublicKey(), hash, sig) {
+	sig, _ := hex.DecodeString(string(files["signatures/bundle.sig"]))
+	digest := sha256.Sum256(files["manifest.json"])
+	if !ed25519.Verify(signer.PublicKey(), digest[:], sig) {
 		t.Error("bundle signature does not verify")
 	}
 }
@@ -173,9 +176,9 @@ func TestArchiveBundle_RejectsUnconcluded(t *testing.T) {
 	_, err := acts.ArchiveBundle(context.Background(), temporal.ArchiveBundleInput{
 		GroupingID:      invID.String(),
 		TenantID:        module.SingleTenantUUID.String(),
-		TenantNamespace: "ns",
+		TenantNamespace: uuid.NewString(),
 	})
-	if err == nil {
-		t.Fatal("exported a non-concluded investigation")
+	if err == nil || !strings.Contains(err.Error(), "CONCLUDED") {
+		t.Fatalf("want a CONCLUDED-only rejection; got %v", err)
 	}
 }
