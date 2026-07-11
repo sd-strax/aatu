@@ -20,17 +20,9 @@ import (
 // test handler and returns its id, so an action can be requested against it.
 func activeInvestigation(t *testing.T) uuid.UUID {
 	t.Helper()
-	id := uuid.New()
-	env := func() aggregate.Envelope {
-		return aggregate.Envelope{
-			AggregateID: id, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
-			Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC(),
-		}
-	}
-	if _, err := testHandler.Handle(context.Background(), env(), aggregate.CreateInvestigation{Title: "INV"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testHandler.Handle(context.Background(), env(), aggregate.ActivateInvestigation{}); err != nil {
+	id := draftInvestigation(t)
+	env := newEnvelope(id, aggregate.Actor{PrincipalID: "test-subject"}, commandNow())
+	if _, err := testHandler.Handle(context.Background(), env, aggregate.ActivateInvestigation{}); err != nil {
 		t.Fatal(err)
 	}
 	return id

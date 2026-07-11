@@ -117,23 +117,17 @@ func (b *Backend) approveAction(w http.ResponseWriter, r *http.Request, actionID
 		return
 	}
 
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	now := commandNow()
 	auth, willApprove, approverID, errMsg := b.buildApproval(ac, claims.Subject, body.ChallengeResponse, now)
 	if errMsg != "" {
 		writeJSONError(w, http.StatusConflict, errMsg)
 		return
 	}
 
-	env := aggregate.Envelope{
-		AggregateID:   ac.AggregateID,
-		TenantID:      module.SingleTenantUUID,
-		CorrelationID: uuid.New(),
-		// Derived from the claims (not hardcoded HUMAN): the 403 above already
-		// rejected delegate tokens, and deriving keeps the aggregate's
-		// AI-write-protection a REAL second layer behind that check.
-		Actor:      actorFromClaims(claims),
-		OccurredAt: now,
-	}
+	// Actor derived from the claims (not hardcoded HUMAN): the 403 above
+	// already rejected delegate tokens, and deriving keeps the aggregate's
+	// AI-write-protection a REAL second layer behind that check.
+	env := newEnvelope(ac.AggregateID, actorFromClaims(claims), now)
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.ApproveAction{ActionID: actionID, Authorization: auth})
 	if err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, "approve action: "+err.Error())
@@ -158,8 +152,7 @@ func (b *Backend) approveAction(w http.ResponseWriter, r *http.Request, actionID
 		resp.Status = aggregate.ActionStatusPendingSecondary
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // buildApproval derives the Authorization for this approval from the action's
@@ -259,14 +252,7 @@ func (b *Backend) rejectAction(w http.ResponseWriter, r *http.Request, actionID 
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	env := aggregate.Envelope{
-		AggregateID:   ac.AggregateID,
-		TenantID:      module.SingleTenantUUID,
-		CorrelationID: uuid.New(),
-		Actor:         actorFromClaims(claims), // derived, so the allowlist backs the 403 above
-		OccurredAt:    now,
-	}
+	env := newEnvelope(ac.AggregateID, actorFromClaims(claims), commandNow()) // actor derived, so the allowlist backs the 403 above
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.RejectAction{ActionID: actionID, Reason: body.Reason})
 	if err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, "reject action: "+err.Error())
@@ -274,8 +260,7 @@ func (b *Backend) rejectAction(w http.ResponseWriter, r *http.Request, actionID 
 	}
 	b.publishDeltas(res)
 
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(ActionDecisionResponse{
+	writeJSON(w, http.StatusOK, ActionDecisionResponse{
 		ActionID: actionID.String(),
 		Status:   aggregate.ActionStatusRejected,
 	})

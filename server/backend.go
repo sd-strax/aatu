@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
 
 	"github.com/sd-strax/reckon/action"
@@ -88,9 +89,8 @@ type BackendConfig struct {
 
 	// Gate2 and ActionCatalog, when both non-nil, enable the POST /api/actions
 	// (request_action) route (the write-side authorization path, Phase C). Nil
-	// leaves it a 503. When TemporalHostPort is reachable, the Backend also
-	// starts an action-dispatch client at Start to trigger ActionLifecycle on
-	// auto-approval.
+	// leaves it a 503. The Temporal dispatch client is opened at Start
+	// regardless — it also serves the export pipeline.
 	Gate2         *action.Gate2
 	ActionCatalog *action.ActionCatalog
 
@@ -118,14 +118,19 @@ type Backend struct {
 	cfg BackendConfig
 	sup *supervisor.Supervisor
 
-	mu           sync.Mutex
-	srv          *http.Server
-	started      bool
-	verifier     *authz.Verifier
-	actionClient *temporal.Client // starts ActionLifecycle on auto-approval; nil until Start when action layer is on
+	mu       sync.Mutex
+	srv      *http.Server
+	started  bool
+	verifier *authz.Verifier
+
+	// dispatchClient is the shared Temporal client: it starts ActionLifecycle/
+	// ReversalSaga on approvals AND the PostConclusionPipeline for exports.
+	// Opened at Start (Temporal is a probed dependency), independent of whether
+	// the action layer is configured — the export surface must work without it.
+	dispatchClient *temporal.Client
 
 	// pipelineOverride is a test-only injection point for the export endpoint's
-	// pipeline starter; nil in production (the live actionClient is used).
+	// pipeline starter; nil in production (the live dispatchClient is used).
 	pipelineOverride pipelineStarter
 
 	// hub fans projection deltas out to subscribed WebSocket clients. Set at
@@ -170,14 +175,14 @@ func (b *Backend) Start(ctx context.Context) error {
 		return fmt.Errorf("init verifier: %w", err)
 	}
 
-	// When the action layer is on, open the dispatch client (Temporal is already
-	// probed reachable above) so auto-approvals can trigger ActionLifecycle.
-	var actionClient *temporal.Client
-	if b.cfg.Gate2 != nil && b.cfg.ActionCatalog != nil {
-		actionClient, err = temporal.NewClient(temporal.ClientConfig{HostPort: b.cfg.TemporalHostPort})
-		if err != nil {
-			return fmt.Errorf("start action dispatch client: %w", err)
-		}
+	// Open the dispatch client unconditionally (Temporal is already probed
+	// reachable above). It serves the action path (ActionLifecycle on approval)
+	// AND the export path (PostConclusionPipeline) — tying it to the action
+	// layer would silently disable auto-export on deployments that never
+	// configure write actions (07 §2.3 defaults auto-export ON).
+	dispatchClient, err := temporal.NewClient(temporal.ClientConfig{HostPort: b.cfg.TemporalHostPort})
+	if err != nil {
+		return fmt.Errorf("start temporal dispatch client: %w", err)
 	}
 
 	mux := b.buildRouter(verifier)
@@ -190,7 +195,7 @@ func (b *Backend) Start(ctx context.Context) error {
 
 	b.mu.Lock()
 	b.verifier = verifier
-	b.actionClient = actionClient
+	b.dispatchClient = dispatchClient
 	b.srv = &http.Server{
 		Addr:              addr,
 		Handler:           mux,
@@ -215,15 +220,15 @@ func (b *Backend) Start(ctx context.Context) error {
 func (b *Backend) Stop(ctx context.Context) error {
 	b.mu.Lock()
 	srv := b.srv
-	actionClient := b.actionClient
+	dispatchClient := b.dispatchClient
 	b.srv = nil
 	b.started = false
 	b.verifier = nil
-	b.actionClient = nil
+	b.dispatchClient = nil
 	b.mu.Unlock()
 
-	if actionClient != nil {
-		actionClient.Close()
+	if dispatchClient != nil {
+		dispatchClient.Close()
 	}
 	if srv == nil {
 		return nil
@@ -234,12 +239,12 @@ func (b *Backend) Stop(ctx context.Context) error {
 	return srv.Shutdown(ctx)
 }
 
-// getActionClient returns the dispatch client under lock (it is nil unless the
-// action layer is configured and Start has run).
-func (b *Backend) getActionClient() *temporal.Client {
+// getDispatchClient returns the shared Temporal client under lock (nil until
+// Start has run).
+func (b *Backend) getDispatchClient() *temporal.Client {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.actionClient
+	return b.dispatchClient
 }
 
 // Health reports whether the HTTP server is up. The rich "are deps healthy"
@@ -394,7 +399,7 @@ func (b *Backend) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "auth context missing")
 		return
 	}
-	_ = json.NewEncoder(w).Encode(MeResponse{
+	writeJSON(w, http.StatusOK, MeResponse{
 		Subject:           c.Subject,
 		PreferredUsername: c.PreferredUsername,
 		TenantID:          c.TenantID,
@@ -412,15 +417,14 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 	case http.MethodPost:
 		b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.createInvestigation)
 	default:
-		w.Header().Set("Allow", "GET, POST")
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		methodNotAllowed(w, "GET, POST")
 	}
 }
 
 // /investigations/{id} handles GET (load one); the /hypotheses sub-resource
 // lists the investigation's reasoning nodes (D.2); the /export sub-resource
 // triggers the post-conclusion export bundle (D.5); the /lifecycle sub-resource
-// drives the state machine (activate/pause/resume/conclude/reopen/archive, D.5).
+// drives the state machine (activate/pause/resume/conclude/reopen/archive, D.6).
 func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimSuffix(r.URL.Path, "/")
 	if strings.HasSuffix(trimmed, "/hypotheses") {
@@ -428,8 +432,7 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		case http.MethodGet:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationHypotheses)
 		default:
-			w.Header().Set("Allow", "GET")
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			methodNotAllowed(w, "GET")
 		}
 		return
 	}
@@ -438,8 +441,7 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPost:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.exportInvestigation)
 		default:
-			w.Header().Set("Allow", "POST")
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			methodNotAllowed(w, "POST")
 		}
 		return
 	}
@@ -448,8 +450,7 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPost:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.investigationLifecycle)
 		default:
-			w.Header().Set("Allow", "POST")
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			methodNotAllowed(w, "POST")
 		}
 		return
 	}
@@ -457,9 +458,23 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.getInvestigation)
 	default:
-		w.Header().Set("Allow", "GET")
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		methodNotAllowed(w, "GET")
 	}
+}
+
+// investigationSubresourceID parses the id out of `/investigations/{id}/<sub>`
+// (the /api prefix is already stripped). The single parser for every
+// investigation sub-resource route, so path handling cannot drift per-suffix.
+func investigationSubresourceID(p, sub string) (uuid.UUID, bool) {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) != 3 || parts[0] != "investigations" || parts[2] != sub {
+		return uuid.UUID{}, false
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil {
+		return uuid.UUID{}, false
+	}
+	return id, true
 }
 
 // requireRolesOrDeny is an inline equivalent to authz.RequireRole, used by
@@ -489,8 +504,7 @@ func (b *Backend) requireRolesOrDeny(w http.ResponseWriter, r *http.Request, rol
 // summaries with their availability. Read requires viewer/analyst/auditor.
 func (b *Backend) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		methodNotAllowed(w, "GET")
 		return
 	}
 	if b.cfg.CapabilityResolver == nil || b.cfg.CapabilityCatalog == nil {
@@ -557,9 +571,24 @@ func (b *Backend) probeKeycloak(ctx context.Context) error {
 	return nil
 }
 
-// writeJSONError writes a stable error JSON shape for all non-2xx responses.
-func writeJSONError(w http.ResponseWriter, status int, msg string) {
+// writeJSON writes a JSON response with the given status. Every handler's JSON
+// response goes through here (or writeJSONError) so the Content-Type is set
+// uniformly — a bare Encode after WriteHeader gets content-sniffed to
+// text/plain by net/http.
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg})
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeJSONError writes a stable error JSON shape for all non-2xx responses.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+// methodNotAllowed writes the 405 + Allow-header pair every route uses for an
+// unsupported method.
+func methodNotAllowed(w http.ResponseWriter, allow string) {
+	w.Header().Set("Allow", allow)
+	writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 }

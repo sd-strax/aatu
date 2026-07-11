@@ -8,6 +8,20 @@ import (
 	"github.com/google/uuid"
 )
 
+// Sentinel causes threaded through command-rejection errors so callers (the
+// HTTP layer foremost) can map them to distinct outcomes without parsing
+// error strings. Both surface wrapped in a *RejectedError from Handle;
+// errors.Is sees through the wrapping.
+var (
+	// ErrNotFound marks a command addressed to an aggregate that has no
+	// events — the investigation does not exist.
+	ErrNotFound = errors.New("investigation does not exist")
+
+	// ErrAIDenied marks an AI_DELEGATED command outside the allowlist
+	// (04 §5.6) — a permission denial, not a state-machine rejection.
+	ErrAIDenied = errors.New("not in the AI_DELEGATED command allowlist (04 §5.6)")
+)
+
 // Command is anything that produces zero or more Events when applied to
 // an aggregate. Implementations are pure values — Command does not own a
 // transaction or know about the database. The Handler orchestrates
@@ -174,7 +188,7 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 	// delegate_kind claim, never from the request body, or this guard is
 	// caller-spoofable.
 	if env.Actor.IsAIDelegated() && !aiAllowed(cmd) {
-		return nil, fmt.Errorf("%s rejected: not in the AI_DELEGATED command allowlist (04 §5.6)", cmd.Kind())
+		return nil, fmt.Errorf("%s rejected: %w", cmd.Kind(), ErrAIDenied)
 	}
 
 	// System-only guard: dispatch/result/expiry are lifecycle transitions the
@@ -187,7 +201,7 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 
 	if _, isCreate := cmd.(CreateInvestigation); !isCreate {
 		if !state.Exists {
-			return nil, fmt.Errorf("%s on non-existent investigation %s", cmd.Kind(), env.AggregateID)
+			return nil, fmt.Errorf("%s on non-existent investigation %s: %w", cmd.Kind(), env.AggregateID, ErrNotFound)
 		}
 		// An aggregate belongs to exactly one tenant, stamped at creation
 		// (01-domain-model.md §5). A command arriving under a different tenant

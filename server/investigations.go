@@ -5,13 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
-	"github.com/sd-strax/reckon/module"
 )
 
 // InvestigationView is the JSON shape returned to clients.
@@ -63,7 +61,7 @@ func (b *Backend) listInvestigations(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []InvestigationView{}
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"investigations": out})
+	writeJSON(w, http.StatusOK, map[string]any{"investigations": out})
 }
 
 // getInvestigation loads a single investigation by aggregate_id.
@@ -86,7 +84,7 @@ func (b *Backend) getInvestigation(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_ = json.NewEncoder(w).Encode(InvestigationView{
+	writeJSON(w, http.StatusOK, InvestigationView{
 		AggregateID:       ic.AggregateID.String(),
 		Title:             ic.Title,
 		Status:            ic.Status,
@@ -118,19 +116,7 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TenantID is the single OSS tenant. When the paid tenancy module is wired
-	// into the Backend, this becomes module.TenancyModule.ResolveTenant(ctx)
-	// (resolved from the JWT / claim routing); the schema and write path are
-	// already tenant-aware, so only this line changes.
-	env := aggregate.Envelope{
-		AggregateID:   uuid.New(),
-		TenantID:      module.SingleTenantUUID,
-		CorrelationID: uuid.New(),
-		Actor: aggregate.Actor{
-			PrincipalID: claims.Subject,
-		},
-		OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
-	}
+	env := newEnvelope(uuid.New(), aggregate.Actor{PrincipalID: claims.Subject}, commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.CreateInvestigation{Title: req.Title})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "create investigation: "+err.Error())
@@ -138,8 +124,7 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 	}
 	b.publishDeltas(res)
 
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(CreateInvestigationResponse{
+	writeJSON(w, http.StatusCreated, CreateInvestigationResponse{
 		InvestigationView: InvestigationView{
 			AggregateID:       res.AggregateID.String(),
 			Title:             req.Title,

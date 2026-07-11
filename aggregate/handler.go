@@ -51,6 +51,19 @@ type Result struct {
 	NewSequenceNo int64
 }
 
+// RejectedError marks a domain rejection: the command was well-formed at the
+// transport layer but illegal against the aggregate's current state (or shape —
+// Validate failures land here too). Callers can distinguish it from
+// infrastructure failures (load/append/commit), which Handle returns unwrapped,
+// and from ErrConcurrent. Unwrap exposes the underlying cause so errors.Is
+// still matches the sentinels (ErrNotFound, ErrAIDenied).
+type RejectedError struct{ Err error }
+
+func (e *RejectedError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the underlying rejection cause.
+func (e *RejectedError) Unwrap() error { return e.Err }
+
 // Handle executes one command:
 //
 //  1. BEGIN TX
@@ -99,7 +112,7 @@ func (h *Handler) Handle(ctx context.Context, env Envelope, cmd Command) (res Re
 
 	events, err := applyCommand(env, cmd, state)
 	if err != nil {
-		return Result{}, err
+		return Result{}, &RejectedError{Err: err}
 	}
 
 	for i := range events {

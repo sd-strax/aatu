@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -95,13 +96,15 @@ type ConcludeInvestigation struct {
 // Kind returns "ConcludeInvestigation".
 func (ConcludeInvestigation) Kind() string { return "ConcludeInvestigation" }
 
-// Validate requires a non-empty ReportRef — concluded investigations must carry
-// a conclusion_ref (01-domain-model.md §Extension 2 invariant).
+// Validate requires a non-blank ReportRef — concluded investigations must carry
+// a conclusion_ref (01-domain-model.md §Extension 2 invariant). Whitespace-only
+// is rejected here, at the single write path, so no caller can persist a
+// conclusion_ref that is blank in all but bytes.
 func (c ConcludeInvestigation) Validate(env Envelope) error {
 	if err := validateEnvelope(env); err != nil {
 		return err
 	}
-	if c.ReportRef == "" {
+	if strings.TrimSpace(c.ReportRef) == "" {
 		return errors.New("ConcludeInvestigation: ReportRef is required (a conclusion needs a Report)")
 	}
 	return nil
@@ -128,6 +131,36 @@ func (ArchiveInvestigation) Kind() string { return "ArchiveInvestigation" }
 
 // Validate checks the envelope shape.
 func (ArchiveInvestigation) Validate(env Envelope) error { return validateEnvelope(env) }
+
+// StatusAfter returns the lifecycle status implied by the last status-bearing
+// event in events ("" if none) — the same fold foldState applies. Callers
+// rendering a post-command status (e.g. the lifecycle endpoint) should use
+// this rather than re-encoding the state machine's transition targets, so the
+// aggregate stays the single owner of event→status knowledge.
+func StatusAfter(events []Event) string {
+	status := ""
+	for _, e := range events {
+		switch e.Type {
+		case EventTypeCreated:
+			status = StatusDraft
+		case EventTypeStatusChanged:
+			var p InvestigationStatusChanged
+			// The payload was marshaled by this package moments earlier; an
+			// unparsable one cannot occur on the Handle path, so skip rather
+			// than fail the render.
+			if err := json.Unmarshal(e.Payload, &p); err == nil {
+				status = p.To
+			}
+		case EventTypeConcluded:
+			status = StatusConcluded
+		case EventTypeReopened:
+			status = StatusActive
+		case EventTypeArchived:
+			status = StatusArchived
+		}
+	}
+	return status
+}
 
 // statusTransition builds the paired (StatusChanged, InterpretationRecorded)
 // events for a from→to lifecycle move, rejecting the command if the

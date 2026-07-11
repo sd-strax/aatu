@@ -12,7 +12,6 @@ import (
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
-	"github.com/sd-strax/reckon/module"
 	"github.com/sd-strax/reckon/temporal"
 )
 
@@ -102,7 +101,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actor := actorFromClaims(claims)
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	now := commandNow()
 
 	// A reversal targets an original action id. Validate it BEFORE anything
 	// else (04 §7): the original must exist and be SUCCEEDED (you can only
@@ -174,13 +173,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	cmd = action.ApplyDecision(cmd, decision)
 
 	// Record the request + its policy evaluation in one transaction.
-	env := aggregate.Envelope{
-		AggregateID:   investigationID,
-		TenantID:      module.SingleTenantUUID,
-		CorrelationID: uuid.New(),
-		Actor:         actor,
-		OccurredAt:    now,
-	}
+	env := newEnvelope(investigationID, actor, now)
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, "request action: "+err.Error())
@@ -208,8 +201,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 		resp.Status = "PENDING_TWO_PARTY"
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // autoApproveAndDispatch records the AUTO_POLICY approval (attributed to the
@@ -223,15 +215,10 @@ func (b *Backend) autoApproveAndDispatch(ctx context.Context, reqEnv aggregate.E
 		return "PENDING_MANUAL", ""
 	}
 
-	approveEnv := aggregate.Envelope{
-		AggregateID:   reqEnv.AggregateID,
-		TenantID:      reqEnv.TenantID,
-		CorrelationID: uuid.New(),
-		// The approval is attributed to the policy's accountable human, who is
-		// the recorded principal — satisfying the actor/approver invariant.
-		Actor:      aggregate.Actor{PrincipalID: decision.PolicyAccountable, Kind: aggregate.ActorHuman},
-		OccurredAt: now,
-	}
+	// The approval is attributed to the policy's accountable human, who is
+	// the recorded principal — satisfying the actor/approver invariant.
+	approveEnv := newEnvelope(reqEnv.AggregateID,
+		aggregate.Actor{PrincipalID: decision.PolicyAccountable, Kind: aggregate.ActorHuman}, now)
 	approveRes, err := b.cfg.Handler.Handle(ctx, approveEnv, aggregate.ApproveAction{
 		ActionID: cmd.ActionID,
 		Authorization: aggregate.Authorization{
@@ -283,7 +270,7 @@ type dispatchSpec struct {
 // when the dispatch client is not wired or the trigger fails — in which case the
 // action is APPROVED and durable in the event log for a later retrigger.
 func (b *Backend) startActionWorkflow(ctx context.Context, s dispatchSpec) string {
-	client := b.getActionClient()
+	client := b.getDispatchClient()
 	if client == nil {
 		return ""
 	}

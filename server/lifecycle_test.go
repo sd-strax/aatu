@@ -7,24 +7,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/aggregate"
-	"github.com/sd-strax/reckon/module"
 )
 
 // draftInvestigation creates a fresh investigation (DRAFT) through the shared
 // test handler and returns its id — the pre-activate state the lifecycle
-// endpoint drives forward.
+// endpoint drives forward. activeInvestigation (actions_test.go) builds on it.
 func draftInvestigation(t *testing.T) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	env := aggregate.Envelope{
-		AggregateID: id, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
-		Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
-	}
+	env := newEnvelope(id, aggregate.Actor{PrincipalID: "test-subject"}, commandNow())
 	if _, err := testHandler.Handle(context.Background(), env, aggregate.CreateInvestigation{Title: "INV"}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +91,9 @@ func TestLifecycle_ConcludeFiresExport(t *testing.T) {
 	if fake.in.GroupingID != invID.String() {
 		t.Errorf("export input grouping = %q; want %q", fake.in.GroupingID, invID)
 	}
+	if want := "post-conclusion-" + invID.String(); out.ExportWorkflowID != want {
+		t.Errorf("export_workflow_id = %q; want %q (the started workflow must be correlatable)", out.ExportWorkflowID, want)
+	}
 }
 
 // TestLifecycle_ConcludeNoAutoExport: with auto-on-conclude OFF, a conclude
@@ -157,7 +155,9 @@ func TestLifecycle_IllegalTransitionRejected(t *testing.T) {
 
 // TestLifecycle_AIDelegateBarredFromConclude: conclude is a human act — an
 // AI-delegated token (delegate_kind set) is rejected by the aggregate allowlist,
-// not merely by the endpoint, so the guard is a real second layer (04 §5.6).
+// not merely by the endpoint, so the guard is a real second layer (04 §5.6). A
+// permission denial surfaces as 403, matching the approval endpoints' mapping
+// for the same AI-write-protection class.
 func TestLifecycle_AIDelegateBarredFromConclude(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test skipped in short mode")
@@ -169,8 +169,25 @@ func TestLifecycle_AIDelegateBarredFromConclude(t *testing.T) {
 	token := mintToken(t, map[string]any{"delegate_kind": "claude"})
 	resp, _ := postLifecycle(t, b, token, invID.String(),
 		LifecycleRequestBody{Transition: "conclude", ReportRef: "report--1"})
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d; want 422 (AI barred from conclude)", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d; want 403 (AI barred from conclude)", resp.StatusCode)
+	}
+}
+
+// TestLifecycle_UnknownInvestigation: a transition addressed to an id with no
+// event stream is a 404 — consistent with GET /investigations/{id} and
+// POST .../export, not a 422.
+func TestLifecycle_UnknownInvestigation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+
+	b := newTestBackend(t)
+	resp, _ := postLifecycle(t, b, mintToken(t, nil), uuid.NewString(),
+		LifecycleRequestBody{Transition: "activate"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d; want 404", resp.StatusCode)
 	}
 }
 

@@ -3,14 +3,11 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
-	"github.com/sd-strax/reckon/module"
 )
 
 // maxInterpretationBodyBytes bounds the /api/interpretations request body
@@ -95,8 +92,7 @@ func (b *Backend) interpretationsCollection(w http.ResponseWriter, r *http.Reque
 	case http.MethodPost:
 		b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.recordInterpretation)
 	default:
-		w.Header().Set("Allow", "POST")
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		methodNotAllowed(w, "POST")
 	}
 }
 
@@ -203,14 +199,7 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	env := aggregate.Envelope{
-		AggregateID:   investigationID,
-		TenantID:      module.SingleTenantUUID,
-		CorrelationID: uuid.New(),
-		Actor:         actor,
-		OccurredAt:    now,
-	}
+	env := newEnvelope(investigationID, actor, commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, "record interpretation: "+err.Error())
@@ -218,8 +207,7 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 	}
 	b.publishDeltas(res)
 
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(RecordInterpretationResponse{
+	writeJSON(w, http.StatusCreated, RecordInterpretationResponse{
 		InterpretationID: cmd.InterpretationID.String(),
 		SequenceNo:       res.NewSequenceNo,
 		NodeID:           nodeID,
@@ -254,14 +242,8 @@ func (b *Backend) listInvestigationHypotheses(w http.ResponseWriter, r *http.Req
 		writeJSONError(w, http.StatusServiceUnavailable, "aggregate handler not configured")
 		return
 	}
-	// Path shape: /investigations/{id}/hypotheses (the /api prefix is stripped).
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) != 3 {
-		writeJSONError(w, http.StatusNotFound, "not found")
-		return
-	}
-	invID, err := uuid.Parse(parts[1])
-	if err != nil {
+	invID, ok := investigationSubresourceID(r.URL.Path, "hypotheses")
+	if !ok {
 		writeJSONError(w, http.StatusBadRequest, "invalid investigation id in path")
 		return
 	}
@@ -298,5 +280,5 @@ func (b *Backend) listInvestigationHypotheses(w http.ResponseWriter, r *http.Req
 			Predictions: byHypothesis[h.ID],
 		})
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"hypotheses": out})
+	writeJSON(w, http.StatusOK, map[string]any{"hypotheses": out})
 }

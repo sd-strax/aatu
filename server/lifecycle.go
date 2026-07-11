@@ -2,15 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
-	"github.com/sd-strax/reckon/module"
 )
 
 // LifecycleRequestBody drives an investigation state transition (01 §Extension 2).
@@ -23,7 +21,10 @@ type LifecycleRequestBody struct {
 	Summary    string `json:"summary,omitempty"`
 }
 
-// LifecycleResponse reports the resulting status + sequence.
+// LifecycleResponse reports the resulting status + sequence. ExportWorkflowID
+// is set when a conclude fired the automatic export (07 §2.3), so the client
+// can correlate/poll the pipeline; absent when auto-export is off, unavailable,
+// or failed to start (POST .../export remains the manual retrigger).
 type LifecycleResponse struct {
 	InvestigationRef string `json:"investigation_ref"`
 	Status           string `json:"status"`
@@ -31,23 +32,12 @@ type LifecycleResponse struct {
 	ExportWorkflowID string `json:"export_workflow_id,omitempty"`
 }
 
-// lifecycleTransitions maps the request verb to the target status the projection
-// will hold, used only to render the response (the aggregate is the authority on
-// legality — it rejects an illegal transition from the current state).
-var lifecycleTransitions = map[string]string{
-	"activate": aggregate.StatusActive,
-	"pause":    aggregate.StatusPaused,
-	"resume":   aggregate.StatusActive,
-	"conclude": aggregate.StatusConcluded,
-	"reopen":   aggregate.StatusActive,
-	"archive":  aggregate.StatusArchived,
-}
-
 // investigationLifecycle handles POST /api/investigations/{id}/lifecycle: the
 // analyst-driven state machine (create is its own route). Analyst role; the
 // actor kind is derived from the JWT (so an AI delegate is barred from
-// conclude/reopen/archive by the aggregate's allowlist, not just here). On a
-// successful conclude it fires the automatic export (07 §2.3), best-effort.
+// conclude/reopen/archive by the aggregate's allowlist, not just here). When
+// the committed events carry InvestigationConcluded it fires the automatic
+// export (07 §2.3), best-effort.
 func (b *Backend) investigationLifecycle(w http.ResponseWriter, r *http.Request) {
 	if b.cfg.Handler == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "aggregate handler not configured")
@@ -58,7 +48,7 @@ func (b *Backend) investigationLifecycle(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusInternalServerError, "auth context missing")
 		return
 	}
-	id, ok := lifecycleInvestigationID(r.URL.Path)
+	id, ok := investigationSubresourceID(r.URL.Path, "lifecycle")
 	if !ok {
 		writeJSONError(w, http.StatusBadRequest, "invalid investigation id in path")
 		return
@@ -69,81 +59,83 @@ func (b *Backend) investigationLifecycle(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
 		return
 	}
-	if _, known := lifecycleTransitions[body.Transition]; !known {
-		writeJSONError(w, http.StatusBadRequest, "unknown transition "+body.Transition)
-		return
-	}
-	cmd, ok := lifecycleCommand(body)
-	if !ok {
-		writeJSONError(w, http.StatusBadRequest, "conclude requires report_ref")
+	cmd, err := lifecycleCommand(body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	env := aggregate.Envelope{
-		AggregateID:   id,
-		TenantID:      module.SingleTenantUUID,
-		CorrelationID: uuid.New(),
-		Actor:         actorFromClaims(claims),
-		OccurredAt:    time.Now().UTC().Truncate(time.Microsecond),
-	}
+	env := newEnvelope(id, actorFromClaims(claims), commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
-		// A rejected transition (wrong source state, missing report, AI barred
-		// from conclude) is a 422 — the request was well-formed but illegal now.
-		writeJSONError(w, http.StatusUnprocessableEntity, body.Transition+": "+err.Error())
+		writeLifecycleError(w, body.Transition, err)
 		return
 	}
 	b.publishDeltas(res)
 
 	resp := LifecycleResponse{
 		InvestigationRef: id.String(),
-		Status:           lifecycleTransitions[body.Transition],
-		SequenceNo:       res.NewSequenceNo,
+		// The committed events are the authority on the resulting status —
+		// never a transition→status table maintained here.
+		Status:     aggregate.StatusAfter(res.AppliedEvents),
+		SequenceNo: res.NewSequenceNo,
 	}
-	if body.Transition == "conclude" {
-		// Auto-export fires here; the on-demand POST .../export remains available
-		// for re-export or when auto is disabled.
-		b.autoExportOnConclude(r.Context(), id)
+	// Keyed on the persisted event, not the request verb, per 07 §2.3
+	// ("triggered automatically on InvestigationConcluded") — any path that
+	// commits the event through this handler fires the export.
+	for _, e := range res.AppliedEvents {
+		if e.Type == aggregate.EventTypeConcluded {
+			resp.ExportWorkflowID = b.autoExportOnConclude(r.Context(), id)
+			break
+		}
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// lifecycleCommand maps a transition to its aggregate command. Returns ok=false
-// only for the one shape guard the endpoint owns (conclude needs a report_ref);
-// all other legality is the aggregate's.
-func lifecycleCommand(body LifecycleRequestBody) (aggregate.Command, bool) {
+// writeLifecycleError maps a Handle failure onto the HTTP outcome: the
+// sentinels first (missing aggregate, permission denial, lost OCC race), then
+// domain rejections as 422 (well-formed but illegal now), and anything else —
+// an infrastructure failure loading/appending the stream — as 500.
+func writeLifecycleError(w http.ResponseWriter, transition string, err error) {
+	var rejected *aggregate.RejectedError
+	switch {
+	case errors.Is(err, aggregate.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, "investigation not found")
+	case errors.Is(err, aggregate.ErrAIDenied):
+		writeJSONError(w, http.StatusForbidden, transition+": "+err.Error())
+	case errors.Is(err, aggregate.ErrConcurrent):
+		writeJSONError(w, http.StatusConflict, transition+": "+err.Error())
+	case errors.As(err, &rejected):
+		writeJSONError(w, http.StatusUnprocessableEntity, transition+": "+err.Error())
+	default:
+		writeJSONError(w, http.StatusInternalServerError, transition+": "+err.Error())
+	}
+}
+
+// lifecycleCommand maps a transition verb to its aggregate command — the single
+// enumeration of the verbs this endpoint accepts. The returned error is the
+// endpoint's whole shape-guard surface: an unknown verb, or conclude without a
+// report_ref. All other legality is the aggregate's.
+func lifecycleCommand(body LifecycleRequestBody) (aggregate.Command, error) {
 	switch body.Transition {
 	case "activate":
-		return aggregate.ActivateInvestigation{Reason: body.Reason}, true
+		return aggregate.ActivateInvestigation{Reason: body.Reason}, nil
 	case "pause":
-		return aggregate.PauseInvestigation{Reason: body.Reason}, true
+		return aggregate.PauseInvestigation{Reason: body.Reason}, nil
 	case "resume":
-		return aggregate.ResumeInvestigation{Reason: body.Reason}, true
+		return aggregate.ResumeInvestigation{Reason: body.Reason}, nil
 	case "conclude":
-		if strings.TrimSpace(body.ReportRef) == "" {
-			return nil, false
+		ref := strings.TrimSpace(body.ReportRef)
+		if ref == "" {
+			return nil, errors.New("conclude requires report_ref")
 		}
-		return aggregate.ConcludeInvestigation{ReportRef: body.ReportRef, Summary: body.Summary}, true
+		return aggregate.ConcludeInvestigation{ReportRef: ref, Summary: body.Summary}, nil
 	case "reopen":
-		return aggregate.ReopenInvestigation{Reason: body.Reason}, true
+		return aggregate.ReopenInvestigation{Reason: body.Reason}, nil
 	case "archive":
-		return aggregate.ArchiveInvestigation{Reason: body.Reason}, true
+		return aggregate.ArchiveInvestigation{Reason: body.Reason}, nil
 	default:
-		return nil, false
+		return nil, fmt.Errorf("unknown transition %s", body.Transition)
 	}
-}
-
-// lifecycleInvestigationID parses the id out of `/investigations/{id}/lifecycle`.
-func lifecycleInvestigationID(p string) (uuid.UUID, bool) {
-	parts := strings.Split(strings.Trim(p, "/"), "/")
-	if len(parts) != 3 || parts[0] != "investigations" || parts[2] != "lifecycle" {
-		return uuid.UUID{}, false
-	}
-	id, err := uuid.Parse(parts[1])
-	if err != nil {
-		return uuid.UUID{}, false
-	}
-	return id, true
 }

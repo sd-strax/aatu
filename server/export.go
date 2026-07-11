@@ -2,11 +2,10 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -30,10 +29,10 @@ func (b *Backend) getPipelineStarter() pipelineStarter {
 	if b.pipelineOverride != nil {
 		return b.pipelineOverride
 	}
-	if b.actionClient == nil {
+	if b.dispatchClient == nil {
 		return nil
 	}
-	return b.actionClient
+	return b.dispatchClient
 }
 
 // ExportResponse reports the triggered post-conclusion export.
@@ -58,7 +57,7 @@ func (b *Backend) exportInvestigation(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "aggregate handler not configured")
 		return
 	}
-	id, ok := exportInvestigationID(r.URL.Path)
+	id, ok := investigationSubresourceID(r.URL.Path, "export")
 	if !ok {
 		writeJSONError(w, http.StatusBadRequest, "invalid investigation id in path")
 		return
@@ -93,8 +92,7 @@ func (b *Backend) exportInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(ExportResponse{
+	writeJSON(w, http.StatusAccepted, ExportResponse{
 		InvestigationRef: id.String(),
 		WorkflowID:       wfID,
 		Status:           "STARTED",
@@ -113,36 +111,38 @@ func (b *Backend) exportInput(id uuid.UUID) temporal.ArchiveInvestigationInput {
 	}
 }
 
-// autoExportOnConclude fires the post-conclusion pipeline after a successful
-// conclude, when policy enables it and the dispatch client is wired. Best-effort
-// (07 §2.3, default on): a failure is logged, not surfaced — the conclusion
-// stands, and an operator can retrigger via POST .../export.
-func (b *Backend) autoExportOnConclude(ctx context.Context, id uuid.UUID) {
+// autoExportStartTimeout bounds the pipeline-start call on the conclude path:
+// long enough for a healthy Temporal round-trip, short enough that a hung
+// frontend does not stall the conclude response (the call is best-effort).
+const autoExportStartTimeout = 5 * time.Second
+
+// autoExportOnConclude fires the post-conclusion pipeline after a committed
+// conclude, when policy enables it and the dispatch client is wired. Returns
+// the started workflow id, or "" when auto-export is off, unavailable, or
+// failed to start. Best-effort (07 §2.3, default on): a failure is logged, not
+// surfaced — the conclusion stands, and an operator can retrigger via
+// POST .../export.
+//
+// The conclude is already committed when this runs, so the start must not be
+// lost to a client disconnect: the request context is detached from
+// cancellation (keeping its trace/values) and bounded by its own timeout.
+func (b *Backend) autoExportOnConclude(ctx context.Context, id uuid.UUID) string {
 	if !b.cfg.ExportAutoOnConclude {
-		return
+		return ""
 	}
 	starter := b.getPipelineStarter()
 	if starter == nil {
 		//nolint:gosec // G706: id is a parsed uuid.UUID (fixed hex format), not free-form input
 		log.Printf("investigation %s concluded but export pipeline is unavailable; export on demand", id)
-		return
+		return ""
 	}
-	if _, err := starter.StartPostConclusionPipeline(ctx, b.exportInput(id)); err != nil {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoExportStartTimeout)
+	defer cancel()
+	wfID, err := starter.StartPostConclusionPipeline(ctx, b.exportInput(id))
+	if err != nil {
 		//nolint:gosec // G706: id is a parsed uuid.UUID (fixed hex format), not free-form input
 		log.Printf("investigation %s: auto-export failed to start: %v", id, err)
+		return ""
 	}
-}
-
-// exportInvestigationID parses the id out of `/investigations/{id}/export`
-// (the /api prefix is already stripped).
-func exportInvestigationID(p string) (uuid.UUID, bool) {
-	parts := strings.Split(strings.Trim(p, "/"), "/")
-	if len(parts) != 3 || parts[0] != "investigations" || parts[2] != "export" {
-		return uuid.UUID{}, false
-	}
-	id, err := uuid.Parse(parts[1])
-	if err != nil {
-		return uuid.UUID{}, false
-	}
-	return id, true
+	return wfID
 }
