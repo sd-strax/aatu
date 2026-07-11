@@ -399,8 +399,19 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// /investigations/{id} handles GET (load one).
+// /investigations/{id} handles GET (load one); the /hypotheses sub-resource
+// lists the investigation's reasoning nodes (D.2).
 func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/hypotheses") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationHypotheses)
+		default:
+			w.Header().Set("Allow", "GET")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.getInvestigation)

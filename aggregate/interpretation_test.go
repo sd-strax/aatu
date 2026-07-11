@@ -14,9 +14,12 @@ import (
 // rationale is mandatory and bounded, and confidence is a closed vocabulary.
 func TestRecordInterpretation_Validate(t *testing.T) {
 	env := newTestEnvelope("analyst-1")
+	// A free-standing reasoning type (pivot) — this test covers the shared
+	// D.1 guards (type allowlist, rationale, confidence, tool-call/ref bounds);
+	// the node-bearing types have their own guards in hypothesis_test.go.
 	base := RecordInterpretation{
 		InterpretationID:   uuid.New(),
-		InterpretationType: InterpretationHypothesis,
+		InterpretationType: InterpretationPivot,
 		Rationale:          "the host beaconed to a known-bad domain",
 	}
 	if err := base.Validate(env); err != nil {
@@ -114,9 +117,9 @@ func TestRecordInterpretation_RecordsEventAndSideStore(t *testing.T) {
 	args := json.RawMessage(`{"entity":"WIN-A"}`)
 	cmd := RecordInterpretation{
 		InterpretationID:   uuid.New(),
-		InterpretationType: InterpretationHypothesis,
+		InterpretationType: InterpretationPivot,
 		InputRefs:          []string{"process--1"},
-		OutputRefs:         []string{"x-hypothesis--1"},
+		OutputRefs:         []string{"ipv4-addr--1"},
 		Rationale:          "beaconing pattern consistent with C2",
 		Confidence:         ConfidenceMedium,
 		Transcript:         &TranscriptContent{TranscriptID: uuid.New(), TurnID: "turn-1", Body: transcript},
@@ -275,7 +278,7 @@ func TestRecordInterpretation_RejectedWhenConcluded(t *testing.T) {
 	}
 	_, err := h.Handle(context.Background(), env(), RecordInterpretation{
 		InterpretationID:   uuid.New(),
-		InterpretationType: InterpretationHypothesis,
+		InterpretationType: InterpretationPivot,
 		Rationale:          "late thought",
 	})
 	if err == nil {

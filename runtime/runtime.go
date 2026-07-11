@@ -168,6 +168,7 @@ func serve(cfg config.Config) error {
 	handler := aggregate.NewHandler(aggregate.NewStore(aggDB),
 		aggregate.InvestigationCurrentProjector{},
 		aggregate.ActionCurrentProjector{},
+		aggregate.ReasoningNodeProjector{},
 	).WithSideStore(aggregate.NewSideStore(aggDB))
 
 	// The knowledge service uses its own database (reckon_knowledge); open it

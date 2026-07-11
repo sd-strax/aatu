@@ -78,20 +78,29 @@ func (e ErrEnvelope) Error() string { return "envelope: " + string(e) }
 // to applyCommand so transition legality is checked against authoritative state
 // (not a projection that could lag or be mid-rebuild).
 type aggregateState struct {
-	Seq           int64                     // sequence number of the last event (0 if none)
-	Exists        bool                      // an investigation.created has been seen
-	TenantID      uuid.UUID                 // tenant stamped at creation; immutable thereafter
-	Status        string                    // current lifecycle status
-	ConclusionRef string                    // set while concluded, cleared on reopen
-	Actions       map[uuid.UUID]actionState // per-x-action folded state (C.1)
+	Seq           int64                      // sequence number of the last event (0 if none)
+	Exists        bool                       // an investigation.created has been seen
+	TenantID      uuid.UUID                  // tenant stamped at creation; immutable thereafter
+	Status        string                     // current lifecycle status
+	ConclusionRef string                     // set while concluded, cleared on reopen
+	Actions       map[uuid.UUID]actionState  // per-x-action folded state (C.1)
+	Hypotheses    map[string]hypothesisState // per-x-hypothesis folded state, keyed by STIX id (D.2)
+	Predictions   map[string]predictionState // per-x-prediction folded state, keyed by STIX id (D.2)
 }
 
 // foldState replays an event stream into the current aggregateState. Only
-// lifecycle-bearing events move the investigation state machine; interpretation
-// and membership events advance Seq but leave status unchanged. Action events
-// fold into the per-action state map (foldActionEvent).
+// lifecycle-bearing events move the investigation state machine; membership
+// events advance Seq but leave status unchanged. Action events fold into the
+// per-action state map (foldActionEvent); interpretation events carrying
+// reasoning-node content fold into the hypothesis/prediction maps
+// (foldReasoningEvent) so node transition legality is checked against
+// authoritative state.
 func foldState(events []Event) (aggregateState, error) {
-	s := aggregateState{Actions: make(map[uuid.UUID]actionState)}
+	s := aggregateState{
+		Actions:     make(map[uuid.UUID]actionState),
+		Hypotheses:  make(map[string]hypothesisState),
+		Predictions: make(map[string]predictionState),
+	}
 	for _, e := range events {
 		s.Seq = e.SequenceNo
 		switch e.Type {
@@ -125,6 +134,15 @@ func foldState(events []Event) (aggregateState, error) {
 			if err := foldActionEvent(s.Actions, e); err != nil {
 				return aggregateState{}, err
 			}
+		case EventTypeInterpretationRecorded:
+			// Most interpretation events carry no node content (lifecycle,
+			// action-*, free-standing reasoning) — foldReasoningEvent no-ops on
+			// those; hypothesis/prediction content drives the node state maps.
+			var rec InterpretationRecorded
+			if err := json.Unmarshal(e.Payload, &rec); err != nil {
+				return aggregateState{}, fmt.Errorf("fold interpretation.recorded seq %d: %w", e.SequenceNo, err)
+			}
+			foldReasoningEvent(&s, rec)
 		}
 	}
 	return s, nil

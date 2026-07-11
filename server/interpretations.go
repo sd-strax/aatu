@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +32,32 @@ type RecordInterpretationBody struct {
 	Confidence         string           `json:"confidence,omitempty"`
 	Transcript         *TranscriptInput `json:"transcript,omitempty"`
 	ToolCalls          []ToolCallInput  `json:"tool_calls,omitempty"`
+
+	// Reasoning-node payloads (D.2) — hypotheses/predictions are outputs of
+	// interpretations. The node ids are minted SERVER-side (returned in
+	// node_id); transitions reference nodes by their STIX id.
+	Hypothesis       *HypothesisBody `json:"hypothesis,omitempty"`     // type=hypothesis: create
+	HypothesisRef    string          `json:"hypothesis_ref,omitempty"` // hypothesis ack / support / refutation / inconclusive
+	Abandoned        bool            `json:"abandoned,omitempty"`      // inconclusive → ABANDONED instead of INCONCLUSIVE
+	Prediction       *PredictionBody `json:"prediction,omitempty"`     // type=prediction: create
+	PredictionRef    string          `json:"prediction_ref,omitempty"` // prediction outcome
+	PredictionStatus string          `json:"prediction_status,omitempty"`
+	TestResultRefs   []string        `json:"test_result_refs,omitempty"`
+}
+
+// HypothesisBody is the client shape of a new hypothesis.
+type HypothesisBody struct {
+	Statement   string   `json:"statement"`
+	ParentRef   string   `json:"parent_ref,omitempty"`
+	RootedAtRef string   `json:"rooted_at_ref,omitempty"`
+	Labels      []string `json:"labels,omitempty"`
+}
+
+// PredictionBody is the client shape of a new prediction.
+type PredictionBody struct {
+	HypothesisRef string               `json:"hypothesis_ref"`
+	Statement     string               `json:"statement"`
+	TestQuery     *aggregate.QuerySpec `json:"test_query,omitempty"`
 }
 
 // TranscriptInput carries the raw transcript for the turn. Body is the text as a
@@ -50,10 +77,13 @@ type ToolCallInput struct {
 	ResultHash string          `json:"result_hash,omitempty"`
 }
 
-// RecordInterpretationResponse reports the appended interpretation.
+// RecordInterpretationResponse reports the appended interpretation. NodeID is
+// the STIX id of the hypothesis/prediction this act created, when it created
+// one — the agent references it in later transitions.
 type RecordInterpretationResponse struct {
 	InterpretationID string `json:"interpretation_id"`
 	SequenceNo       int64  `json:"sequence_no"`
+	NodeID           string `json:"node_id,omitempty"`
 }
 
 // interpretationsCollection routes /api/interpretations. POST records a
@@ -119,6 +149,35 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		OutputRefs:         body.OutputRefs,
 		Rationale:          body.Rationale,
 		Confidence:         body.Confidence,
+		HypothesisRef:      body.HypothesisRef,
+		Abandoned:          body.Abandoned,
+		PredictionRef:      body.PredictionRef,
+		PredictionStatus:   body.PredictionStatus,
+		TestResultRefs:     body.TestResultRefs,
+	}
+
+	// Node creations: mint the id server-side and report it back as node_id.
+	var nodeID string
+	if body.Hypothesis != nil {
+		id := uuid.New()
+		nodeID = aggregate.HypothesisSTIXID(id)
+		cmd.Hypothesis = &aggregate.HypothesisNode{
+			ID:          id,
+			Statement:   body.Hypothesis.Statement,
+			ParentRef:   body.Hypothesis.ParentRef,
+			RootedAtRef: body.Hypothesis.RootedAtRef,
+			Labels:      body.Hypothesis.Labels,
+		}
+	}
+	if body.Prediction != nil {
+		id := uuid.New()
+		nodeID = aggregate.PredictionSTIXID(id)
+		cmd.Prediction = &aggregate.PredictionNode{
+			ID:            id,
+			HypothesisRef: body.Prediction.HypothesisRef,
+			Statement:     body.Prediction.Statement,
+			TestQuery:     body.Prediction.TestQuery,
+		}
 	}
 	if body.Transcript != nil {
 		// transcript_id groups the turns of one conversation in the audit
@@ -168,5 +227,81 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(RecordInterpretationResponse{
 		InterpretationID: cmd.InterpretationID.String(),
 		SequenceNo:       res.NewSequenceNo,
+		NodeID:           nodeID,
 	})
+}
+
+// HypothesisView is one hypothesis with its predictions nested — the shape the
+// reasoning panel renders.
+type HypothesisView struct {
+	ID          string           `json:"id"`
+	Statement   string           `json:"statement"`
+	Status      string           `json:"status"`
+	ParentRef   string           `json:"parent_ref,omitempty"`
+	RootedAtRef string           `json:"rooted_at_ref,omitempty"`
+	Labels      []string         `json:"labels,omitempty"`
+	Predictions []PredictionView `json:"predictions,omitempty"`
+}
+
+// PredictionView is one prediction row in a HypothesisView.
+type PredictionView struct {
+	ID             string   `json:"id"`
+	Statement      string   `json:"statement"`
+	Status         string   `json:"status"`
+	TestResultRefs []string `json:"test_result_refs,omitempty"`
+}
+
+// listInvestigationHypotheses serves GET /api/investigations/{id}/hypotheses:
+// the investigation's reasoning nodes, predictions nested under the hypothesis
+// they test.
+func (b *Backend) listInvestigationHypotheses(w http.ResponseWriter, r *http.Request) {
+	if b.cfg.Handler == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "aggregate handler not configured")
+		return
+	}
+	// Path shape: /investigations/{id}/hypotheses (the /api prefix is stripped).
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 3 {
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	invID, err := uuid.Parse(parts[1])
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid investigation id in path")
+		return
+	}
+
+	hs, err := aggregate.ListHypotheses(r.Context(), b.cfg.Handler.DB(), invID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "list hypotheses: "+err.Error())
+		return
+	}
+	ps, err := aggregate.ListPredictions(r.Context(), b.cfg.Handler.DB(), invID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "list predictions: "+err.Error())
+		return
+	}
+
+	byHypothesis := make(map[string][]PredictionView, len(ps))
+	for _, p := range ps {
+		byHypothesis[p.HypothesisRef] = append(byHypothesis[p.HypothesisRef], PredictionView{
+			ID:             p.ID,
+			Statement:      p.Statement,
+			Status:         p.Status,
+			TestResultRefs: p.TestResultRefs,
+		})
+	}
+	out := make([]HypothesisView, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, HypothesisView{
+			ID:          h.ID,
+			Statement:   h.Statement,
+			Status:      h.Status,
+			ParentRef:   h.ParentRef,
+			RootedAtRef: h.RootedAtRef,
+			Labels:      h.Labels,
+			Predictions: byHypothesis[h.ID],
+		})
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"hypotheses": out})
 }

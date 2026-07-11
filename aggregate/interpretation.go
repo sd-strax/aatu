@@ -109,6 +109,16 @@ type InterpretationRecorded struct {
 	Confidence    string         `json:"confidence,omitempty"`
 	TranscriptRef *TranscriptRef `json:"transcript_ref,omitempty"`
 	ToolCallRefs  []ToolCallRef  `json:"tool_call_refs,omitempty"`
+
+	// Reasoning-node content (Phase D.2): hypotheses and predictions are
+	// OUTPUTS of interpretations (01-domain-model.md), so their creation and
+	// status transitions ride on the interpretation event that produced them.
+	// foldState folds these for transition legality; the ReasoningNodeProjector
+	// materializes them into stix_objects + the *_current projections.
+	Hypothesis           *HypothesisRecorded           `json:"hypothesis,omitempty"`
+	HypothesisTransition *HypothesisTransitionRecorded `json:"hypothesis_transition,omitempty"`
+	Prediction           *PredictionRecorded           `json:"prediction,omitempty"`
+	PredictionTransition *PredictionTransitionRecorded `json:"prediction_transition,omitempty"`
 }
 
 // interpretationEvent builds an InterpretationRecorded event for env at seqNo,
@@ -170,6 +180,24 @@ type RecordInterpretation struct {
 	// event stores only the hash, this command carries the bytes to persist.
 	Transcript *TranscriptContent `json:"transcript,omitempty"`
 	ToolCalls  []ToolCallContent  `json:"tool_calls,omitempty"`
+
+	// Reasoning-node payloads (Phase D.2). Hypotheses/predictions are outputs
+	// of interpretations, so they ride on this command rather than having
+	// commands of their own:
+	//   type=hypothesis    → Hypothesis (create) XOR HypothesisRef (acknowledge)
+	//   type=support       → HypothesisRef (→ SUPPORTED)
+	//   type=refutation    → HypothesisRef (→ REFUTED)
+	//   type=inconclusive  → HypothesisRef (→ INCONCLUSIVE, or ABANDONED via Abandoned)
+	//   type=prediction    → Prediction (create) XOR PredictionRef+PredictionStatus
+	//                        (+TestResultRefs) for the test outcome
+	// All other types must carry none of these.
+	Hypothesis       *HypothesisNode `json:"hypothesis,omitempty"`
+	HypothesisRef    string          `json:"hypothesis_ref,omitempty"`
+	Abandoned        bool            `json:"abandoned,omitempty"`
+	Prediction       *PredictionNode `json:"prediction,omitempty"`
+	PredictionRef    string          `json:"prediction_ref,omitempty"`
+	PredictionStatus string          `json:"prediction_status,omitempty"`
+	TestResultRefs   []string        `json:"test_result_refs,omitempty"`
 }
 
 // Kind returns "RecordInterpretation".
@@ -215,7 +243,7 @@ func (c RecordInterpretation) Validate(env Envelope) error {
 			return fmt.Errorf("RecordInterpretation: tool call %q has no tool_name", c.ToolCalls[i].CallID)
 		}
 	}
-	return nil
+	return validateReasoningNodeShape(c)
 }
 
 // hasBlobs reports whether this interpretation carries side-store content that
@@ -260,6 +288,13 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 			CallID:      c.ToolCalls[i].CallID,
 			ContentHash: HashContent(normalizeArgs(c.ToolCalls[i].Args)),
 		})
+	}
+
+	// Node-bearing types (hypothesis/support/refutation/inconclusive/prediction):
+	// validate against folded node state and enrich the event with the node
+	// content the projector materializes (D.2).
+	if err := applyReasoningNodes(env, state, c, &rec); err != nil {
+		return nil, err
 	}
 
 	payload, err := json.Marshal(rec)
