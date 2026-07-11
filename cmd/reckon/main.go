@@ -42,6 +42,10 @@ func main() {
 	switch os.Args[1] {
 	case "version":
 		fmt.Println(version)
+	case "init":
+		if err := runInit(); err != nil {
+			log.Fatalf("%s init: %v", branding.CLI, err)
+		}
 	case "start":
 		if err := runtime.Run(ossModuleBuilder); err != nil {
 			log.Fatalf("%s start: %v", branding.CLI, err)
@@ -69,10 +73,39 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "usage: %s <command>\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "commands:")
 	fmt.Fprintf(os.Stderr, "  version    print the %s version\n", branding.CLI)
+	fmt.Fprintln(os.Stderr, "  init       first-run setup: write a default config with a fresh identity namespace")
 	fmt.Fprintln(os.Stderr, "  start      bring up the bundled stack (Pg + Temporal + Keycloak + backend)")
 	fmt.Fprintln(os.Stderr, "  check      validate config + module activation without starting services")
 	fmt.Fprintf(os.Stderr, "  stop       signal a running %s supervisor to shut down\n", branding.CLI)
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
+}
+
+// runInit performs first-run setup: writes a default config with a freshly
+// minted per-install identity namespace (runtime.Init), then prints the config
+// location + the next steps. Idempotent — re-running against an existing config
+// reports it rather than overwriting.
+func runInit() error {
+	res, err := runtime.Init()
+	if err != nil {
+		return err
+	}
+	if res.AlreadyExisted {
+		fmt.Printf("%s is already initialized.\n", branding.CLI)
+		fmt.Printf("  config:    %s\n", res.ConfigPath)
+		fmt.Printf("  namespace: %s\n", res.TenantNamespace)
+		fmt.Printf("\nEdit the config to change ports/paths, then run `%s start`.\n", branding.CLI)
+		return nil
+	}
+	fmt.Printf("%s initialized.\n", branding.CLI)
+	fmt.Printf("  config:    %s\n", res.ConfigPath)
+	fmt.Printf("  data dir:  %s\n", res.DataDir)
+	fmt.Printf("  namespace: %s  (this install's immutable identity namespace)\n", res.TenantNamespace)
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Printf("  1. %s start                 — bring up the bundled stack (first run downloads Pg/Temporal/Keycloak)\n", branding.CLI)
+	fmt.Printf("  2. sign in to the bundled realm (default user reckon-admin / reckon; change on first login)\n")
+	fmt.Printf("  3. set capability.config_path in the config to a tenant capability YAML to investigate real or fixture data\n")
+	return nil
 }
 
 // runStatus queries the running supervisor's /status endpoint and prints

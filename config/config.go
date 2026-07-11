@@ -192,6 +192,43 @@ func configEnvVar() string {
 	return strings.ToUpper(branding.CLI) + "_CONFIG"
 }
 
+// DefaultPath returns the config path Load resolves to: $<CLI>_CONFIG when set,
+// else ~/<branding.DataDir>/config.yaml. Used by `reckon init` to write the
+// first-run config exactly where Load will later read it.
+func DefaultPath() (string, error) {
+	if p := os.Getenv(configEnvVar()); p != "" {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, branding.DataDir, "config.yaml"), nil
+}
+
+// Save writes cfg as YAML to path, creating the parent directory. It refuses to
+// overwrite an existing file — first-run bootstrap must never silently clobber a
+// config a user may have hand-edited; the caller decides what to do when the
+// file already exists.
+func Save(cfg Config, path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("config already exists at %s", path)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
 // Load reads configuration from $<CLI>_CONFIG, ~/<branding.DataDir>/config.yaml,
 // or returns Default() if neither exists.
 //
