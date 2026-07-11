@@ -41,6 +41,22 @@ type RequestActionResponse struct {
 	WorkflowID       string `json:"workflow_id,omitempty"`
 }
 
+// actorFromClaims derives the command actor from the JWT claims — Kind from the
+// delegate_kind claim, NEVER a request body (04 §5.6): otherwise the AI
+// write-protection at the aggregate boundary is caller-spoofable. Every handler
+// that issues commands uses this ONE derivation, so the aggregate's allowlist
+// is a real second layer behind any endpoint-level delegate check.
+func actorFromClaims(c authz.Claims) aggregate.Actor {
+	if c.DelegateKind != "" {
+		return aggregate.Actor{
+			PrincipalID: c.Subject,
+			Kind:        aggregate.ActorAIDelegated,
+			Delegate:    &aggregate.AIDelegate{Vendor: c.DelegateKind},
+		}
+	}
+	return aggregate.Actor{PrincipalID: c.Subject, Kind: aggregate.ActorHuman}
+}
+
 // actionsCollection routes /api/actions. POST (request_action) requires the
 // analyst role — the AI proposes on an analyst's behalf, never as a principal.
 func (b *Backend) actionsCollection(w http.ResponseWriter, r *http.Request) {
@@ -85,15 +101,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Actor.Kind comes from the JWT delegate_kind claim — NEVER the request body
-	// (04 §5.6 seam obligation): otherwise the AI write-protection is spoofable.
-	actorKind := aggregate.ActorHuman
-	var delegate *aggregate.AIDelegate
-	if claims.DelegateKind != "" {
-		actorKind = aggregate.ActorAIDelegated
-		delegate = &aggregate.AIDelegate{Vendor: claims.DelegateKind}
-	}
-
+	actor := actorFromClaims(claims)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	// A reversal targets an original action id. Validate it BEFORE anything
@@ -158,7 +166,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Gate 2: evaluate policies over the (post-escalator) request.
-	decision, err := b.cfg.Gate2.Evaluate(action.EvalInputForCommand(cmd, actorKind, claims.Subject, now))
+	decision, err := b.cfg.Gate2.Evaluate(action.EvalInputForCommand(cmd, actor.Kind, claims.Subject, now))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "policy evaluation: "+err.Error())
 		return
@@ -170,7 +178,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 		AggregateID:   investigationID,
 		TenantID:      module.SingleTenantUUID,
 		CorrelationID: uuid.New(),
-		Actor:         aggregate.Actor{PrincipalID: claims.Subject, Kind: actorKind, Delegate: delegate},
+		Actor:         actor,
 		OccurredAt:    now,
 	}
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)

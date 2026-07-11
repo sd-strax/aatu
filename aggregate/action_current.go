@@ -19,14 +19,16 @@ type ActionCurrent struct {
 	ActionType            string
 	Tier                  string
 	Status                string
-	Mode                  string // empty until approved
-	PrimaryApprover       string // empty until approved
+	Mode                  string    // empty until approved
+	PrimaryApprover       string    // empty until approved
+	PrimaryApprovedAt     time.Time // when the primary approval was recorded; zero until approved
 	IsReversal            bool
 	ReversalOfRef         uuid.UUID // set for reversals; drives the ReversalSaga
 	RequiredMode          string    // frozen Gate 2 requirement (MANUAL|TWO_PARTY|AUTO_POLICY)
 	SecondaryApproverPool []string  // who may complete a two-party approval
 	Parameters            json.RawMessage
 	Targets               []TargetSpec
+	ExpiresAt             time.Time // approval deadline frozen at request time; zero = none
 	LastEventSequence     int64
 }
 
@@ -85,13 +87,17 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		if p.Authorization.Mode == AuthModeTwoParty && p.Authorization.Stage == AuthStagePrimary {
 			status = ActionStatusPendingSecondary
 		}
+		// primary_approved_at persists the PRIMARY approval's true time so the
+		// secondary stage can cite it (never the secondary's clock). The
+		// secondary event's Authorization threads the same value back, so the
+		// write is idempotent across both stages.
 		_, err := tx.ExecContext(ctx, `
 			UPDATE action_current
-			SET status = $2, mode = $3, primary_approver_ref = $4,
-			    last_event_sequence = $5, updated_at = $6
+			SET status = $2, mode = $3, primary_approver_ref = $4, primary_approved_at = $5,
+			    last_event_sequence = $6, updated_at = $7
 			WHERE action_id = $1
 		`, p.ActionID, status, p.Authorization.Mode, p.Authorization.PrimaryApproverRef,
-			evt.SequenceNo, evt.OccurredAt)
+			nullTime(p.Authorization.PrimaryApprovedAt), evt.SequenceNo, evt.OccurredAt)
 		if err != nil {
 			return fmt.Errorf("update action_current (approve): %w", err)
 		}
@@ -176,22 +182,27 @@ func (ActionCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) error {
 func LoadActionCurrent(ctx context.Context, db *sql.DB, actionID uuid.UUID) (ActionCurrent, error) {
 	var a ActionCurrent
 	var mode, approver, requiredMode sql.NullString
+	var primaryAt, expiresAt sql.NullTime
 	var reversalOf uuid.NullUUID
 	var targets, pool, params []byte
 	err := db.QueryRowContext(ctx, `
 		SELECT action_id, aggregate_id, action_type, tier, status, mode,
-		       primary_approver_ref, is_reversal, reversal_of_ref, required_mode,
-		       secondary_approver_pool, parameters, targets, last_event_sequence
+		       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref,
+		       required_mode, secondary_approver_pool, parameters, targets, expires_at,
+		       last_event_sequence
 		FROM action_current
 		WHERE action_id = $1
 	`, actionID).Scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
-		&mode, &approver, &a.IsReversal, &reversalOf, &requiredMode,
-		&pool, &params, &targets, &a.LastEventSequence)
+		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf,
+		&requiredMode, &pool, &params, &targets, &expiresAt,
+		&a.LastEventSequence)
 	if err != nil {
 		return ActionCurrent{}, err
 	}
 	a.Mode = mode.String
 	a.PrimaryApprover = approver.String
+	a.PrimaryApprovedAt = primaryAt.Time
+	a.ExpiresAt = expiresAt.Time
 	a.RequiredMode = requiredMode.String
 	if reversalOf.Valid {
 		a.ReversalOfRef = reversalOf.UUID

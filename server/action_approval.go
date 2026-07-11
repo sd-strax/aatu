@@ -109,6 +109,14 @@ func (b *Backend) approveAction(w http.ResponseWriter, r *http.Request, actionID
 		_ = json.NewDecoder(r.Body).Decode(&body) // body is optional
 	}
 
+	// T3 approval requires the typed challenge (04 §5.5): the panel renders the
+	// full challenge UX, but the server floor is that the intent-proving field
+	// can never be silently absent from a T3 authorization record.
+	if ac.Tier == aggregate.TierT3 && body.ChallengeResponse == "" {
+		writeJSONError(w, http.StatusUnprocessableEntity, "a T3 approval requires challenge_response (typed challenge, 04 §5.5)")
+		return
+	}
+
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	auth, willApprove, approverID, errMsg := b.buildApproval(ac, claims.Subject, body.ChallengeResponse, now)
 	if errMsg != "" {
@@ -120,8 +128,11 @@ func (b *Backend) approveAction(w http.ResponseWriter, r *http.Request, actionID
 		AggregateID:   ac.AggregateID,
 		TenantID:      module.SingleTenantUUID,
 		CorrelationID: uuid.New(),
-		Actor:         aggregate.Actor{PrincipalID: claims.Subject, Kind: aggregate.ActorHuman},
-		OccurredAt:    now,
+		// Derived from the claims (not hardcoded HUMAN): the 403 above already
+		// rejected delegate tokens, and deriving keeps the aggregate's
+		// AI-write-protection a REAL second layer behind that check.
+		Actor:      actorFromClaims(claims),
+		OccurredAt: now,
 	}
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.ApproveAction{ActionID: actionID, Authorization: auth})
 	if err != nil {
@@ -159,7 +170,19 @@ func (b *Backend) approveAction(w http.ResponseWriter, r *http.Request, actionID
 // rules — those live at the aggregate boundary (the single write path); this
 // only shapes the command the aggregate then validates.
 func (b *Backend) buildApproval(ac aggregate.ActionCurrent, approver, challenge string, now time.Time) (auth aggregate.Authorization, willApprove bool, approverID, errMsg string) {
-	if ac.RequiredMode == aggregate.AuthModeTwoParty {
+	// expires_at is the approval deadline the requester declared, frozen at
+	// request time. No expiry timer runs in v0 (the ExpireAction emitter is a
+	// v1 refinement), so the endpoint is the enforcement point: a lapsed
+	// request must not be approvable a week later as if the TTL meant nothing.
+	if !ac.ExpiresAt.IsZero() && now.After(ac.ExpiresAt) {
+		return aggregate.Authorization{}, false, "", "action expired at " + ac.ExpiresAt.UTC().Format(time.RFC3339) + " and can no longer be approved"
+	}
+
+	// Two-party branch: selected by the frozen requirement, OR by an action
+	// already sitting in PENDING_SECONDARY (a two-party primary recorded without
+	// a frozen requirement must still complete as two-party, never fall through
+	// to a solo path).
+	if ac.RequiredMode == aggregate.AuthModeTwoParty || ac.Status == aggregate.ActionStatusPendingSecondary {
 		switch ac.Status {
 		case aggregate.ActionStatusRequested:
 			// Primary approval: records the first approver, awaits a second.
@@ -172,13 +195,16 @@ func (b *Backend) buildApproval(ac aggregate.ActionCurrent, approver, challenge 
 			}, false, approver, ""
 		case aggregate.ActionStatusPendingSecondary:
 			// Secondary approval: the distinct second approver completes it. The
-			// dispatch workflow carries the primary approver (the accountable
-			// initiator) as its principal.
+			// authorization record cites the PRIMARY approval's TRUE time (from
+			// the projection) — never the secondary's clock: this final record
+			// is the citable authorization for the action, and a fabricated
+			// primary timestamp would be an audit lie. The dispatch workflow
+			// carries the primary approver (the accountable initiator).
 			return aggregate.Authorization{
 				Mode:                 aggregate.AuthModeTwoParty,
 				Stage:                aggregate.AuthStageSecondary,
 				PrimaryApproverRef:   ac.PrimaryApprover,
-				PrimaryApprovedAt:    now,
+				PrimaryApprovedAt:    ac.PrimaryApprovedAt,
 				SecondaryApproverRef: approver,
 				SecondaryApprovedAt:  &now,
 				ChallengeResponse:    challenge,
@@ -238,7 +264,7 @@ func (b *Backend) rejectAction(w http.ResponseWriter, r *http.Request, actionID 
 		AggregateID:   ac.AggregateID,
 		TenantID:      module.SingleTenantUUID,
 		CorrelationID: uuid.New(),
-		Actor:         aggregate.Actor{PrincipalID: claims.Subject, Kind: aggregate.ActorHuman},
+		Actor:         actorFromClaims(claims), // derived, so the allowlist backs the 403 above
 		OccurredAt:    now,
 	}
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.RejectAction{ActionID: actionID, Reason: body.Reason})

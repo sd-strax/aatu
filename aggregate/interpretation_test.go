@@ -77,6 +77,14 @@ func TestRecordInterpretation_Validate(t *testing.T) {
 	if err := manyRefs.Validate(env); err == nil {
 		t.Error("over-cap input_refs accepted")
 	}
+
+	// Individual ref strings are bounded too — a 9MB "ref" is bulk masquerading
+	// as an id.
+	bulkRef := base
+	bulkRef.InputRefs = []string{strings.Repeat("x", maxRefRunes+1)}
+	if err := bulkRef.Validate(env); err == nil {
+		t.Error("over-long ref string accepted")
+	}
 }
 
 // activeInvestigation drives a fresh aggregate to ACTIVE via h and returns its

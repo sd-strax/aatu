@@ -3,6 +3,7 @@ package aggregate
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -91,6 +92,25 @@ func TestReasoningNodeShape_Validate(t *testing.T) {
 	sup.Abandoned = true
 	if err := sup.Validate(env); err == nil {
 		t.Error("abandoned on type support accepted")
+	}
+
+	// A prediction's declared test query is bounded — it lands in the event
+	// payload, and bulk belongs in the transcript side store.
+	bigQuery := base
+	bigQuery.InterpretationType = InterpretationPrediction
+	bigQuery.Prediction = &PredictionNode{
+		ID: uuid.New(), HypothesisRef: HypothesisSTIXID(uuid.New()), Statement: "s",
+		TestQuery: &QuerySpec{Tool: "siem", QueryText: strings.Repeat("q", maxQueryTextRunes+1)},
+	}
+	if err := bigQuery.Validate(env); err == nil {
+		t.Error("over-long test_query.query_text accepted")
+	}
+	bigQuery.Prediction.TestQuery = &QuerySpec{
+		Tool: "siem", QueryText: "q",
+		Parameters: map[string]any{"blob": strings.Repeat("p", maxQueryParamBytes+1)},
+	}
+	if err := bigQuery.Validate(env); err == nil {
+		t.Error("oversized test_query.parameters accepted")
 	}
 
 	// A decisive prediction outcome must cite test results.

@@ -135,12 +135,7 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 	// Actor.Kind comes from the JWT delegate_kind claim — NEVER the request body
 	// (04 §5.6 seam obligation): otherwise an AI-authored interpretation could
 	// masquerade as human-authored, or vice versa.
-	actorKind := aggregate.ActorHuman
-	var delegate *aggregate.AIDelegate
-	if claims.DelegateKind != "" {
-		actorKind = aggregate.ActorAIDelegated
-		delegate = &aggregate.AIDelegate{Vendor: claims.DelegateKind}
-	}
+	actor := actorFromClaims(claims)
 
 	cmd := aggregate.RecordInterpretation{
 		InterpretationID:   uuid.New(),
@@ -213,7 +208,7 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		AggregateID:   investigationID,
 		TenantID:      module.SingleTenantUUID,
 		CorrelationID: uuid.New(),
-		Actor:         aggregate.Actor{PrincipalID: claims.Subject, Kind: actorKind, Delegate: delegate},
+		Actor:         actor,
 		OccurredAt:    now,
 	}
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)

@@ -72,7 +72,22 @@ const rationaleMaxRunes = 500
 const (
 	maxRefsPerInterpretation      = 100
 	maxToolCallsPerInterpretation = 100
+
+	// maxRefRunes bounds each individual ref/label string. Refs are STIX/OCSF
+	// ids by contract — a 9MB "ref" is bulk masquerading as an id, and it would
+	// land in the event payload.
+	maxRefRunes = 256
 )
+
+// validateRefList checks every entry of a ref list is non-bulk.
+func validateRefList(field string, refs []string) error {
+	for _, r := range refs {
+		if utf8.RuneCountInString(r) > maxRefRunes {
+			return fmt.Errorf("RecordInterpretation: %s entry exceeds %d chars (refs are ids, not payloads)", field, maxRefRunes)
+		}
+	}
+	return nil
+}
 
 // Confidence values (01-domain-model.md §Interpretation schema). Optional.
 const (
@@ -229,6 +244,15 @@ func (c RecordInterpretation) Validate(env Envelope) error {
 	}
 	if len(c.InputRefs) > maxRefsPerInterpretation || len(c.OutputRefs) > maxRefsPerInterpretation {
 		return fmt.Errorf("RecordInterpretation: input/output refs exceed %d (decompose into multiple reasoning acts)", maxRefsPerInterpretation)
+	}
+	if err := validateRefList("input_refs", c.InputRefs); err != nil {
+		return err
+	}
+	if err := validateRefList("output_refs", c.OutputRefs); err != nil {
+		return err
+	}
+	if err := validateRefList("test_result_refs", c.TestResultRefs); err != nil {
+		return err
 	}
 	if len(c.ToolCalls) > maxToolCallsPerInterpretation {
 		return fmt.Errorf("RecordInterpretation: tool calls exceed %d per reasoning act", maxToolCallsPerInterpretation)

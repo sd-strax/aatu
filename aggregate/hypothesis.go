@@ -1,6 +1,7 @@
 package aggregate
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -68,6 +69,14 @@ const statementMaxRunes = 1000
 
 // maxLabels bounds the label list (ATT&CK technique ids by convention).
 const maxLabels = 20
+
+// Bounds on a prediction's declared test query — it lands in the event payload
+// (and the STIX node), so it must stay a query spec, not a bulk carrier. The
+// transcript side store is where large content belongs.
+const (
+	maxQueryTextRunes  = 4000
+	maxQueryParamBytes = 4096
+)
 
 // HypothesisNode is the creation payload for a new x-hypothesis, carried on a
 // RecordInterpretation of type "hypothesis" (01: hypotheses are OUTPUTS of
@@ -276,6 +285,14 @@ func validateHypothesisNode(h HypothesisNode) error {
 	if len(h.Labels) > maxLabels {
 		return fmt.Errorf("RecordInterpretation: hypothesis labels exceed %d", maxLabels)
 	}
+	if err := validateRefList("labels", h.Labels); err != nil {
+		return err
+	}
+	if h.RootedAtRef != "" {
+		if err := validateRefList("rooted_at_ref", []string{h.RootedAtRef}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -291,6 +308,22 @@ func validatePredictionNode(p PredictionNode) error {
 	}
 	if utf8.RuneCountInString(p.Statement) > statementMaxRunes {
 		return fmt.Errorf("RecordInterpretation: prediction.statement exceeds %d chars", statementMaxRunes)
+	}
+	// The test query lands in the event payload — bound it (the transcript
+	// side store is where bulk belongs).
+	if q := p.TestQuery; q != nil {
+		if utf8.RuneCountInString(q.QueryText) > maxQueryTextRunes {
+			return fmt.Errorf("RecordInterpretation: test_query.query_text exceeds %d chars", maxQueryTextRunes)
+		}
+		if len(q.Parameters) > 0 {
+			raw, err := json.Marshal(q.Parameters)
+			if err != nil {
+				return fmt.Errorf("RecordInterpretation: test_query.parameters: %w", err)
+			}
+			if len(raw) > maxQueryParamBytes {
+				return fmt.Errorf("RecordInterpretation: test_query.parameters exceed %d bytes", maxQueryParamBytes)
+			}
+		}
 	}
 	return nil
 }

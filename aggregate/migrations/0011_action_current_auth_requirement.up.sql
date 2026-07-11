@@ -10,7 +10,11 @@
 -- payload). All are frozen at request time and never change.
 -- parameters is the frozen action parameters (the write adapter needs them at
 -- dispatch, and the approver needs to see them). Frozen at request time.
+-- primary_approved_at preserves the PRIMARY approval's true timestamp so the
+-- final (secondary-stage) authorization record cites when the primary actually
+-- approved — never the secondary's clock.
 ALTER TABLE action_current ADD COLUMN IF NOT EXISTS required_mode TEXT;
 ALTER TABLE action_current ADD COLUMN IF NOT EXISTS secondary_approver_pool JSONB;
 ALTER TABLE action_current ADD COLUMN IF NOT EXISTS reversal_of_ref UUID;
 ALTER TABLE action_current ADD COLUMN IF NOT EXISTS parameters JSONB;
+ALTER TABLE action_current ADD COLUMN IF NOT EXISTS primary_approved_at TIMESTAMP WITH TIME ZONE;
