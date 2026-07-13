@@ -14,6 +14,26 @@ import (
 	"github.com/sd-strax/reckon/internal/branding"
 )
 
+// toolExchange is one tool call + its full result from the most recent turn,
+// retained surface-side so /raw can show the untruncated payload the live
+// ticker clips. Reset at the start of every agent turn.
+type toolExchange struct {
+	name    string
+	input   string
+	content string
+	isError bool
+}
+
+// repl holds the interactive session's surface-side state: the backend client,
+// the input scanner, and the last turn's tool exchanges (for /raw). The agent
+// Session owns the reasoning; this owns the analyst's console.
+type repl struct {
+	client    *agent.Client
+	invID     string
+	in        *bufio.Scanner
+	lastTools []toolExchange
+}
+
 // runInvestigate drives the interactive agent loop (05 §3.4) against a running
 // backend: `reckon investigate <investigation-id>`. The loop is client-side by
 // architectural commitment — the Anthropic key stays in this process (BYOK) and
@@ -57,6 +77,8 @@ func runInvestigate(invID string) error {
 	client := agent.NewClient(backendURL, agentToken, humanToken)
 	llm := &agent.Anthropic{APIKey: apiKey, Model: envOr("RECKON_MODEL", agent.DefaultAnthropicModel)}
 
+	r := &repl{client: client, invID: invID}
+
 	session, err := agent.NewSession(ctx, agent.Config{
 		Backend:         client,
 		LLM:             llm,
@@ -67,6 +89,7 @@ func runInvestigate(invID string) error {
 			},
 			OnToolCall: func(name string, input json.RawMessage) {
 				fmt.Printf("  → %s %s\n", name, compactJSON(input))
+				r.lastTools = append(r.lastTools, toolExchange{name: name, input: string(input)})
 			},
 			OnToolResult: func(name, content string, isError bool) {
 				mark := "✓"
@@ -74,6 +97,12 @@ func runInvestigate(invID string) error {
 					mark = "✗"
 				}
 				fmt.Printf("  %s %s: %s\n", mark, name, clip(content, 200))
+				// Attach the full result to the call recorded a moment ago
+				// (OnToolCall → dispatch → OnToolResult run in sequence per tool).
+				if n := len(r.lastTools); n > 0 {
+					r.lastTools[n-1].content = content
+					r.lastTools[n-1].isError = isError
+				}
 			},
 		},
 	})
@@ -81,17 +110,17 @@ func runInvestigate(invID string) error {
 		return err
 	}
 
-	fmt.Printf("%s agent loop — investigation %s (%d tools). Type a question; /pending lists actions awaiting you; 'exit' to quit.\n",
+	fmt.Printf("%s agent loop — investigation %s (%d tools). Type a question; /help for commands; 'exit' to quit.\n",
 		branding.CLI, invID, len(session.Tools()))
 
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 1<<20), 1<<20)
+	r.in = bufio.NewScanner(os.Stdin)
+	r.in.Buffer(make([]byte, 1<<20), 1<<20)
 	for {
 		fmt.Print("\n> ")
-		if !in.Scan() {
-			return in.Err()
+		if !r.in.Scan() {
+			return r.in.Err()
 		}
-		line := strings.TrimSpace(in.Text())
+		line := strings.TrimSpace(r.in.Text())
 		if line == "" {
 			continue
 		}
@@ -99,10 +128,12 @@ func runInvestigate(invID string) error {
 			return nil
 		}
 		if strings.HasPrefix(line, "/") {
-			runSlashCommand(ctx, client, in, invID, line)
+			r.runSlashCommand(ctx, line)
 			continue
 		}
 
+		// A fresh turn: clear the raw-result buffer so /raw shows THIS turn.
+		r.lastTools = nil
 		res, err := session.Turn(ctx, line)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "turn error: %v\n", err)
@@ -114,19 +145,24 @@ func runInvestigate(invID string) error {
 		// Actions awaiting the ANALYST — everything pending on the investigation,
 		// not just this turn's proposals — offered inline, on the human token.
 		// This is the human-in-the-loop seam, not UI sugar.
-		offerApprovals(ctx, client, in, res.PendingActions)
+		r.offerApprovals(ctx, res.PendingActions)
 	}
 }
 
 // runSlashCommand handles the surface-side commands (they never reach the
-// model): /pending re-lists actions awaiting approval, /approve and /reject
-// act on one by id. These exist so a pending action is never stranded — the
-// inline offer after a turn is a convenience, not the only path.
-func runSlashCommand(ctx context.Context, client *agent.Client, in *bufio.Scanner, invID, line string) {
+// model): /help lists them, /raw dumps the last turn's untruncated tool
+// results, /pending re-lists actions awaiting approval, /approve and /reject
+// act on one by id. These exist so a pending action is never stranded and the
+// raw telemetry is inspectable without asking the agent to regurgitate it.
+func (r *repl) runSlashCommand(ctx context.Context, line string) {
 	fields := strings.Fields(line)
 	switch fields[0] {
+	case "/help":
+		printHelp()
+	case "/raw":
+		r.printRaw(fields[1:])
 	case "/pending":
-		acts, err := client.ListActions(ctx, invID)
+		acts, err := r.client.ListActions(ctx, r.invID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "list actions: %v\n", err)
 			return
@@ -141,13 +177,13 @@ func runSlashCommand(ctx context.Context, client *agent.Client, in *bufio.Scanne
 			fmt.Println("no actions awaiting approval")
 			return
 		}
-		offerApprovals(ctx, client, in, pending)
+		r.offerApprovals(ctx, pending)
 	case "/approve":
 		if len(fields) < 2 {
 			fmt.Println("usage: /approve <action-id> [T3 challenge text]")
 			return
 		}
-		out, err := client.ApproveAction(ctx, fields[1], strings.Join(fields[2:], " "))
+		out, err := r.client.ApproveAction(ctx, fields[1], strings.Join(fields[2:], " "))
 		report("approved", out, err)
 	case "/reject":
 		if len(fields) < 2 {
@@ -158,18 +194,82 @@ func runSlashCommand(ctx context.Context, client *agent.Client, in *bufio.Scanne
 		if reason == "" {
 			reason = "analyst rejected via /reject"
 		}
-		out, err := client.RejectAction(ctx, fields[1], reason)
+		out, err := r.client.RejectAction(ctx, fields[1], reason)
 		report("rejected", out, err)
 	default:
-		fmt.Println("commands: /pending, /approve <id> [challenge], /reject <id> [reason]")
+		fmt.Printf("unknown command %q — /help for the list\n", fields[0])
 	}
+}
+
+// printHelp enumerates the full command surface. This is the discoverable list
+// (the inline ticker and approval prompt only hint at parts of it).
+func printHelp() {
+	fmt.Print(`commands:
+  <text>                      ask the agent — runs an investigation turn
+  /raw [verb]                 show the last turn's tool results in full (JSON, untruncated);
+                              optionally just one verb, e.g. /raw enumerate_logons
+  /pending                    list actions awaiting your approval and offer each
+  /approve <id> [challenge]   approve an action by id (challenge text required for T3)
+  /reject <id> [reason]       reject an action by id
+  /help                       this list
+  exit | quit                 leave
+
+after a turn that proposes actions, an inline approval prompt appears:
+  y               approve
+  y <challenge>   approve a T3 action with its challenge text
+  n [reason]      reject
+  Enter           defer — the action stays pending; revisit with /pending
+`)
+}
+
+// printRaw prints the most recent turn's tool exchanges with their full,
+// untruncated result payloads (the OCSF events + normalized objects a
+// capability verb returns) — the raw view the 200-char live ticker clips. An
+// optional verb argument filters to that one tool.
+func (r *repl) printRaw(args []string) {
+	if len(r.lastTools) == 0 {
+		fmt.Println("no tool results yet — ask the agent something that queries data first")
+		return
+	}
+	want := ""
+	if len(args) > 0 {
+		want = args[0]
+	}
+	shown := 0
+	for _, tx := range r.lastTools {
+		if want != "" && tx.name != want {
+			continue
+		}
+		shown++
+		mark := "✓"
+		if tx.isError {
+			mark = "✗"
+		}
+		fmt.Printf("\n%s %s  %s\n%s\n", mark, tx.name, tx.input, prettyJSON(tx.content))
+	}
+	if shown == 0 {
+		fmt.Printf("no tool named %q in the last turn (have: %s)\n", want, strings.Join(r.toolNames(), ", "))
+	}
+}
+
+// toolNames lists the distinct tool names from the last turn (for /raw's hint).
+func (r *repl) toolNames() []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, tx := range r.lastTools {
+		if !seen[tx.name] {
+			seen[tx.name] = true
+			names = append(names, tx.name)
+		}
+	}
+	return names
 }
 
 // offerApprovals walks pending actions and prompts for each. Only an explicit
 // `y`/`n` acts; Enter (or anything unrecognized) defers — the action stays
 // pending and is re-offered after the next turn or via /pending. Deliberately
 // strict: free text must never approve a containment action by accident.
-func offerApprovals(ctx context.Context, client *agent.Client, in *bufio.Scanner, actions []agent.ActionStatus) {
+func (r *repl) offerApprovals(ctx context.Context, actions []agent.ActionStatus) {
 	for _, a := range actions {
 		if !a.Pending() {
 			continue
@@ -177,22 +277,22 @@ func offerApprovals(ctx context.Context, client *agent.Client, in *bufio.Scanner
 		fmt.Printf("\naction %s %s → %s [%s, %s] awaits your approval.\n",
 			a.ActionID, a.ActionType, targetList(a.Targets), a.Tier, a.PendingLabel())
 		fmt.Print("  approve? [y = approve, y <challenge> for T3, n [reason] = reject, Enter = decide later] ")
-		if !in.Scan() {
+		if !r.in.Scan() {
 			return
 		}
-		fields := strings.Fields(in.Text())
+		fields := strings.Fields(r.in.Text())
 		switch {
 		case len(fields) == 0:
 			fmt.Println("  left pending (use /pending to come back to it)")
 		case strings.EqualFold(fields[0], "y"):
-			out, err := client.ApproveAction(ctx, a.ActionID, strings.Join(fields[1:], " "))
+			out, err := r.client.ApproveAction(ctx, a.ActionID, strings.Join(fields[1:], " "))
 			report("approved", out, err)
 		case strings.EqualFold(fields[0], "n"):
 			reason := strings.Join(fields[1:], " ")
 			if reason == "" {
 				reason = "analyst declined at the prompt"
 			}
-			out, err := client.RejectAction(ctx, a.ActionID, reason)
+			out, err := r.client.RejectAction(ctx, a.ActionID, reason)
 			report("rejected", out, err)
 		default:
 			fmt.Println("  unrecognized — left pending (only y/n act; use /pending to come back to it)")
@@ -236,6 +336,16 @@ func compactJSON(raw json.RawMessage) string {
 		return string(raw)
 	}
 	return clip(buf.String(), 200)
+}
+
+// prettyJSON indents a JSON string for the /raw view. Non-JSON content (e.g. a
+// plain error result) is returned unchanged rather than mangled.
+func prettyJSON(s string) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(s), "", "  "); err != nil {
+		return s
+	}
+	return buf.String()
 }
 
 func clip(s string, n int) string {
