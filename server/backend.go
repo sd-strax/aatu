@@ -301,6 +301,12 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.listCapabilities),
 	))
 
+	// POST /api/capability/{verb} — verb invocation (03 §3.4, Phase E.1): the
+	// agent loop's read-tool dispatch target. Analyst role.
+	api.Handle("/capability/", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.capabilityInvokeRoute),
+	))
+
 	// POST /api/actions — request_action (08 §2): propose a state-changing
 	// action; runs Gate 2 and (on auto-approval) triggers dispatch. Analyst role.
 	api.Handle("/actions", authz.RequireAuth(verifier)(
