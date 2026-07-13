@@ -62,6 +62,14 @@ func main() {
 		if err := runStatus(); err != nil {
 			log.Fatalf("%s status: %v", branding.CLI, err)
 		}
+	case "investigate":
+		id := ""
+		if len(os.Args) > 2 {
+			id = os.Args[2]
+		}
+		if err := runInvestigate(id); err != nil {
+			log.Fatalf("%s investigate: %v", branding.CLI, err)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
@@ -78,6 +86,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  check      validate config + module activation without starting services")
 	fmt.Fprintf(os.Stderr, "  stop       signal a running %s supervisor to shut down\n", branding.CLI)
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
+	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (needs ANTHROPIC_API_KEY)")
 }
 
 // runInit performs first-run setup: writes a default config with a freshly
