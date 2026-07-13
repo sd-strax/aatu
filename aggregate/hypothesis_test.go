@@ -218,6 +218,24 @@ func TestHypothesisLifecycle_Apply(t *testing.T) {
 		t.Error("outcome on a terminal hypothesis accepted")
 	}
 
+	// Adjudication semantics (01 §x-hypothesis notes): acknowledgment is an
+	// endorsement, not a gate — an AI delegate may record a decisive outcome on
+	// its own un-acknowledged (PROPOSED) hypothesis. This pins v0's `autonomous`
+	// behavior; the planned `vetted` tenant config (01 open questions) tightens
+	// exactly this guard when it lands.
+	aiSup, err := applyCommand(ai, sup, proposed())
+	if err != nil {
+		t.Fatalf("AI decisive outcome on its own PROPOSED hypothesis rejected: %v", err)
+	}
+	if tr := recFromEvents(t, aiSup).HypothesisTransition; tr == nil || tr.From != HypothesisProposed || tr.To != HypothesisSupported {
+		t.Errorf("AI adjudication transition = %+v; want PROPOSED→SUPPORTED", tr)
+	}
+	// And once decided pre-acknowledgment, the hypothesis can never be acked —
+	// analyst disagreement chains a new hypothesis via parent_ref instead.
+	if _, err := applyCommand(human, ack, terminal); err == nil {
+		t.Error("acknowledgment of a terminal hypothesis accepted")
+	}
+
 	// inconclusive routes to INCONCLUSIVE, or ABANDONED with the flag.
 	inc := sup
 	inc.InterpretationType = InterpretationInconclusive

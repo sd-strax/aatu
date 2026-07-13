@@ -424,6 +424,8 @@ x-hypothesis
 
 - `PROPOSED` is the initial state for **AI-generated** hypotheses pending acknowledgment.
 - `OPEN` is the initial state for **analyst-created** hypotheses, and where AI hypotheses move on acknowledgment.
+- **Acknowledgment is a human-only act**, legal only on a `PROPOSED` hypothesis (an AI delegate cannot acknowledge — its own or any). It marks analyst ownership of the line of inquiry. It is an **endorsement, not a gate**: evidential outcomes (`support` / `refutation` / `inconclusive`) are legal from `PROPOSED` or `OPEN`, so an AI delegate may adjudicate its own unacknowledged hypothesis (consistent with 04-action-authorization.md §1 — hypothesis edits are T1-annotate, no friction). Every transition is recorded as an Interpretation with principal + delegate, so "AI-adjudicated, never human-acknowledged" is always derivable from the thread. See the adjudication-mode open question below for the planned configurable tightening.
+- **Terminal statuses are terminal** — a changed judgment is a new hypothesis chained via `parent_ref`, keeping every reversal auditable. Consequence: a hypothesis decided before acknowledgment can never be acknowledged; analyst disagreement with a terminal verdict is expressed by chaining, not by re-opening.
 - **Evidence is not embedded** — it lives as `x-supports` / `x-refutes` relationships from Sightings.
 - Status transitions are recorded as Interpretations in the reasoning thread.
 
@@ -605,6 +607,7 @@ OPEN QUESTIONS DELIBERATELY LEFT TO IMPLEMENTATION
 These are **not domain-model gaps**. The model accommodates either choice.
 
 - Sharding / partitioning strategy for per-tenant data at scale. Constrained by the tenant model — per-tenant scope is guaranteed by construction; the remaining question is operational tuning within a tenant, not global federation.
+- **Hypothesis adjudication mode (`vetted` vs `autonomous`).** Whether an AI delegate may record a *decisive* outcome (`support` / `refutation`) on its own un-acknowledged hypothesis is a trust posture, not a fixed property of the model: a team new to the product wants to vet AI theories against institutional knowledge before they are decided; a practiced team drops that friction. Planned as tenant configuration — `vetted` (decisive outcomes require prior acknowledgment; the AI assembles the theory and its evidence, then hands the verdict to the analyst) vs `autonomous` (outcomes legal from `PROPOSED`, the behavior implemented today) — enforced at the same aggregate boundary as the human-only acknowledgment guard, so no alternate path bypasses it. Deliberately decoupled from action containment: Gate 2 and human approval (04-action-authorization.md §4–§5) are identical in both modes — the dial loosens *reasoning* friction, never *world-changing* friction. Interaction to spec when it lands: a `vetted`-mode background hunt (05-component-architecture.md §3.3, v2) yields a queue of `PROPOSED` theories for morning review; an `autonomous`-mode hunt self-adjudicates overnight. v0 ships the `autonomous` behavior without the config; the config (and its default, likely `vetted`) lands when field feedback demands the dial.
 
 ### Closed (resolved by other specs)
 
