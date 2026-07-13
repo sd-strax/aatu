@@ -81,7 +81,7 @@ func runInvestigate(invID string) error {
 		return err
 	}
 
-	fmt.Printf("%s agent loop — investigation %s (%d tools). Type a question; 'exit' to quit.\n",
+	fmt.Printf("%s agent loop — investigation %s (%d tools). Type a question; /pending lists actions awaiting you; 'exit' to quit.\n",
 		branding.CLI, invID, len(session.Tools()))
 
 	in := bufio.NewScanner(os.Stdin)
@@ -98,6 +98,10 @@ func runInvestigate(invID string) error {
 		if line == "exit" || line == "quit" {
 			return nil
 		}
+		if strings.HasPrefix(line, "/") {
+			runSlashCommand(ctx, client, in, invID, line)
+			continue
+		}
 
 		res, err := session.Turn(ctx, line)
 		if err != nil {
@@ -107,31 +111,108 @@ func runInvestigate(invID string) error {
 			}
 		}
 
-		// Actions the model proposed await the ANALYST — offer approval inline,
-		// on the human token. This is the human-in-the-loop seam, not UI sugar.
-		for _, a := range res.PendingActions {
-			if a.Status != "PENDING_MANUAL" && a.Status != "PENDING_TWO_PARTY" {
-				continue
-			}
-			fmt.Printf("\naction %s [%s, %s] awaits your approval. approve? [y/N/challenge text for T3] ", a.ActionID, a.Tier, a.Status)
-			if !in.Scan() {
-				return in.Err()
-			}
-			answer := strings.TrimSpace(in.Text())
-			switch {
-			case answer == "" || strings.EqualFold(answer, "n"):
-				out, err := client.RejectAction(ctx, a.ActionID, "analyst declined at the prompt")
-				report("rejected", out, err)
-			case strings.EqualFold(answer, "y"):
-				out, err := client.ApproveAction(ctx, a.ActionID, "")
-				report("approved", out, err)
-			default:
-				// A T3 approval requires the typed challenge — pass the text through.
-				out, err := client.ApproveAction(ctx, a.ActionID, answer)
-				report("approved", out, err)
+		// Actions awaiting the ANALYST — everything pending on the investigation,
+		// not just this turn's proposals — offered inline, on the human token.
+		// This is the human-in-the-loop seam, not UI sugar.
+		offerApprovals(ctx, client, in, res.PendingActions)
+	}
+}
+
+// runSlashCommand handles the surface-side commands (they never reach the
+// model): /pending re-lists actions awaiting approval, /approve and /reject
+// act on one by id. These exist so a pending action is never stranded — the
+// inline offer after a turn is a convenience, not the only path.
+func runSlashCommand(ctx context.Context, client *agent.Client, in *bufio.Scanner, invID, line string) {
+	fields := strings.Fields(line)
+	switch fields[0] {
+	case "/pending":
+		acts, err := client.ListActions(ctx, invID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "list actions: %v\n", err)
+			return
+		}
+		var pending []agent.ActionStatus
+		for _, a := range acts {
+			if a.Pending() {
+				pending = append(pending, a)
 			}
 		}
+		if len(pending) == 0 {
+			fmt.Println("no actions awaiting approval")
+			return
+		}
+		offerApprovals(ctx, client, in, pending)
+	case "/approve":
+		if len(fields) < 2 {
+			fmt.Println("usage: /approve <action-id> [T3 challenge text]")
+			return
+		}
+		out, err := client.ApproveAction(ctx, fields[1], strings.Join(fields[2:], " "))
+		report("approved", out, err)
+	case "/reject":
+		if len(fields) < 2 {
+			fmt.Println("usage: /reject <action-id> [reason]")
+			return
+		}
+		reason := strings.Join(fields[2:], " ")
+		if reason == "" {
+			reason = "analyst rejected via /reject"
+		}
+		out, err := client.RejectAction(ctx, fields[1], reason)
+		report("rejected", out, err)
+	default:
+		fmt.Println("commands: /pending, /approve <id> [challenge], /reject <id> [reason]")
 	}
+}
+
+// offerApprovals walks pending actions and prompts for each. Only an explicit
+// `y`/`n` acts; Enter (or anything unrecognized) defers — the action stays
+// pending and is re-offered after the next turn or via /pending. Deliberately
+// strict: free text must never approve a containment action by accident.
+func offerApprovals(ctx context.Context, client *agent.Client, in *bufio.Scanner, actions []agent.ActionStatus) {
+	for _, a := range actions {
+		if !a.Pending() {
+			continue
+		}
+		fmt.Printf("\naction %s %s → %s [%s, %s] awaits your approval.\n",
+			a.ActionID, a.ActionType, targetList(a.Targets), a.Tier, a.PendingLabel())
+		fmt.Print("  approve? [y = approve, y <challenge> for T3, n [reason] = reject, Enter = decide later] ")
+		if !in.Scan() {
+			return
+		}
+		fields := strings.Fields(in.Text())
+		switch {
+		case len(fields) == 0:
+			fmt.Println("  left pending (use /pending to come back to it)")
+		case strings.EqualFold(fields[0], "y"):
+			out, err := client.ApproveAction(ctx, a.ActionID, strings.Join(fields[1:], " "))
+			report("approved", out, err)
+		case strings.EqualFold(fields[0], "n"):
+			reason := strings.Join(fields[1:], " ")
+			if reason == "" {
+				reason = "analyst declined at the prompt"
+			}
+			out, err := client.RejectAction(ctx, a.ActionID, reason)
+			report("rejected", out, err)
+		default:
+			fmt.Println("  unrecognized — left pending (only y/n act; use /pending to come back to it)")
+		}
+	}
+}
+
+// targetList renders an action's targets for the approval prompt.
+func targetList(targets []agent.ActionTarget) string {
+	if len(targets) == 0 {
+		return "(no targets)"
+	}
+	ids := make([]string, len(targets))
+	for i, t := range targets {
+		ids[i] = t.ResolvedIdentifier
+		if ids[i] == "" {
+			ids[i] = t.EntityRef
+		}
+	}
+	return strings.Join(ids, ", ")
 }
 
 func report(verb string, out json.RawMessage, err error) {

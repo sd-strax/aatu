@@ -40,6 +40,63 @@ type RequestActionResponse struct {
 	WorkflowID       string `json:"workflow_id,omitempty"`
 }
 
+// ActionView is one row of GET /api/investigations/{id}/actions — the action
+// review queue + audit list a surface renders to offer approvals. Status is the
+// projection's raw lifecycle status (REQUESTED/PENDING_SECONDARY/APPROVED/…);
+// required_mode says what approval the request still needs (MANUAL/TWO_PARTY).
+type ActionView struct {
+	ActionID     string                 `json:"action_id"`
+	ActionType   string                 `json:"action_type"`
+	Tier         string                 `json:"tier"`
+	Status       string                 `json:"status"`
+	RequiredMode string                 `json:"required_mode,omitempty"`
+	Mode         string                 `json:"mode,omitempty"`
+	IsReversal   bool                   `json:"is_reversal,omitempty"`
+	Targets      []aggregate.TargetSpec `json:"targets,omitempty"`
+	ExpiresAt    *time.Time             `json:"expires_at,omitempty"`
+}
+
+// listInvestigationActions serves GET /api/investigations/{id}/actions: every
+// x-action of the investigation, oldest first. This is how a surface recovers
+// the pending-approval queue after the turn that proposed an action is gone —
+// the request-time response is a one-shot; this list is the durable view.
+func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Request) {
+	if b.cfg.Handler == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "aggregate handler not configured")
+		return
+	}
+	invID, ok := investigationSubresourceID(r.URL.Path, "actions")
+	if !ok {
+		writeJSONError(w, http.StatusBadRequest, "invalid investigation id in path")
+		return
+	}
+
+	acts, err := aggregate.ListActionCurrents(r.Context(), b.cfg.Handler.DB(), invID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "list actions: "+err.Error())
+		return
+	}
+	out := make([]ActionView, 0, len(acts))
+	for _, a := range acts {
+		v := ActionView{
+			ActionID:     a.ActionID.String(),
+			ActionType:   a.ActionType,
+			Tier:         a.Tier,
+			Status:       a.Status,
+			RequiredMode: a.RequiredMode,
+			Mode:         a.Mode,
+			IsReversal:   a.IsReversal,
+			Targets:      a.Targets,
+		}
+		if !a.ExpiresAt.IsZero() {
+			t := a.ExpiresAt
+			v.ExpiresAt = &t
+		}
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"actions": out})
+}
+
 // actorFromClaims derives the command actor from the JWT claims — Kind from the
 // delegate_kind claim, NEVER a request body (04 §5.6): otherwise the AI
 // write-protection at the aggregate boundary is caller-spoofable. Every handler

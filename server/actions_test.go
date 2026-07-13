@@ -205,6 +205,70 @@ func TestRequestAction_ReversalValidation(t *testing.T) {
 	}
 }
 
+// TestListInvestigationActions: GET /api/investigations/{id}/actions returns
+// the durable action queue — every x-action with its raw status, required mode,
+// and targets — so a surface can recover pending approvals after the turn that
+// proposed them is gone.
+func TestListInvestigationActions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	b := actionBackend(t) // baseline only — requests land REQUESTED/MANUAL
+
+	_, first := postAction(t, b, mintToken(t, nil), RequestActionBody{
+		ActionType:       "host.isolate",
+		Targets:          []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-FILE01"}},
+		Rationale:        "contain",
+		InvestigationRef: invID.String(),
+	})
+	_, second := postAction(t, b, mintToken(t, nil), RequestActionBody{
+		ActionType:       "account.disable",
+		Targets:          []aggregate.TargetSpec{{EntityRef: "user-account--1", ResolvedIdentifier: "svc_backup"}},
+		Rationale:        "contain",
+		InvestigationRef: invID.String(),
+	})
+
+	srv := httptest.NewServer(b.buildRouter(b.verifier))
+	t.Cleanup(srv.Close)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/investigations/"+invID.String()+"/actions", nil)
+	req.Header.Set("Authorization", "Bearer "+mintToken(t, nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	var out struct {
+		Actions []ActionView `json:"actions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Actions) != 2 {
+		t.Fatalf("actions = %d; want 2", len(out.Actions))
+	}
+	byID := map[string]ActionView{}
+	for _, a := range out.Actions {
+		byID[a.ActionID] = a
+	}
+	iso, ok := byID[first.ActionID]
+	if !ok {
+		t.Fatalf("host.isolate %s missing from list %+v", first.ActionID, out.Actions)
+	}
+	if iso.ActionType != "host.isolate" || iso.Status != aggregate.ActionStatusRequested ||
+		iso.RequiredMode != aggregate.AuthModeManual ||
+		len(iso.Targets) != 1 || iso.Targets[0].ResolvedIdentifier != "WIN-FILE01" {
+		t.Errorf("host.isolate row mangled: %+v", iso)
+	}
+	if dis := byID[second.ActionID]; dis.ActionType != "account.disable" {
+		t.Errorf("account.disable row mangled: %+v", dis)
+	}
+}
+
 // TestRequestAction_AIDelegatedT3BaselineDeny: an AI-delegated request that
 // escalates to T3 can never auto-approve — the baseline DENY forces manual,
 // even with a matching AUTO_APPROVE policy. Actor.Kind comes from the JWT

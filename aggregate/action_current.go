@@ -177,22 +177,21 @@ func (ActionCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// LoadActionCurrent returns the materialized state for one x-action, or
-// sql.ErrNoRows if it has not been projected.
-func LoadActionCurrent(ctx context.Context, db *sql.DB, actionID uuid.UUID) (ActionCurrent, error) {
+// actionCurrentColumns is the SELECT list scanActionCurrent expects, shared by
+// every action_current reader so the column order cannot drift per-query.
+const actionCurrentColumns = `action_id, aggregate_id, action_type, tier, status, mode,
+	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref,
+	       required_mode, secondary_approver_pool, parameters, targets, expires_at,
+	       last_event_sequence`
+
+// scanActionCurrent decodes one actionCurrentColumns row (sql.Row or sql.Rows).
+func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	var a ActionCurrent
 	var mode, approver, requiredMode sql.NullString
 	var primaryAt, expiresAt sql.NullTime
 	var reversalOf uuid.NullUUID
 	var targets, pool, params []byte
-	err := db.QueryRowContext(ctx, `
-		SELECT action_id, aggregate_id, action_type, tier, status, mode,
-		       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref,
-		       required_mode, secondary_approver_pool, parameters, targets, expires_at,
-		       last_event_sequence
-		FROM action_current
-		WHERE action_id = $1
-	`, actionID).Scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
+	err := scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
 		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf,
 		&requiredMode, &pool, &params, &targets, &expiresAt,
 		&a.LastEventSequence)
@@ -217,6 +216,38 @@ func LoadActionCurrent(ctx context.Context, db *sql.DB, actionID uuid.UUID) (Act
 		_ = json.Unmarshal(targets, &a.Targets)
 	}
 	return a, nil
+}
+
+// LoadActionCurrent returns the materialized state for one x-action, or
+// sql.ErrNoRows if it has not been projected.
+func LoadActionCurrent(ctx context.Context, db *sql.DB, actionID uuid.UUID) (ActionCurrent, error) {
+	row := db.QueryRowContext(ctx,
+		`SELECT `+actionCurrentColumns+` FROM action_current WHERE action_id = $1`, actionID)
+	return scanActionCurrent(row.Scan)
+}
+
+// ListActionCurrents returns every x-action of one investigation, oldest first
+// — the action review queue (a REQUESTED/PENDING_SECONDARY row is a pending
+// approval) and the audit list, with full targets/mode detail (unlike
+// ListActionSummaries, which serves the export report's lightweight view).
+func ListActionCurrents(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]ActionCurrent, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT `+actionCurrentColumns+` FROM action_current
+		 WHERE aggregate_id = $1 ORDER BY created_at, action_id`, aggregateID)
+	if err != nil {
+		return nil, fmt.Errorf("query action_current: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ActionCurrent
+	for rows.Next() {
+		a, err := scanActionCurrent(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan action_current: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // nullUUID maps the zero UUID to SQL NULL.

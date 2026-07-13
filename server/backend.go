@@ -429,15 +429,26 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 }
 
 // /investigations/{id} handles GET (load one); the /hypotheses sub-resource
-// lists the investigation's reasoning nodes (D.2); the /export sub-resource
-// triggers the post-conclusion export bundle (D.5); the /lifecycle sub-resource
-// drives the state machine (activate/pause/resume/conclude/reopen/archive, D.6).
+// lists the investigation's reasoning nodes (D.2); the /actions sub-resource
+// lists its x-actions (the pending-approval queue + audit list); the /export
+// sub-resource triggers the post-conclusion export bundle (D.5); the /lifecycle
+// sub-resource drives the state machine (activate/pause/resume/conclude/reopen/
+// archive, D.6).
 func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimSuffix(r.URL.Path, "/")
 	if strings.HasSuffix(trimmed, "/hypotheses") {
 		switch r.Method {
 		case http.MethodGet:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationHypotheses)
+		default:
+			methodNotAllowed(w, "GET")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/actions") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationActions)
 		default:
 			methodNotAllowed(w, "GET")
 		}

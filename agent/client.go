@@ -132,6 +132,43 @@ type ActionResponse struct {
 	WorkflowID string `json:"workflow_id,omitempty"`
 }
 
+// ActionStatus is one row of GET /api/investigations/{id}/actions — the
+// durable action queue, unlike ActionResponse which only reports the moment of
+// request. Status is the engine's raw lifecycle status; the fallback path may
+// also carry the request-time PENDING_* labels.
+type ActionStatus struct {
+	ActionID     string         `json:"action_id"`
+	ActionType   string         `json:"action_type"`
+	Tier         string         `json:"tier"`
+	Status       string         `json:"status"`
+	RequiredMode string         `json:"required_mode,omitempty"`
+	IsReversal   bool           `json:"is_reversal,omitempty"`
+	Targets      []ActionTarget `json:"targets,omitempty"`
+}
+
+// Pending reports whether the action still awaits a human approval.
+func (a ActionStatus) Pending() bool {
+	switch a.Status {
+	case "REQUESTED", "PENDING_SECONDARY", "PENDING_MANUAL", "PENDING_TWO_PARTY":
+		return true
+	}
+	return false
+}
+
+// PendingLabel renders the awaiting state in the request-time vocabulary
+// (PENDING_MANUAL / PENDING_TWO_PARTY) surfaces already speak.
+func (a ActionStatus) PendingLabel() string {
+	switch {
+	case a.Status == "REQUESTED" && a.RequiredMode == "TWO_PARTY":
+		return "PENDING_TWO_PARTY"
+	case a.Status == "REQUESTED":
+		return "PENDING_MANUAL"
+	case a.Status == "PENDING_SECONDARY":
+		return "PENDING_TWO_PARTY"
+	}
+	return a.Status
+}
+
 // Investigation is the GET /api/investigations/{id} view.
 type Investigation struct {
 	AggregateID string `json:"aggregate_id"`
@@ -272,6 +309,18 @@ func (c *Client) ListHypotheses(ctx context.Context, id string) (json.RawMessage
 	var out json.RawMessage
 	err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/hypotheses", c.agentToken, nil, &out)
 	return out, err
+}
+
+// ListActions returns the investigation's x-actions with their current status
+// (agent token — a read). The durable source of the pending-approval queue.
+func (c *Client) ListActions(ctx context.Context, id string) ([]ActionStatus, error) {
+	var out struct {
+		Actions []ActionStatus `json:"actions"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/actions", c.agentToken, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Actions, nil
 }
 
 // ApproveAction approves a pending action AS THE HUMAN (human token): approval

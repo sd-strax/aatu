@@ -62,9 +62,11 @@ type TurnResult struct {
 	Text string
 	// InterpretationID is the committed turn-summary reasoning act.
 	InterpretationID string
-	// PendingActions are actions the model proposed this turn that await the
-	// analyst (PENDING_MANUAL / PENDING_TWO_PARTY) — the surface offers approval.
-	PendingActions []ActionResponse
+	// PendingActions are ALL of the investigation's actions still awaiting the
+	// analyst (not just this turn's proposals) — refreshed from the backend at
+	// turn end, so an approval missed on an earlier turn is re-offered rather
+	// than stranded. The surface offers approval on each.
+	PendingActions []ActionStatus
 	// ToolRounds is how many model→tool rounds the turn took.
 	ToolRounds int
 }
@@ -122,11 +124,19 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	turnID := uuid.NewString()
 
 	var transcript strings.Builder
-	fmt.Fprintf(&transcript, "[user] %s\n", userMsg)
+	fmt.Fprintf(&transcript, "[user] %s\n", sanitizeTranscript(userMsg))
 
 	var toolLog []ToolCall
 	var finalText strings.Builder
-	s.messages = append(s.messages, Message{Role: RoleUser, Content: []ContentBlock{TextBlock(userMsg)}})
+	// A turn aborted by a model-call failure leaves the history ending in a
+	// user message (the tool results, or the aborted turn's own text). Merge
+	// rather than append a sibling — consecutive same-role messages violate the
+	// provider contract.
+	if n := len(s.messages); n > 0 && s.messages[n-1].Role == RoleUser {
+		s.messages[n-1].Content = append(s.messages[n-1].Content, TextBlock(userMsg))
+	} else {
+		s.messages = append(s.messages, Message{Role: RoleUser, Content: []ContentBlock{TextBlock(userMsg)}})
+	}
 
 	rounds := 0
 	for {
@@ -137,7 +147,15 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 			MaxTokens: s.maxTokens,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("agent: model call: %w", err)
+			// Return a partial result rather than nil: any action the model
+			// already requested this turn is recorded server-side and pending —
+			// dropping the result would strand it past the surface's approval
+			// offer (the exact failure mode the durable queue exists to fix).
+			return &TurnResult{
+				Text:           finalText.String(),
+				PendingActions: s.refreshPending(ctx),
+				ToolRounds:     rounds,
+			}, fmt.Errorf("agent: model call: %w", err)
 		}
 		s.messages = append(s.messages, Message{Role: RoleAssistant, Content: resp.Content})
 
@@ -146,7 +164,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 			switch blk.Type {
 			case BlockText:
 				if blk.Text != "" {
-					fmt.Fprintf(&transcript, "[assistant] %s\n", blk.Text)
+					fmt.Fprintf(&transcript, "[assistant] %s\n", sanitizeTranscript(blk.Text))
 					finalText.WriteString(blk.Text)
 					if s.hooks.OnText != nil {
 						s.hooks.OnText(blk.Text)
@@ -158,24 +176,33 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 		}
 
 		if resp.StopReason != StopToolUse || len(toolUses) == 0 {
+			// A stop that still carried tool calls (a max_tokens cut-off
+			// mid-tool_use) must not leave them dangling: every tool_use has to be
+			// answered by a tool_result, or the NEXT turn's model call — this
+			// session's message history is reused across turns — is a contract
+			// violation the provider rejects. Close them off.
+			s.abandonToolUses(&transcript, toolUses, "turn ended before this tool was dispatched")
 			break
 		}
 		rounds++
 		if rounds > s.maxRounds {
 			fmt.Fprintf(&transcript, "[loop] tool budget exhausted after %d rounds\n", s.maxRounds)
+			s.abandonToolUses(&transcript, toolUses, "tool budget exhausted; tool not dispatched")
 			break
 		}
 
 		var results []ContentBlock
 		for _, tu := range toolUses {
-			fmt.Fprintf(&transcript, "[tool_use %s id=%s] %s\n", tu.ToolName, tu.ToolUseID, string(tu.Input))
+			fmt.Fprintf(&transcript, "[tool_use %s id=%s] %s\n",
+				sanitizeTranscript(tu.ToolName), sanitizeTranscript(tu.ToolUseID), sanitizeTranscript(string(tu.Input)))
 			toolLog = append(toolLog, ToolCall{CallID: tu.ToolUseID, ToolName: tu.ToolName, Args: tu.Input})
 			if s.hooks.OnToolCall != nil {
 				s.hooks.OnToolCall(tu.ToolName, tu.Input)
 			}
 
 			content, isErr := s.dispatchTool(ctx, tu.ToolName, tu.Input)
-			fmt.Fprintf(&transcript, "[tool_result %s id=%s error=%v] %s\n", tu.ToolName, tu.ToolUseID, isErr, content)
+			fmt.Fprintf(&transcript, "[tool_result %s id=%s error=%v] %s\n",
+				sanitizeTranscript(tu.ToolName), sanitizeTranscript(tu.ToolUseID), isErr, sanitizeTranscript(content))
 			if s.hooks.OnToolResult != nil {
 				s.hooks.OnToolResult(tu.ToolName, content, isErr)
 			}
@@ -191,7 +218,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 
 	res := &TurnResult{
 		Text:           finalText.String(),
-		PendingActions: s.pendingActions,
+		PendingActions: s.refreshPending(ctx),
 		ToolRounds:     rounds,
 	}
 
@@ -215,6 +242,69 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	}
 	res.InterpretationID = interp.InterpretationID
 	return res, nil
+}
+
+// refreshPending returns the investigation's actions still awaiting approval,
+// straight from the backend — the authoritative queue, covering actions from
+// earlier turns (or earlier sessions) whose approval offer was missed. When the
+// list endpoint fails, it degrades to this turn's request responses so a
+// just-proposed action is still offered.
+func (s *Session) refreshPending(ctx context.Context) []ActionStatus {
+	if acts, err := s.backend.ListActions(ctx, s.investigationID); err == nil {
+		var out []ActionStatus
+		for _, a := range acts {
+			if a.Pending() {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	var out []ActionStatus
+	for _, r := range s.pendingActions {
+		if r.Status == "PENDING_MANUAL" || r.Status == "PENDING_TWO_PARTY" {
+			out = append(out, ActionStatus{ActionID: r.ActionID, Tier: r.Tier, Status: r.Status})
+		}
+	}
+	return out
+}
+
+// abandonToolUses closes off tool calls the turn accepted but is breaking away
+// from without dispatching (the round budget is spent, or the model stopped
+// mid-tool_use on max_tokens). The Messages API requires every tool_use to be
+// answered by a tool_result; because the session reuses its message history
+// across turns, a dangling tool_use would make every subsequent turn's model
+// call fail. Synthetic is_error results keep the conversation valid and tell the
+// model why the call did not run.
+func (s *Session) abandonToolUses(transcript *strings.Builder, toolUses []ContentBlock, reason string) {
+	if len(toolUses) == 0 {
+		return
+	}
+	results := make([]ContentBlock, 0, len(toolUses))
+	for _, tu := range toolUses {
+		fmt.Fprintf(transcript, "[tool_result %s id=%s error=true] %s\n",
+			sanitizeTranscript(tu.ToolName), sanitizeTranscript(tu.ToolUseID), reason)
+		results = append(results, ContentBlock{
+			Type:      BlockToolResult,
+			ToolUseID: tu.ToolUseID,
+			Content:   reason,
+			IsError:   true,
+		})
+	}
+	s.messages = append(s.messages, Message{Role: RoleUser, Content: results})
+}
+
+// sanitizeTranscript neutralizes line breaks in model- or tool-supplied text
+// before it is interpolated into the line-framed transcript. The transcript is
+// the content-hashed audit record; without this, model output (or an injected
+// tool result) could embed a literal newline followed by a fake "[tool_result
+// ...]" / "[tool_use ...]" line and masquerade as reckon's own framing. The
+// structured tool-call log is built from the real dispatch, not this text, so it
+// is unaffected either way — this closes the human-readable-record gap.
+func sanitizeTranscript(s string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	return strings.NewReplacer("\n", "\\n", "\r", "\\r").Replace(s)
 }
 
 // clipRunes truncates s to at most n runes.

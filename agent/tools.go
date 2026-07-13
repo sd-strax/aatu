@@ -18,6 +18,7 @@ const (
 	ToolEvaluateHypothesis      = "evaluate_hypothesis"
 	ToolRecordPredictionOutcome = "record_prediction_outcome"
 	ToolRequestAction           = "request_action"
+	ToolListActions             = "list_actions"
 )
 
 // maxToolResultBytes bounds a tool result fed back to the model. Fixture
@@ -170,6 +171,11 @@ func intrinsicTools() []ToolDef {
 				"evidence_refs": strList("refs grounding this action"),
 				"rationale":     str("why this action, now"),
 			}, "action_type", "targets", "rationale"),
+		},
+		{
+			Name:        ToolListActions,
+			Description: "List this investigation's requested actions with their CURRENT engine status (REQUESTED = awaiting the analyst's approval in this surface; APPROVED/EXECUTING/SUCCEEDED/FAILED/REJECTED/EXPIRED/REVERSED). Use this for ground truth about whether an action was approved or executed — never assume.",
+			InputSchema: obj(map[string]any{}),
 		},
 	}
 }
@@ -337,6 +343,16 @@ func (s *Session) dispatch(ctx context.Context, name string, input json.RawMessa
 		}
 		s.pendingActions = append(s.pendingActions, resp)
 		return json.Marshal(resp)
+
+	case ToolListActions:
+		acts, err := s.backend.ListActions(ctx, s.investigationID)
+		if err != nil {
+			return nil, err
+		}
+		if acts == nil {
+			acts = []ActionStatus{}
+		}
+		return json.Marshal(map[string]any{"actions": acts})
 
 	default:
 		// A capability verb.
