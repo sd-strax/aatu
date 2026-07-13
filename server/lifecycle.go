@@ -68,7 +68,7 @@ func (b *Backend) investigationLifecycle(w http.ResponseWriter, r *http.Request)
 	env := newEnvelope(id, actorFromClaims(claims), commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
-		writeLifecycleError(w, body.Transition, err)
+		writeCommandError(w, body.Transition, err)
 		return
 	}
 	b.publishDeltas(res)
@@ -91,26 +91,6 @@ func (b *Backend) investigationLifecycle(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// writeLifecycleError maps a Handle failure onto the HTTP outcome: the
-// sentinels first (missing aggregate, permission denial, lost OCC race), then
-// domain rejections as 422 (well-formed but illegal now), and anything else —
-// an infrastructure failure loading/appending the stream — as 500.
-func writeLifecycleError(w http.ResponseWriter, transition string, err error) {
-	var rejected *aggregate.RejectedError
-	switch {
-	case errors.Is(err, aggregate.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "investigation not found")
-	case errors.Is(err, aggregate.ErrAIDenied):
-		writeJSONError(w, http.StatusForbidden, transition+": "+err.Error())
-	case errors.Is(err, aggregate.ErrConcurrent):
-		writeJSONError(w, http.StatusConflict, transition+": "+err.Error())
-	case errors.As(err, &rejected):
-		writeJSONError(w, http.StatusUnprocessableEntity, transition+": "+err.Error())
-	default:
-		writeJSONError(w, http.StatusInternalServerError, transition+": "+err.Error())
-	}
 }
 
 // lifecycleCommand maps a transition verb to its aggregate command — the single

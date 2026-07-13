@@ -130,7 +130,7 @@ func (b *Backend) approveAction(w http.ResponseWriter, r *http.Request, actionID
 	env := newEnvelope(ac.AggregateID, actorFromClaims(claims), now)
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.ApproveAction{ActionID: actionID, Authorization: auth})
 	if err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, "approve action: "+err.Error())
+		writeCommandError(w, "approve action", err)
 		return
 	}
 	b.publishDeltas(res)
@@ -255,7 +255,7 @@ func (b *Backend) rejectAction(w http.ResponseWriter, r *http.Request, actionID 
 	env := newEnvelope(ac.AggregateID, actorFromClaims(claims), commandNow()) // actor derived, so the allowlist backs the 403 above
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.RejectAction{ActionID: actionID, Reason: body.Reason})
 	if err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, "reject action: "+err.Error())
+		writeCommandError(w, "reject action", err)
 		return
 	}
 	b.publishDeltas(res)

@@ -119,7 +119,7 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 	env := newEnvelope(uuid.New(), aggregate.Actor{PrincipalID: claims.Subject}, commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.CreateInvestigation{Title: req.Title})
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "create investigation: "+err.Error())
+		writeCommandError(w, "create investigation", err)
 		return
 	}
 	b.publishDeltas(res)

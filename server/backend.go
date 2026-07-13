@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -591,4 +592,28 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 func methodNotAllowed(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+}
+
+// writeCommandError maps an aggregate.Handler.Handle failure onto the HTTP
+// outcome for every /api write path, so a domain rejection, a permission
+// denial, a lost OCC race, and an infrastructure fault are never conflated.
+// Order matters: the sentinels (which arrive wrapped in a *RejectedError) are
+// matched before the generic rejection, and infrastructure failures — which
+// Handle returns unwrapped — fall through to 500. The action label prefixes the
+// message ("conclude", "request action", …). A nil err is a caller bug, treated
+// as 500.
+func writeCommandError(w http.ResponseWriter, action string, err error) {
+	var rejected *aggregate.RejectedError
+	switch {
+	case errors.Is(err, aggregate.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, action+": investigation not found")
+	case errors.Is(err, aggregate.ErrAIDenied):
+		writeJSONError(w, http.StatusForbidden, action+": "+err.Error())
+	case errors.Is(err, aggregate.ErrConcurrent):
+		writeJSONError(w, http.StatusConflict, action+": "+err.Error())
+	case errors.As(err, &rejected):
+		writeJSONError(w, http.StatusUnprocessableEntity, action+": "+err.Error())
+	default:
+		writeJSONError(w, http.StatusInternalServerError, action+": "+err.Error())
+	}
 }

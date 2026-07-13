@@ -307,3 +307,27 @@ func TestRecordInterpretation_AnalystOnly(t *testing.T) {
 		t.Errorf("status = %d; want 403", resp.StatusCode)
 	}
 }
+
+// TestRecordInterpretation_UnknownInvestigation: a write to an id with no event
+// stream is a 404, not a blanket 422 — the shared writeCommandError maps the
+// aggregate's ErrNotFound sentinel the same way for every write path, so a
+// missing aggregate is never conflated with an illegal-but-well-formed command.
+func TestRecordInterpretation_UnknownInvestigation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	b := newTestBackend(t)
+
+	resp, _ := postInterpretation(t, b, mintToken(t, nil), RecordInterpretationBody{
+		InvestigationRef:   uuid.NewString(), // no such investigation
+		InterpretationType: "pivot",
+		InputRefs:          []string{"process--1"},
+		OutputRefs:         []string{"ipv4-addr--1"},
+		Rationale:          "beaconing consistent with C2",
+		Confidence:         "MEDIUM",
+	})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d; want 404 (unknown investigation, not a 422)", resp.StatusCode)
+	}
+}

@@ -202,7 +202,7 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 	env := newEnvelope(investigationID, actor, commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, "record interpretation: "+err.Error())
+		writeCommandError(w, "record interpretation", err)
 		return
 	}
 	b.publishDeltas(res)

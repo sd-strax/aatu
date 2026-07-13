@@ -176,7 +176,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	env := newEnvelope(investigationID, actor, now)
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, "request action: "+err.Error())
+		writeCommandError(w, "request action", err)
 		return
 	}
 	b.publishDeltas(res)
