@@ -55,7 +55,7 @@
     {
       "clientId": "reckon-agent",
       "name": "reckon agent loop (AI delegate)",
-      "description": "The surface obtains tokens here for AI-driven turns. A hardcoded-claim mapper stamps delegate_kind=claude issuer-side (never caller-supplied), while sub stays the analyst and the realm roles carry — so AI is a delegate on the human's behalf, never a principal. The engine derives Actor.Kind from this claim; the AI-write-protection allowlist and Gate 2 baseline DENY key off it. A human token (reckon client) can never gain this claim, and an agent token can never shed it.",
+      "description": "AI-delegate token path: a hardcoded-claim mapper stamps delegate_kind=claude issuer-side; sub stays the analyst. The engine keys AI-write-protection and the Gate 2 baseline DENY off this claim. Rationale: implementation/jwt-claims.md.",
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,

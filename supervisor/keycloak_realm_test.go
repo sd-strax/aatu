@@ -25,6 +25,7 @@ type realmDoc struct {
 
 type realmClient struct {
 	ClientID        string `json:"clientId"`
+	Description     string `json:"description"`
 	PublicClient    bool   `json:"publicClient"`
 	ProtocolMappers []struct {
 		Name           string            `json:"name"`
@@ -58,6 +59,25 @@ func findClient(doc realmDoc, clientID string) (realmClient, bool) {
 		}
 	}
 	return realmClient{}, false
+}
+
+// keycloakClientDescriptionMax is Keycloak's CLIENT.DESCRIPTION column width
+// (VARCHAR(255)). A longer description aborts the realm import with a SQL
+// truncation error and Keycloak never starts — a failure invisible to every
+// mock-issuer test, so it must be guarded here against the embedded realm.
+const keycloakClientDescriptionMax = 255
+
+// TestRealm_ClientDescriptionsFitKeycloakColumn: no client description exceeds
+// Keycloak's column limit. Regression guard for the import failure the first
+// real `reckon start` surfaced (a 473-char reckon-agent description).
+func TestRealm_ClientDescriptionsFitKeycloakColumn(t *testing.T) {
+	doc := parseRealm(t)
+	for _, c := range doc.Clients {
+		if n := len(c.Description); n > keycloakClientDescriptionMax {
+			t.Errorf("client %q description is %d chars; Keycloak's column caps at %d (realm import will abort)",
+				c.ClientID, n, keycloakClientDescriptionMax)
+		}
+	}
 }
 
 // TestRealm_DefinesEveryEngineRole: every role the engine authorizes against
