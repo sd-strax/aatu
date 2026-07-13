@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/sd-strax/reckon/action"
+	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/config"
 )
 
@@ -97,5 +101,61 @@ func TestInit_UniquePerInstall(t *testing.T) {
 	}
 	if a.TenantNamespace == b.TenantNamespace {
 		t.Errorf("two installs minted the same namespace %q", a.TenantNamespace)
+	}
+}
+
+// TestInit_SeedsWiredDemo: a fresh init materializes the demo scenario + a
+// merged tenant config, points the config at them, and that config is consumable
+// by BOTH the capability (read) and action (write) loaders — the "runs out of
+// the box" contract. Verified end-to-end: BuildResolver produces available verbs
+// and BuildActionResolver produces write bindings, both against the seeded files.
+func TestInit_SeedsWiredDemo(t *testing.T) {
+	withConfigEnv(t)
+	res, err := Init()
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if res.SeededScenario == "" || res.CapabilityConfig == "" || res.FixtureRoot == "" {
+		t.Fatalf("seed result incomplete: %+v", res)
+	}
+
+	// The config Load returns points at the seeded files (not the empty default).
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Capability.ConfigPath != res.CapabilityConfig || cfg.Capability.FixtureRoot != res.FixtureRoot {
+		t.Fatalf("config not wired at seed: config_path=%q fixture_root=%q",
+			cfg.Capability.ConfigPath, cfg.Capability.FixtureRoot)
+	}
+
+	// The fixture scenario JSON landed under the fixture root.
+	if entries, err := os.ReadDir(filepath.Join(res.FixtureRoot, res.SeededScenario)); err != nil || len(entries) == 0 {
+		t.Fatalf("fixture scenario not seeded (%v, %d files)", err, len(entries))
+	}
+
+	// The merged config is consumable by the READ loader — verbs light up.
+	tc, err := capability.LoadTenantConfig(res.CapabilityConfig)
+	if err != nil {
+		t.Fatalf("capability.LoadTenantConfig on seeded config: %v", err)
+	}
+	resolver, catalog, err := capability.BuildResolver(tc, res.FixtureRoot, uuid.New())
+	if err != nil {
+		t.Fatalf("BuildResolver on seeded config: %v", err)
+	}
+	if got := len(resolver.AvailableVerbs(catalog)); got == 0 {
+		t.Error("seeded capability config exposes no available verbs")
+	}
+
+	// ...and by the WRITE loader — action bindings are present.
+	ac, err := action.LoadActionConfig(res.CapabilityConfig)
+	if err != nil {
+		t.Fatalf("action.LoadActionConfig on seeded config: %v", err)
+	}
+	if len(ac.Bindings) == 0 {
+		t.Error("seeded merged config carries no action bindings (write path would be dark)")
+	}
+	if _, _, err := action.BuildActionResolver(ac, res.FixtureRoot); err != nil {
+		t.Fatalf("BuildActionResolver on seeded config: %v", err)
 	}
 }

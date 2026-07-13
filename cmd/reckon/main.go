@@ -100,11 +100,13 @@ func runInit() error {
 	fmt.Printf("  config:    %s\n", res.ConfigPath)
 	fmt.Printf("  data dir:  %s\n", res.DataDir)
 	fmt.Printf("  namespace: %s  (this install's immutable identity namespace)\n", res.TenantNamespace)
+	fmt.Printf("  demo:      %s  (fixture scenario, wired live via %s)\n", res.SeededScenario, res.CapabilityConfig)
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Printf("  1. %s start                 — bring up the bundled stack (first run downloads Pg/Temporal/Keycloak)\n", branding.CLI)
 	fmt.Printf("  2. sign in to the bundled realm (default user reckon-admin / reckon; change on first login)\n")
-	fmt.Printf("  3. set capability.config_path in the config to a tenant capability YAML to investigate real or fixture data\n")
+	fmt.Printf("  3. GET /api/capabilities    — the seeded %s scenario's verbs are live; edit %s to point at real adapters\n",
+		res.SeededScenario, res.CapabilityConfig)
 	return nil
 }
 
