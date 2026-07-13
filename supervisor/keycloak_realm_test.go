@@ -21,6 +21,18 @@ type realmDoc struct {
 		} `json:"realm"`
 	} `json:"roles"`
 	Clients []realmClient `json:"clients"`
+	Users   []realmUser   `json:"users"`
+}
+
+type realmUser struct {
+	Username        string   `json:"username"`
+	Email           string   `json:"email"`
+	Enabled         bool     `json:"enabled"`
+	RequiredActions []string `json:"requiredActions"`
+	Credentials     []struct {
+		Type      string `json:"type"`
+		Temporary bool   `json:"temporary"`
+	} `json:"credentials"`
 }
 
 type realmClient struct {
@@ -76,6 +88,44 @@ func TestRealm_ClientDescriptionsFitKeycloakColumn(t *testing.T) {
 		if n := len(c.Description); n > keycloakClientDescriptionMax {
 			t.Errorf("client %q description is %d chars; Keycloak's column caps at %d (realm import will abort)",
 				c.ClientID, n, keycloakClientDescriptionMax)
+		}
+	}
+}
+
+// TestRealm_BundledUserIsLoginReady: the seeded reckon-admin user must be able
+// to authenticate via the direct-access grant out of the box (the CLI login
+// path). Keycloak 26 refuses the grant with "Account is not fully set up" if a
+// required profile attribute (email) is missing, the password is temporary
+// (forces UPDATE_PASSWORD), or a required action is pending. The first real
+// `reckon start` hit exactly this; guard all three so a fresh install can log in
+// without an admin-console detour.
+func TestRealm_BundledUserIsLoginReady(t *testing.T) {
+	doc := parseRealm(t)
+	if len(doc.Users) == 0 {
+		t.Fatal("realm defines no bundled user; the first-run login has no account")
+	}
+	for _, u := range doc.Users {
+		if !u.Enabled {
+			t.Errorf("user %q is disabled", u.Username)
+		}
+		if u.Email == "" {
+			t.Errorf("user %q has no email; Keycloak's user profile requires it or the grant fails", u.Username)
+		}
+		if len(u.RequiredActions) != 0 {
+			t.Errorf("user %q has pending required actions %v; the direct grant would fail", u.Username, u.RequiredActions)
+		}
+		var hasPassword bool
+		for _, c := range u.Credentials {
+			if c.Type != "password" {
+				continue
+			}
+			hasPassword = true
+			if c.Temporary {
+				t.Errorf("user %q ships a temporary password; it forces UPDATE_PASSWORD and blocks the direct grant", u.Username)
+			}
+		}
+		if !hasPassword {
+			t.Errorf("user %q has no password credential", u.Username)
 		}
 	}
 }

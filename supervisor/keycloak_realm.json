@@ -98,11 +98,12 @@
     {
       "username": "reckon-admin",
       "enabled": true,
+      "email": "reckon-admin@localhost",
       "emailVerified": true,
       "firstName": "reckon",
       "lastName": "Admin",
       "credentials": [
-        {"type": "password", "value": "reckon", "temporary": true}
+        {"type": "password", "value": "reckon", "temporary": false}
       ],
       "realmRoles": ["tenant_admin", "analyst", "approver", "senior_approver"]
     }
