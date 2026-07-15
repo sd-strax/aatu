@@ -129,7 +129,9 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 	return f
 }
 
-func (f *fakeBackend) client() *Client { return NewClient(f.srv.URL, "AGENT_TOKEN", "HUMAN_TOKEN") }
+func (f *fakeBackend) client() *Client {
+	return NewClient(f.srv.URL, StaticToken("AGENT_TOKEN"), StaticToken("HUMAN_TOKEN"))
+}
 
 func (f *fakeBackend) callsTo(path string) []recordedCall {
 	var out []recordedCall

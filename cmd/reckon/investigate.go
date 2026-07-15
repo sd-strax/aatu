@@ -65,16 +65,16 @@ func runInvestigate(invID string) error {
 	pass := envOr("RECKON_PASSWORD", branding.CLI)
 
 	ctx := context.Background()
-	humanToken, err := agent.PasswordToken(ctx, issuer, branding.CLI, user, pass)
+	humanCred, err := agent.NewCredential(ctx, issuer, branding.CLI, user, pass)
 	if err != nil {
 		return fmt.Errorf("login (human client): %w", err)
 	}
-	agentToken, err := agent.PasswordToken(ctx, issuer, branding.CLI+"-agent", user, pass)
+	agentCred, err := agent.NewCredential(ctx, issuer, branding.CLI+"-agent", user, pass)
 	if err != nil {
 		return fmt.Errorf("login (agent client): %w", err)
 	}
 
-	client := agent.NewClient(backendURL, agentToken, humanToken)
+	client := agent.NewClient(backendURL, agentCred, humanCred)
 	llm := &agent.Anthropic{APIKey: apiKey, Model: envOr("RECKON_MODEL", agent.DefaultAnthropicModel)}
 
 	r := &repl{client: client, invID: invID}

@@ -194,45 +194,77 @@ func (e *APIError) Error() string { return fmt.Sprintf("backend %d: %s", e.Statu
 // token, never from the body, so using the right token per call IS the
 // authorization story.
 type Client struct {
-	base       string
-	agentToken string
-	humanToken string
-	http       *http.Client
+	base     string
+	agentSrc TokenSource
+	humanSrc TokenSource
+	http     *http.Client
 }
 
 // NewClient builds a backend client. base is the backend root
-// (e.g. http://localhost:8080).
-func NewClient(base, agentToken, humanToken string) *Client {
+// (e.g. http://localhost:8080). agentSrc/humanSrc mint (and refresh) the two
+// tokens; pass StaticToken(...) for a fixed token that never refreshes.
+func NewClient(base string, agentSrc, humanSrc TokenSource) *Client {
 	return &Client{
-		base:       base,
-		agentToken: agentToken,
-		humanToken: humanToken,
-		http:       &http.Client{Timeout: 60 * time.Second},
+		base:     base,
+		agentSrc: agentSrc,
+		humanSrc: humanSrc,
+		http:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-// do executes one JSON request; out (when non-nil) receives the decoded 2xx
-// body. raw responses are capped defensively.
-func (c *Client) do(ctx context.Context, method, path, token string, in, out any) error {
-	var body io.Reader
+// do executes one JSON request against the given token source; out (when
+// non-nil) receives the decoded 2xx body. A 401 — the token was rejected
+// earlier than its computed expiry (clock skew, revocation) — triggers one
+// forced refresh and retry, so a long-idle session recovers transparently
+// instead of failing the analyst's turn. raw responses are capped defensively.
+func (c *Client) do(ctx context.Context, method, path string, src TokenSource, in, out any) error {
+	var reqBody []byte
 	if in != nil {
-		raw, err := json.Marshal(in)
+		var err error
+		reqBody, err = json.Marshal(in)
 		if err != nil {
 			return fmt.Errorf("marshal %s %s: %w", method, path, err)
 		}
-		body = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+
+	send := func(forceRefresh bool) (*http.Response, error) {
+		var (
+			token string
+			err   error
+		)
+		if forceRefresh {
+			token, err = src.Refresh(ctx)
+		} else {
+			token, err = src.Token(ctx)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("acquire token for %s %s: %w", method, path, err)
+		}
+		var body io.Reader
+		if reqBody != nil {
+			body = bytes.NewReader(reqBody)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		if reqBody != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		return c.http.Do(req)
+	}
+
+	resp, err := send(false)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
+	if resp.StatusCode == http.StatusUnauthorized {
+		_ = resp.Body.Close()
+		resp, err = send(true)
+		if err != nil {
+			return err
+		}
 	}
 	defer resp.Body.Close()
 
@@ -256,7 +288,7 @@ func (c *Client) ListCapabilities(ctx context.Context) ([]Capability, error) {
 	var out struct {
 		Capabilities []Capability `json:"capabilities"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/capabilities", c.agentToken, nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/capabilities", c.agentSrc, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Capabilities, nil
@@ -266,7 +298,7 @@ func (c *Client) ListCapabilities(ctx context.Context) ([]Capability, error) {
 // envelope JSON — the loop feeds it to the model as the tool result verbatim.
 func (c *Client) InvokeCapability(ctx context.Context, verb string, in InvokeInput) (json.RawMessage, error) {
 	var out json.RawMessage
-	if err := c.do(ctx, http.MethodPost, "/api/capability/"+verb, c.agentToken, in, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/capability/"+verb, c.agentSrc, in, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -275,7 +307,7 @@ func (c *Client) InvokeCapability(ctx context.Context, verb string, in InvokeInp
 // RecallSOPs runs SOP retrieval (agent token), returning the raw response.
 func (c *Client) RecallSOPs(ctx context.Context, body map[string]any) (json.RawMessage, error) {
 	var out json.RawMessage
-	if err := c.do(ctx, http.MethodPost, "/api/knowledge/recall_sops", c.agentToken, body, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/knowledge/recall_sops", c.agentSrc, body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -284,7 +316,7 @@ func (c *Client) RecallSOPs(ctx context.Context, body map[string]any) (json.RawM
 // RecordInterpretation appends one reasoning act (agent token).
 func (c *Client) RecordInterpretation(ctx context.Context, body InterpretationRequest) (InterpretationResponse, error) {
 	var out InterpretationResponse
-	err := c.do(ctx, http.MethodPost, "/api/interpretations", c.agentToken, body, &out)
+	err := c.do(ctx, http.MethodPost, "/api/interpretations", c.agentSrc, body, &out)
 	return out, err
 }
 
@@ -292,14 +324,14 @@ func (c *Client) RecordInterpretation(ctx context.Context, body InterpretationRe
 // baseline DENY apply server-side).
 func (c *Client) RequestAction(ctx context.Context, body ActionRequest) (ActionResponse, error) {
 	var out ActionResponse
-	err := c.do(ctx, http.MethodPost, "/api/actions", c.agentToken, body, &out)
+	err := c.do(ctx, http.MethodPost, "/api/actions", c.agentSrc, body, &out)
 	return out, err
 }
 
 // GetInvestigation loads the investigation header (agent token — a read).
 func (c *Client) GetInvestigation(ctx context.Context, id string) (Investigation, error) {
 	var out Investigation
-	err := c.do(ctx, http.MethodGet, "/api/investigations/"+id, c.agentToken, nil, &out)
+	err := c.do(ctx, http.MethodGet, "/api/investigations/"+id, c.agentSrc, nil, &out)
 	return out, err
 }
 
@@ -307,7 +339,7 @@ func (c *Client) GetInvestigation(ctx context.Context, id string) (Investigation
 // prompt context.
 func (c *Client) ListHypotheses(ctx context.Context, id string) (json.RawMessage, error) {
 	var out json.RawMessage
-	err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/hypotheses", c.agentToken, nil, &out)
+	err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/hypotheses", c.agentSrc, nil, &out)
 	return out, err
 }
 
@@ -317,7 +349,7 @@ func (c *Client) ListActions(ctx context.Context, id string) ([]ActionStatus, er
 	var out struct {
 		Actions []ActionStatus `json:"actions"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/actions", c.agentToken, nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/actions", c.agentSrc, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Actions, nil
@@ -332,7 +364,7 @@ func (c *Client) ApproveAction(ctx context.Context, actionID, challengeResponse 
 		body["challenge_response"] = challengeResponse
 	}
 	var out json.RawMessage
-	err := c.do(ctx, http.MethodPost, "/api/actions/"+actionID+"/approve", c.humanToken, body, &out)
+	err := c.do(ctx, http.MethodPost, "/api/actions/"+actionID+"/approve", c.humanSrc, body, &out)
 	return out, err
 }
 
@@ -340,6 +372,6 @@ func (c *Client) ApproveAction(ctx context.Context, actionID, challengeResponse 
 func (c *Client) RejectAction(ctx context.Context, actionID, reason string) (json.RawMessage, error) {
 	body := map[string]any{"reason": reason}
 	var out json.RawMessage
-	err := c.do(ctx, http.MethodPost, "/api/actions/"+actionID+"/reject", c.humanToken, body, &out)
+	err := c.do(ctx, http.MethodPost, "/api/actions/"+actionID+"/reject", c.humanSrc, body, &out)
 	return out, err
 }
