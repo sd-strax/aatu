@@ -21,13 +21,36 @@ func TestShippedActionScenario(t *testing.T) {
 		t.Fatalf("build resolver: %v", err)
 	}
 
-	// host.isolate and account.disable advertise as available.
+	// host.isolate, account.disable, and ioc.block advertise as available.
 	avail := map[string]ActionAvailability{}
 	for _, s := range resolver.ListActionTypes(catalog) {
 		avail[s.Descriptor.ActionType] = s.Status
 	}
-	if avail["host.isolate"] != ActionAvailable || avail["account.disable"] != ActionAvailable {
+	if avail["host.isolate"] != ActionAvailable || avail["account.disable"] != ActionAvailable ||
+		avail["ioc.block"] != ActionAvailable {
 		t.Errorf("bound actions not available: %v", avail)
+	}
+
+	// ioc.block dispatches end-to-end against the C2 indicator — the containment
+	// the agent could not complete before the catalog was frozen + surfaced.
+	blockCmd, err := BuildRequestCommand(catalog, ActionRequest{
+		ActionType: "ioc.block",
+		Targets:    []aggregate.TargetSpec{{EntityRef: "ipv4-addr--1", ResolvedIdentifier: "185.220.101.5"}},
+		Rationale:  "block the C2 channel",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("build ioc.block request: %v", err)
+	}
+	blockRes, _, err := resolver.Resolve(context.Background(), DispatchRequest{
+		ActionID:   blockCmd.ActionID,
+		ActionType: blockCmd.ActionType,
+		Targets:    blockCmd.Targets,
+	})
+	if err != nil {
+		t.Fatalf("resolve/dispatch ioc.block: %v", err)
+	}
+	if blockRes.FinalOutcome != OutcomeSucceeded {
+		t.Errorf("ioc.block outcome = %q; want SUCCEEDED", blockRes.FinalOutcome)
 	}
 
 	// Build a request_action for host.isolate (T2, single target), then dispatch

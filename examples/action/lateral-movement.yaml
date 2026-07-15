@@ -26,3 +26,14 @@ action_bindings:
       priority: 100
       params:
         account: "${target.resolved_identifier}"
+
+  # Block the C2 IOC (IP/domain/hash) at the perimeter — the "fake Tines" accepts
+  # any indicator so the containment flow (block 185.220.101.5 / exfil.example.net)
+  # completes end-to-end in the demo.
+  ioc.block:
+    - action_type: ioc.block
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        indicator: "${target.resolved_identifier}"

@@ -99,6 +99,13 @@ func (a *FixtureAdapter) load() error {
 		if ent.IsDir() || !strings.HasSuffix(name, ".json") {
 			continue
 		}
+		// Write-side action fixtures (*.action.json) share the scenario dir but
+		// belong to the action FixtureWriteAdapter — never parse them as read
+		// events. Without this, a write fixture with an empty matches.verb and a
+		// "*" param wildcard matches every read verb and injects a phantom event.
+		if strings.HasSuffix(name, ".action.json") {
+			continue
+		}
 		if name == "asset-criticality.json" || strings.HasPrefix(name, "raw_response") {
 			continue
 		}

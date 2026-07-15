@@ -1,0 +1,15 @@
+{
+  "fixture_meta": {
+    "scenario": "lateral-movement-via-rdp",
+    "matches": {
+      "action_type": "ioc.block",
+      "params": { "resolved_identifier": "*" }
+    },
+    "delay_ms": 150
+  },
+  "result": {
+    "final_outcome": "SUCCEEDED",
+    "per_target_results": { "0": "OK", "1": "OK" },
+    "audit_depth": "FULL"
+  }
+}
