@@ -55,6 +55,15 @@ func (c *ActionCatalog) ActionTypes() []string {
 // DefaultActionCatalog registers the v0 action descriptors the fixture write
 // path can service (a representative subset; the rest land with their bindings,
 // 08 §8). Tiers follow 04 §2.
+//
+// FROZEN v0 CATALOG. This function is the single authoritative source of truth
+// for the dispatchable action vocabulary — the `action_type` strings, tiers,
+// reversibility, and D3FEND annotations. `design/04-action-authorization.md §2.1`
+// is the broader roadmap taxonomy and MUST match these rows where they overlap;
+// TestDefaultActionCatalog_Frozen pins the set so neither can drift silently.
+// D3FEND ids are MITRE technique ids (d3fend.mitre.org), illustrative metadata
+// only (04 §2.1) — not load-bearing for control flow. Reversal actions carry no
+// D3FEND id (restoring state is not itself a defensive countermeasure).
 func DefaultActionCatalog() *ActionCatalog {
 	c := NewActionCatalog()
 	for _, d := range []ActionDescriptor{
@@ -81,7 +90,7 @@ func DefaultActionCatalog() *ActionCatalog {
 			Inputs:        []capability.InputParam{{Name: "account", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
 			Reversibility: "irreversible", // 04 §7: reversible_by null
-			D3FEND:        "D3-ANCI",
+			D3FEND:        "D3-AL",        // Account Locking
 		},
 		{
 			ActionType:    "email.quarantine",
@@ -108,10 +117,11 @@ func DefaultActionCatalog() *ActionCatalog {
 		},
 		{
 			ActionType:    "ioc.block",
-			Intent:        "Block an IOC (hash/IP/domain) at the perimeter. Reversible when the block list has a TTL/removal API.",
+			Intent:        "Block an IOC (hash/IP/domain) at the perimeter — firewall/proxy/DNS denylist. Use this to block a malicious IP, domain, or file hash. Reversible when the block list has a TTL/removal API.",
 			Inputs:        []capability.InputParam{{Name: "indicator", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
 			Reversibility: "reversible",
+			D3FEND:        "D3-NTF", // Network Traffic Filtering
 		},
 	} {
 		c.Register(d)

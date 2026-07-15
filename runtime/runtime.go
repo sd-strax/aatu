@@ -235,6 +235,15 @@ func serve(cfg config.Config) error {
 		return err
 	}
 
+	// The action resolver backs GET /api/action-types (the agent's write-side
+	// catalog with per-type dispatchability). Built whenever the action layer is
+	// on, independent of whether write bindings exist (zero bindings → every
+	// type reports unavailable, which is the honest answer).
+	actionResolver, err := buildBackendActionResolver(cfg)
+	if err != nil {
+		return err
+	}
+
 	backendCfg := server.BackendConfig{
 		HTTPPort:         cfg.Backend.HTTPPort,
 		PgDSN:            pg.DSN("reckon_main"),
@@ -248,6 +257,7 @@ func serve(cfg config.Config) error {
 		CapabilityCatalog:  capCatalog,
 		Gate2:              gate2,
 		ActionCatalog:      actionCatalog,
+		ActionResolver:     actionResolver,
 		Knowledge:          knowledgeStore,
 
 		TenantNamespace:         cfg.Capability.TenantNamespace,
@@ -290,6 +300,28 @@ func buildGate2(cfg config.Config) (*action.Gate2, *action.ActionCatalog, error)
 		return nil, nil, fmt.Errorf("build Gate 2: %w", err)
 	}
 	return gate2, action.DefaultActionCatalog(), nil
+}
+
+// buildBackendActionResolver builds the write-side action resolver for the
+// backend's GET /api/action-types endpoint. Unlike buildActionActivities (which
+// returns nil with no bindings, since a worker with nothing to dispatch is
+// pointless), this returns a resolver whenever the action layer is configured —
+// a resolver with zero bindings simply reports every action type as
+// unavailable, which is the honest catalog view the agent needs. Returns nil
+// when the action layer is off (no config path).
+func buildBackendActionResolver(cfg config.Config) (*action.ActionResolver, error) {
+	if cfg.Capability.ConfigPath == "" {
+		return nil, nil
+	}
+	ac, err := action.LoadActionConfig(cfg.Capability.ConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("load action config: %w", err)
+	}
+	resolver, _, err := action.BuildActionResolver(ac, cfg.Capability.FixtureRoot)
+	if err != nil {
+		return nil, fmt.Errorf("build action resolver: %w", err)
+	}
+	return resolver, nil
 }
 
 // buildActionActivities constructs the ActionLifecycle activities (aggregate

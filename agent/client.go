@@ -31,6 +31,21 @@ type Capability struct {
 	Status string `json:"status"`
 }
 
+// ActionType is one /api/action-types entry — a frozen catalog descriptor plus
+// its current dispatchability. The agent uses this to request real action types
+// (host.isolate, ioc.block, …) instead of guessing action_type strings.
+type ActionType struct {
+	Descriptor struct {
+		ActionType    string `json:"action_type"`
+		Intent        string `json:"intent"`
+		DefaultTier   string `json:"default_tier"`
+		Reversibility string `json:"reversibility"`
+		ReversibleBy  string `json:"reversible_by,omitempty"`
+		D3FEND        string `json:"d3fend,omitempty"`
+	} `json:"descriptor"`
+	Status string `json:"status"` // available | degraded | unavailable
+}
+
 // InvokeInput is the body of POST /api/capability/{verb}.
 type InvokeInput struct {
 	Entity map[string]any `json:"entity,omitempty"`
@@ -302,6 +317,20 @@ func (c *Client) InvokeCapability(ctx context.Context, verb string, in InvokeInp
 		return nil, err
 	}
 	return out, nil
+}
+
+// ListActionTypes fetches the write-side action catalog with availability
+// (agent token). The loop renders it into the request_action tool so the model
+// picks a real action_type. A 503 (action layer off) surfaces as an error the
+// caller treats as "no catalog" — request_action stays generic.
+func (c *Client) ListActionTypes(ctx context.Context) ([]ActionType, error) {
+	var out struct {
+		ActionTypes []ActionType `json:"action_types"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/action-types", c.agentSrc, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.ActionTypes, nil
 }
 
 // RecallSOPs runs SOP retrieval (agent token), returning the raw response.

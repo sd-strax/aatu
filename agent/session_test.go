@@ -92,6 +92,13 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		record(r)
 		_, _ = w.Write([]byte(`{"verb":"enumerate_logons","coverage":"COMPLETE","observed_data_refs":["observed-data--od1"],"entity_refs":["user-account--u1"]}`))
 	})
+	mux.HandleFunc("/api/action-types", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"action_types":[
+		  {"descriptor":{"action_type":"host.isolate","intent":"Isolate a host.","default_tier":"T2","reversibility":"reversible","reversible_by":"host.unisolate","d3fend":"D3-NI"},"status":"available"},
+		  {"descriptor":{"action_type":"ioc.block","intent":"Block an IOC at the perimeter.","default_tier":"T2","reversibility":"reversible","d3fend":"D3-NTF"},"status":"unavailable"}
+		]}`))
+	})
 	mux.HandleFunc("/api/interpretations", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		var body InterpretationRequest
@@ -177,6 +184,29 @@ func TestSession_ToolAssembly(t *testing.T) {
 	}
 	if !strings.Contains(s.system, "INV") || !strings.Contains(s.system, "get_process_ancestry") {
 		t.Error("system prompt missing investigation title or degraded-verb note")
+	}
+
+	// request_action is shaped by the write catalog: its action_type is a hard
+	// enum of the real types, and its description enumerates them — so the model
+	// cannot invent an action_type (the road-test failure).
+	var reqAction ToolDef
+	for _, d := range s.Tools() {
+		if d.Name == ToolRequestAction {
+			reqAction = d
+		}
+	}
+	props, _ := reqAction.InputSchema["properties"].(map[string]any)
+	at, _ := props["action_type"].(map[string]any)
+	enum, _ := at["enum"].([]string)
+	if len(enum) != 2 {
+		t.Fatalf("action_type enum = %v; want the 2 catalog types", at["enum"])
+	}
+	gotEnum := strings.Join(enum, ",")
+	if !strings.Contains(gotEnum, "host.isolate") || !strings.Contains(gotEnum, "ioc.block") {
+		t.Errorf("action_type enum = %q; want host.isolate and ioc.block", gotEnum)
+	}
+	if !strings.Contains(reqAction.Description, "ioc.block") || !strings.Contains(reqAction.Description, "unavailable") {
+		t.Errorf("request_action description should enumerate ioc.block and mark its unavailability:\n%s", reqAction.Description)
 	}
 }
 

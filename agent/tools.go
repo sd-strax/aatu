@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -27,8 +28,10 @@ const maxToolResultBytes = 64 << 10
 
 // buildTools assembles the session's tool definitions: one tool per AVAILABLE
 // capability verb (unavailable/degraded verbs are trimmed, 03 §6.3 — the model
-// only sees what can currently resolve), plus the intrinsic tools.
-func buildTools(caps []Capability) []ToolDef {
+// only sees what can currently resolve), plus the intrinsic tools. actionTypes
+// is the write-side catalog (may be nil when the action layer is off); it shapes
+// the request_action tool so the model picks a real action_type.
+func buildTools(caps []Capability, actionTypes []ActionType) []ToolDef {
 	var defs []ToolDef
 	for _, c := range caps {
 		if c.Status != "available" {
@@ -39,7 +42,7 @@ func buildTools(caps []Capability) []ToolDef {
 		}
 		defs = append(defs, verbToolDef(c))
 	}
-	return append(defs, intrinsicTools()...)
+	return append(defs, intrinsicTools(actionTypes)...)
 }
 
 // verbToolDef renders a capability descriptor as an LLM tool. Every verb tool
@@ -87,8 +90,9 @@ func verbToolDef(c Capability) ToolDef {
 	}
 }
 
-// intrinsicTools declares the reasoning + knowledge + action tools.
-func intrinsicTools() []ToolDef {
+// intrinsicTools declares the reasoning + knowledge + action tools. actionTypes
+// (may be nil) shapes the request_action tool from the frozen write catalog.
+func intrinsicTools(actionTypes []ActionType) []ToolDef {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	strList := func(desc string) map[string]any {
 		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
@@ -156,9 +160,9 @@ func intrinsicTools() []ToolDef {
 		},
 		{
 			Name:        ToolRequestAction,
-			Description: "Propose a state-changing action (containment, remediation). It goes through authorization policy — you can propose, never approve; most proposals await the analyst's explicit approval. Cite evidence.",
+			Description: requestActionDescription(actionTypes),
 			InputSchema: obj(map[string]any{
-				"action_type": str("the action type, e.g. host.isolate, account.disable"),
+				"action_type": actionTypeSchema(actionTypes),
 				"targets": map[string]any{
 					"type": "array",
 					"items": obj(map[string]any{
@@ -177,6 +181,46 @@ func intrinsicTools() []ToolDef {
 			Description: "List this investigation's requested actions with their CURRENT engine status (REQUESTED = awaiting the analyst's approval in this surface; APPROVED/EXECUTING/SUCCEEDED/FAILED/REJECTED/EXPIRED/REVERSED). Use this for ground truth about whether an action was approved or executed — never assume.",
 			InputSchema: obj(map[string]any{}),
 		},
+	}
+}
+
+// requestActionDescription renders the request_action tool description from the
+// frozen write catalog: the fixed guidance plus, when the catalog is known, an
+// enumerated list of the real action types with tier, reversibility, and current
+// dispatchability. This is what stops the model guessing action_type strings
+// (ip.block, firewall.block_ip, …) — it can read the actual vocabulary.
+func requestActionDescription(actionTypes []ActionType) string {
+	base := "Propose a state-changing action (containment, remediation). It goes through authorization policy — you can propose, never approve; most proposals await the analyst's explicit approval. Cite evidence."
+	if len(actionTypes) == 0 {
+		return base
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("\n\nValid action_type values (use one EXACTLY as written; never invent a name):")
+	for _, a := range actionTypes {
+		d := a.Descriptor
+		fmt.Fprintf(&b, "\n- %s [%s, %s, %s]: %s",
+			d.ActionType, d.DefaultTier, d.Reversibility, a.Status, d.Intent)
+	}
+	b.WriteString("\n\nIf the action you need is not in this list, or is marked 'unavailable' (no tool is wired for it), do NOT request it — tell the analyst it must be performed manually.")
+	return b.String()
+}
+
+// actionTypeSchema builds the action_type property. When the catalog is known it
+// is a hard enum of the real types, so an invented name cannot even be emitted;
+// otherwise it falls back to a free-text string (action layer off).
+func actionTypeSchema(actionTypes []ActionType) map[string]any {
+	if len(actionTypes) == 0 {
+		return map[string]any{"type": "string", "description": "the action type, e.g. host.isolate, account.disable"}
+	}
+	enum := make([]string, 0, len(actionTypes))
+	for _, a := range actionTypes {
+		enum = append(enum, a.Descriptor.ActionType)
+	}
+	return map[string]any{
+		"type":        "string",
+		"enum":        enum,
+		"description": "the action type — exactly one of the enumerated catalog values",
 	}
 }
 

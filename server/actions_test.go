@@ -205,6 +205,78 @@ func TestRequestAction_ReversalValidation(t *testing.T) {
 	}
 }
 
+// TestListActionTypes: GET /api/action-types surfaces the frozen write catalog
+// with per-type dispatchability, so the agent requests real action types instead
+// of guessing. With no bindings every type reports unavailable — the honest view.
+func TestListActionTypes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	b := newTestBackend(t)
+	b.cfg.ActionCatalog = action.DefaultActionCatalog()
+	b.cfg.ActionResolver = action.NewActionResolver(nil, nil) // no bindings → all unavailable
+
+	srv := httptest.NewServer(b.buildRouter(b.verifier))
+	t.Cleanup(srv.Close)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/action-types", nil)
+	req.Header.Set("Authorization", "Bearer "+mintToken(t, nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	var out struct {
+		ActionTypes []action.ActionSummary `json:"action_types"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	byType := map[string]action.ActionSummary{}
+	for _, a := range out.ActionTypes {
+		byType[a.Descriptor.ActionType] = a
+	}
+	// The frozen block action is present, correctly named and annotated — the
+	// exact type the agent guessed wrong in the road test.
+	ioc, ok := byType["ioc.block"]
+	if !ok {
+		t.Fatalf("ioc.block missing from catalog; got %v", byType)
+	}
+	if ioc.Descriptor.D3FEND != "D3-NTF" || ioc.Descriptor.DefaultTier != "T2" {
+		t.Errorf("ioc.block descriptor wrong: %+v", ioc.Descriptor)
+	}
+	if ioc.Status != action.ActionUnavailable {
+		t.Errorf("ioc.block status = %q; want unavailable (no binding)", ioc.Status)
+	}
+	if _, ok := byType["host.isolate"]; !ok {
+		t.Error("host.isolate missing from catalog")
+	}
+}
+
+// TestListActionTypes_ServiceUnavailable: with no action layer configured the
+// route is a clean 503, not a panic.
+func TestListActionTypes_ServiceUnavailable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	b := newTestBackend(t) // no ActionCatalog / ActionResolver
+	srv := httptest.NewServer(b.buildRouter(b.verifier))
+	t.Cleanup(srv.Close)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/action-types", nil)
+	req.Header.Set("Authorization", "Bearer "+mintToken(t, nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d; want 503", resp.StatusCode)
+	}
+}
+
 // TestListInvestigationActions: GET /api/investigations/{id}/actions returns
 // the durable action queue — every x-action with its raw status, required mode,
 // and targets — so a surface can recover pending approvals after the turn that

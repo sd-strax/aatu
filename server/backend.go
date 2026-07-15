@@ -94,6 +94,10 @@ type BackendConfig struct {
 	// regardless — it also serves the export pipeline.
 	Gate2         *action.Gate2
 	ActionCatalog *action.ActionCatalog
+	// ActionResolver, with ActionCatalog, backs GET /api/action-types — the
+	// agent's write-side catalog with per-type dispatchability. Nil leaves the
+	// route a clean 503.
+	ActionResolver *action.ActionResolver
 
 	// Knowledge, when non-nil, enables the SOP corpus routes (/api/sops,
 	// /api/knowledge/recall_sops — Phase C.5). Nil leaves them unregistered.
@@ -305,6 +309,14 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	// agent loop's read-tool dispatch target. Analyst role.
 	api.Handle("/capability/", authz.RequireAuth(verifier)(
 		http.HandlerFunc(b.capabilityInvokeRoute),
+	))
+
+	// GET /api/action-types — list_action_types (08 §3): the write-side catalog
+	// (action_type, intent, tier, reversibility, D3FEND) with per-type
+	// dispatchability, so the agent requests real action types instead of
+	// guessing. Any authenticated reader.
+	api.Handle("/action-types", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.listActionTypes),
 	))
 
 	// POST /api/actions — request_action (08 §2): propose a state-changing

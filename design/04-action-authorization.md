@@ -98,27 +98,32 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 
 Each action type carries an optional `d3fend_technique` mapping to a MITRE D3FEND technique ID. This is illustrative metadata — used for coverage projections, reporting, and the agent loop's surfacing of "for technique T1XXX, available D3FEND-mapped actions in your environment are X, Y, Z." It is *not* enforced at authorization time; not load-bearing for control flow. Tenants and adapter authors may extend the mapping with additional action types. The mapping ships as part of the signed action descriptor distribution (05-component-architecture.md §11.1).
 
-| Action type | D3FEND technique |
-|---|---|
-| `host.isolate` | D3-NTI (Network Traffic Isolation) |
-| `host.unisolate` | D3-NTI (reversal) |
-| `account.suspend` | D3-AL (Account Locking) |
-| `account.disable` | D3-AL |
-| `session.revoke` | D3-AL |
-| `credential.reset` | D3-CR (Credential Rotation) |
-| `process.kill` | D3-PT (Process Termination) |
-| `file.quarantine` | D3-FR (File Removal) |
-| `email.quarantine` | D3-MAR (Message Authenticity Removal) |
-| `email.purge` | D3-MAR |
-| `block.add` | D3-NI (Network Isolation) |
-| `detection.deploy` | D3-DA (Detection Authorship) |
-| `detection.retire` | D3-DA (reversal) |
-| `host.reimage` | D3-RIO (Restore Image / Operating System) |
-| `ioc.publish_to_misp` | D3-IDA (Indicator Distribution and Attribution) |
-| `ioc.publish_to_isac` | D3-IDA |
-| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique) |
-| `comm.post` | (not D3FEND-mapped — communication, not defensive technique) |
-| `document.deliver` | (not D3FEND-mapped — reporting, not defensive technique) |
+**Authoritative source of truth.** The `action_type` strings, tiers, and reversibility of the *dispatchable* v0 catalog live in code — `action.DefaultActionCatalog()` (`action/descriptor.go`), pinned by `TestDefaultActionCatalog_Frozen`. This table is the broader **roadmap taxonomy**; where a row overlaps the frozen v0 subset it MUST match the code (the v0 rows are marked ✅ below). D3FEND ids are real MITRE technique ids (`d3fend.mitre.org`); reversal actions carry no id (restoring state is not itself a countermeasure).
+
+| Action type | D3FEND technique | v0 |
+|---|---|---|
+| `host.isolate` | D3-NI (Network Isolation) | ✅ |
+| `host.unisolate` | — (reversal of `host.isolate`) | ✅ |
+| `account.suspend` | D3-AL (Account Locking) | |
+| `account.disable` | D3-AL | ✅ |
+| `session.revoke` | D3-AL | |
+| `credential.reset` | D3-CRO (Credential Rotation) | |
+| `process.kill` | D3-PT (Process Termination) | |
+| `file.quarantine` | D3-FR (File Removal) | |
+| `email.quarantine` | — (email response; not cleanly D3FEND-mapped in v0) | ✅ |
+| `email.release` | — (reversal of `email.quarantine`) | ✅ |
+| `email.purge` | — (irreversible email removal) | ✅ |
+| `ioc.block` | D3-NTF (Network Traffic Filtering) | ✅ |
+| `detection.deploy` | D3-DA (Detection Authorship) | |
+| `detection.retire` | D3-DA (reversal) | |
+| `host.reimage` | D3-RIO (Restore Image / Operating System) | |
+| `ioc.publish_to_misp` | D3-IDA (Indicator Distribution and Attribution) | |
+| `ioc.publish_to_isac` | D3-IDA | |
+| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique) | |
+| `comm.post` | (not D3FEND-mapped — communication, not defensive technique) | |
+| `document.deliver` | (not D3FEND-mapped — reporting, not defensive technique) | |
+
+Reconciliation note (freeze): the v0 rows were corrected against the code catalog and MITRE D3FEND — `host.isolate` is D3-NI (was mis-listed D3-NTI), `credential.reset` is D3-CRO (was D3-CR), and the block action is `ioc.block`/D3-NTF (was the drifted `block.add`/D3-NI). `email.*` response actions have no clean D3FEND response technique in v0 and are left unmapped rather than carry a fabricated id.
 
 ---
 

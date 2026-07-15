@@ -97,6 +97,26 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"actions": out})
 }
 
+// listActionTypes serves GET /api/action-types: the write-side catalog with
+// per-type dispatchability (08 §3), the symmetric twin of GET /api/capabilities.
+// This is how the agent learns the real, frozen action vocabulary (host.isolate,
+// ioc.block, …) with intents and tiers, instead of guessing action_type strings.
+// Any authenticated reader.
+func (b *Backend) listActionTypes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return
+	}
+	if b.cfg.ActionCatalog == nil || b.cfg.ActionResolver == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "action layer not configured")
+		return
+	}
+	b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, func(w http.ResponseWriter, _ *http.Request) {
+		summaries := b.cfg.ActionResolver.ListActionTypes(b.cfg.ActionCatalog)
+		writeJSON(w, http.StatusOK, map[string]any{"action_types": summaries})
+	})
+}
+
 // actorFromClaims derives the command actor from the JWT claims — Kind from the
 // delegate_kind claim, NEVER a request body (04 §5.6): otherwise the AI
 // write-protection at the aggregate boundary is caller-spoofable. Every handler

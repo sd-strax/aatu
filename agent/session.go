@@ -105,8 +105,15 @@ func NewSession(ctx context.Context, cfg Config) (*Session, error) {
 	if err != nil {
 		hyps = nil
 	}
+	// The write-side action catalog shapes request_action so the model uses real
+	// action types. Optional: a 503 (action layer off) leaves request_action
+	// generic, exactly as before.
+	actionTypes, err := s.backend.ListActionTypes(ctx)
+	if err != nil {
+		actionTypes = nil
+	}
 
-	s.tools = buildTools(caps)
+	s.tools = buildTools(caps, actionTypes)
 	s.system = systemPrompt(inv, caps, hyps)
 	return s, nil
 }
