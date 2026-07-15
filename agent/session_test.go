@@ -198,12 +198,15 @@ func TestSession_ToolAssembly(t *testing.T) {
 	props, _ := reqAction.InputSchema["properties"].(map[string]any)
 	at, _ := props["action_type"].(map[string]any)
 	enum, _ := at["enum"].([]string)
-	if len(enum) != 2 {
-		t.Fatalf("action_type enum = %v; want the 2 catalog types", at["enum"])
-	}
+	// The hard enum admits only requestable types: host.isolate is available;
+	// ioc.block is unavailable (no tool wired), so it is trimmed from the enum
+	// even though the description still enumerates it as unavailable.
 	gotEnum := strings.Join(enum, ",")
-	if !strings.Contains(gotEnum, "host.isolate") || !strings.Contains(gotEnum, "ioc.block") {
-		t.Errorf("action_type enum = %q; want host.isolate and ioc.block", gotEnum)
+	if len(enum) != 1 || !strings.Contains(gotEnum, "host.isolate") {
+		t.Fatalf("action_type enum = %v; want only the available type host.isolate", at["enum"])
+	}
+	if strings.Contains(gotEnum, "ioc.block") {
+		t.Errorf("action_type enum = %q; unavailable ioc.block must not be requestable", gotEnum)
 	}
 	if !strings.Contains(reqAction.Description, "ioc.block") || !strings.Contains(reqAction.Description, "unavailable") {
 		t.Errorf("request_action description should enumerate ioc.block and mark its unavailability:\n%s", reqAction.Description)

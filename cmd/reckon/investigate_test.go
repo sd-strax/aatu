@@ -55,3 +55,40 @@ func TestTargetList(t *testing.T) {
 		}
 	}
 }
+
+// TestTargetList_NeutralizesControlBytes: a model-supplied resolved_identifier
+// carrying ANSI/CR cannot reach the terminal verbatim at the approval gate — the
+// deception vector (render a benign host while dispatching against another).
+func TestTargetList_NeutralizesControlBytes(t *testing.T) {
+	// "dc-01.corp.local" + CR + ANSI erase-line + "test-sandbox-vm": on a raw
+	// terminal the CR/erase would overwrite the real target with the fake one.
+	evil := "dc-01.corp.local\r\x1b[Ktest-sandbox-vm"
+	got := targetList([]agent.ActionTarget{{ResolvedIdentifier: evil}})
+	if strings.ContainsAny(got, "\r\x1b") {
+		t.Fatalf("control bytes survived to the terminal: %q", got)
+	}
+	// The real identifier is still visible (just escaped), so nothing is hidden.
+	if !strings.Contains(got, "dc-01.corp.local") || !strings.Contains(got, "test-sandbox-vm") {
+		t.Errorf("sanitized identifier lost content: %q", got)
+	}
+}
+
+// TestSanitizeTerminal: control bytes become visible escapes on a single line;
+// the block variant keeps newlines/tabs (JSON layout) but still kills cursor
+// control; clean text is untouched (and not reallocated needlessly).
+func TestSanitizeTerminal(t *testing.T) {
+	if got := sanitizeTerminal("clean host-01"); got != "clean host-01" {
+		t.Errorf("clean text changed: %q", got)
+	}
+	if got := sanitizeTerminal("a\x1b[2Kb\nc"); strings.ContainsAny(got, "\x1b\n") {
+		t.Errorf("single-line sanitize left control bytes: %q", got)
+	}
+	// Block variant: newline/tab preserved, ESC neutralized.
+	block := sanitizeTerminalBlock("{\n\t\"k\": \"v\x1b[31m\"\n}")
+	if !strings.Contains(block, "\n") || !strings.Contains(block, "\t") {
+		t.Errorf("block sanitize dropped layout: %q", block)
+	}
+	if strings.ContainsRune(block, '\x1b') {
+		t.Errorf("block sanitize left an ESC: %q", block)
+	}
+}

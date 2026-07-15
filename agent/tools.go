@@ -213,9 +213,24 @@ func actionTypeSchema(actionTypes []ActionType) map[string]any {
 	if len(actionTypes) == 0 {
 		return map[string]any{"type": "string", "description": "the action type, e.g. host.isolate, account.disable"}
 	}
+	// Only requestable types belong in the hard enum: an 'unavailable' type has
+	// no tool wired (08 §3), so the description flags it as unrequestable — the
+	// enum must not then permit it. This mirrors the read side, where buildTools
+	// trims non-available verbs from the tool set entirely.
 	enum := make([]string, 0, len(actionTypes))
 	for _, a := range actionTypes {
+		if a.Status == "unavailable" {
+			continue
+		}
 		enum = append(enum, a.Descriptor.ActionType)
+	}
+	// If nothing is currently requestable, fall back to the full list rather than
+	// emit an empty enum (which no value could satisfy) — the backend still
+	// rejects an unwired dispatch honestly, and the description says as much.
+	if len(enum) == 0 {
+		for _, a := range actionTypes {
+			enum = append(enum, a.Descriptor.ActionType)
+		}
 	}
 	return map[string]any{
 		"type":        "string",

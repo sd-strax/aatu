@@ -88,7 +88,7 @@ func runInvestigate(invID string) error {
 				fmt.Printf("\n%s\n", text)
 			},
 			OnToolCall: func(name string, input json.RawMessage) {
-				fmt.Printf("  → %s %s\n", name, compactJSON(input))
+				fmt.Printf("  → %s %s\n", sanitizeTerminal(name), sanitizeTerminal(compactJSON(input)))
 				r.lastTools = append(r.lastTools, toolExchange{name: name, input: string(input)})
 			},
 			OnToolResult: func(name, content string, isError bool) {
@@ -96,7 +96,7 @@ func runInvestigate(invID string) error {
 				if isError {
 					mark = "✗"
 				}
-				fmt.Printf("  %s %s: %s\n", mark, name, clip(content, 200))
+				fmt.Printf("  %s %s: %s\n", mark, sanitizeTerminal(name), sanitizeTerminal(clip(content, 200)))
 				// Attach the full result to the call recorded a moment ago
 				// (OnToolCall → dispatch → OnToolResult run in sequence per tool).
 				if n := len(r.lastTools); n > 0 {
@@ -245,10 +245,11 @@ func (r *repl) printRaw(args []string) {
 		if tx.isError {
 			mark = "✗"
 		}
-		fmt.Printf("\n%s %s  %s\n%s\n", mark, tx.name, tx.input, prettyJSON(tx.content))
+		fmt.Printf("\n%s %s  %s\n%s\n", mark, sanitizeTerminal(tx.name),
+			sanitizeTerminalBlock(tx.input), sanitizeTerminalBlock(prettyJSON(tx.content)))
 	}
 	if shown == 0 {
-		fmt.Printf("no tool named %q in the last turn (have: %s)\n", want, strings.Join(r.toolNames(), ", "))
+		fmt.Printf("no tool named %q in the last turn (have: %s)\n", want, sanitizeTerminal(strings.Join(r.toolNames(), ", ")))
 	}
 }
 
@@ -275,7 +276,7 @@ func (r *repl) offerApprovals(ctx context.Context, actions []agent.ActionStatus)
 			continue
 		}
 		fmt.Printf("\naction %s %s → %s [%s, %s] awaits your approval.\n",
-			a.ActionID, a.ActionType, targetList(a.Targets), a.Tier, a.PendingLabel())
+			a.ActionID, sanitizeTerminal(a.ActionType), targetList(a.Targets), a.Tier, a.PendingLabel())
 		fmt.Print("  approve? [y = approve, y <challenge> for T3, n [reason] = reject, Enter = decide later] ")
 		if !r.in.Scan() {
 			return
@@ -300,19 +301,62 @@ func (r *repl) offerApprovals(ctx context.Context, actions []agent.ActionStatus)
 	}
 }
 
-// targetList renders an action's targets for the approval prompt.
+// targetList renders an action's targets for the approval prompt. The
+// identifiers are model-supplied (via request_action) and echoed at the human
+// approval gate, so each is neutralized for terminal display — a crafted
+// resolved_identifier must never move the cursor or rewrite the line the analyst
+// reads before typing `y`.
 func targetList(targets []agent.ActionTarget) string {
 	if len(targets) == 0 {
 		return "(no targets)"
 	}
 	ids := make([]string, len(targets))
 	for i, t := range targets {
-		ids[i] = t.ResolvedIdentifier
-		if ids[i] == "" {
-			ids[i] = t.EntityRef
+		id := t.ResolvedIdentifier
+		if id == "" {
+			id = t.EntityRef
 		}
+		ids[i] = sanitizeTerminal(id)
 	}
 	return strings.Join(ids, ", ")
+}
+
+// sanitizeTerminal renders untrusted text (model- or tool-supplied) safe for a
+// SINGLE-LINE terminal display: every control byte — ANSI escape, CR, LF,
+// backspace, DEL, C1 — becomes a visible \xNN escape, so a crafted action target
+// or tool result cannot move the cursor, rewrite the line, or forge prompt
+// framing at the human approval gate. Printable UTF-8 passes through unchanged.
+func sanitizeTerminal(s string) string { return sanitize(s, false) }
+
+// sanitizeTerminalBlock is sanitizeTerminal for MULTI-LINE views (/raw): it
+// keeps newlines and tabs (legitimate JSON layout) but still neutralizes
+// cursor-control bytes so an injected result cannot rewrite the pane.
+func sanitizeTerminalBlock(s string) string { return sanitize(s, true) }
+
+func sanitize(s string, keepLayout bool) string {
+	if strings.IndexFunc(s, func(r rune) bool { return isTerminalControl(r, keepLayout) }) < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if isTerminalControl(r, keepLayout) {
+			fmt.Fprintf(&b, `\x%02x`, r)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// isTerminalControl reports whether r is a control byte that must not reach the
+// terminal verbatim: C0 (incl. ESC/CR/LF), DEL, and C1. In a multi-line context
+// newline and tab are structural layout, not control, so they are kept.
+func isTerminalControl(r rune, keepLayout bool) bool {
+	if keepLayout && (r == '\n' || r == '\t') {
+		return false
+	}
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 func report(verb string, out json.RawMessage, err error) {
