@@ -18,7 +18,9 @@ func TestDefaultActionCatalog_Frozen(t *testing.T) {
 	}
 	// Reversals carry a D3FEND id where the Restore tactic names the restoration
 	// as a first-class technique (04 §2.1): D3-RNA, D3-RE, D3-ULA. account.disable
-	// is reversible per D3FEND Restore listing Unlock Account (04 §7).
+	// is reversible per D3FEND Restore listing Unlock Account (04 §7). ioc.block
+	// and its inverse are best_effort (04 §7 Position C): linked + affordant, but
+	// the REVERSED status claim is gated on per-binding reliability.
 	golden := map[string]want{
 		"host.isolate":     {"T2", "reversible", "host.unisolate", "D3-NI"},
 		"host.unisolate":   {"T2", "reversible", "host.isolate", "D3-RNA"},
@@ -27,8 +29,8 @@ func TestDefaultActionCatalog_Frozen(t *testing.T) {
 		"email.quarantine": {"T2", "reversible", "email.release", "D3-ER"},
 		"email.release":    {"T2", "reversible", "email.quarantine", "D3-RE"},
 		"email.purge":      {"T3", "irreversible", "", "D3-ER"},
-		"ioc.block":        {"T2", "reversible", "", "D3-NTF"},
-		"ioc.unblock":      {"T2", "reversible", "", ""},
+		"ioc.block":        {"T2", "best_effort", "ioc.unblock", "D3-NTF"},
+		"ioc.unblock":      {"T2", "best_effort", "ioc.block", "D3-RNA"},
 	}
 
 	cat := DefaultActionCatalog()
@@ -57,6 +59,18 @@ func TestDefaultActionCatalog_Frozen(t *testing.T) {
 		}
 		if d.Intent == "" {
 			t.Errorf("%s: intent is empty — the agent-facing description must exist", at)
+		}
+	}
+
+	// The REVERSED-claim gate (04 §7.1 Position C): ReliablyReversible must be
+	// true exactly for the RELIABLE classification. This is the input the
+	// ReversalSaga's status-claim gate is fed (server startActionWorkflow →
+	// ReversalSagaInput.OriginalReliable), so a drift here silently changes
+	// whether originals get marked REVERSED.
+	for at, w := range golden {
+		d, _ := cat.Descriptor(at)
+		if got, want := d.ReliablyReversible(), w.reversibility == ReversibilityReversible; got != want {
+			t.Errorf("%s: ReliablyReversible() = %v; want %v (classification %q)", at, got, want, w.reversibility)
 		}
 	}
 

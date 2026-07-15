@@ -73,7 +73,7 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 | Force MFA re-enrollment (single user) | T2 | |
 | Force password reset (single user) | T2 | |
 | Block hash/IP/domain at perimeter (with TTL) | T2 | |
-| Remove hash/IP/domain from perimeter block list | T2 | Standalone action, not a tracked reversal (§7) — re-opening traffic carries the same weight as blocking it |
+| Remove hash/IP/domain from perimeter block list | T2 | Inverse of the block, linked at BEST_EFFORT reliability (§7.1) — re-opening traffic carries the same weight as blocking it |
 | Quarantine single email from one mailbox | T2 | Restorable from quarantine |
 | Push detection rule to production | T3 | Always |
 | Delete email from mailboxes (purge) | T3 | |
@@ -100,7 +100,7 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 
 Each action type carries an optional `d3fend_technique` mapping to a MITRE D3FEND technique ID. This is illustrative metadata — used for coverage projections, reporting, and the agent loop's surfacing of "for technique T1XXX, available D3FEND-mapped actions in your environment are X, Y, Z." It is *not* enforced at authorization time; not load-bearing for control flow. Tenants and adapter authors may extend the mapping with additional action types. The mapping ships as part of the signed action descriptor distribution (05-component-architecture.md §11.1).
 
-**Authoritative source of truth.** The `action_type` strings, tiers, and reversibility of the *dispatchable* v0 catalog live in code — `action.DefaultActionCatalog()` (`action/descriptor.go`), pinned by `TestDefaultActionCatalog_Frozen`. This table is the broader **roadmap taxonomy**; where a row overlaps the frozen v0 subset it MUST match the code (the v0 rows are marked ✅ below). D3FEND ids are real MITRE technique ids (`d3fend.mitre.org`). Reversal actions carry a D3FEND id only where the ontology's Restore tactic names the restoration as a first-class technique (D3-RNA, D3-RE, D3-ULA, D3-RF); reversals without a Restore-tactic home carry none.
+**Authoritative source of truth.** The `action_type` strings, tiers, and reversibility of the *dispatchable* v0 catalog live in code — `action.DefaultActionCatalog()` (`action/descriptor.go`), pinned by `TestDefaultActionCatalog_Frozen`. This table is the broader **roadmap taxonomy**; where a row overlaps the frozen v0 subset it MUST match the code (the v0 rows are marked ✅ below). D3FEND ids are real MITRE technique ids (`d3fend.mitre.org`). Reversal actions carry a D3FEND id only where the ontology's Restore tactic names the restoration as a first-class technique (D3-RNA on both `host.unisolate` and `ioc.unblock`, D3-RE, D3-ULA, D3-RF — a Restore technique may map to more than one reversal); reversals without a Restore-tactic home carry none.
 
 | Action type | D3FEND technique | v0 |
 |---|---|---|
@@ -119,7 +119,7 @@ Each action type carries an optional `d3fend_technique` mapping to a MITRE D3FEN
 | `email.release` | D3-RE (Restore Email) | ✅ |
 | `email.purge` | D3-ER (Email Removal — terminal application) | ✅ |
 | `ioc.block` | D3-NTF (Network Traffic Filtering); hash-flavored blocks also implement D3-EDL (Executable Denylisting) | ✅ |
-| `ioc.unblock` | — (standalone denylist-entry removal, deliberately *not* a tracked reversal of `ioc.block` — see §7; no Restore-tactic technique exists for it) | ✅ |
+| `ioc.unblock` | D3-RNA (Restore Network Access) — the inverse of `ioc.block`, linked at BEST_EFFORT reliability (§7.1 Position C) | ✅ |
 | `detection.deploy` | D3-DA (Detection Authorship) | |
 | `detection.retire` | — (reversal of `detection.deploy`) | |
 | `host.reimage` | D3-RDI (Restore Disk Image) | |
@@ -182,7 +182,7 @@ Family headers whose children are individually dispositioned inherit "covered vi
 | D3FEND technique | Disposition | Mapping |
 |---|---|---|
 | D3-ULA Unlock Account | Reversal | `account.enable` ✅ (`account.disable.reversible_by`) |
-| D3-RNA Restore Network Access | Reversal | `host.unisolate` ✅; `ioc.unblock` ✅ ships as a standalone Action rather than a tracked reversal (§7) |
+| D3-RNA Restore Network Access | Reversal | `host.unisolate` ✅; `ioc.unblock` ✅ — the inverse of `ioc.block`, linked at BEST_EFFORT reliability (§7.1 Position C) |
 | D3-RUAA Restore User Account Access | Reversal | umbrella: `account.enable` + credential re-issue |
 | D3-RE Restore Email | Reversal | `email.release` ✅ |
 | D3-RF Restore File | Reversal | roadmap `file.restore` (pairs `file.quarantine`, §7) |
@@ -581,52 +581,66 @@ Retries are a property of the executor, not the user. The user-visible action li
 
 ## 7. Reversal model
 
-Reversibility is a property of the action type, declared in a static manifest:
+Reversibility is a property of the action type, declared in a static manifest as **two orthogonal fields**: `reversible_by` (the inverse action type to dispatch, if one exists) and a `reversibility` classification (`REVERSIBLE` / `BEST_EFFORT` / `IRREVERSIBLE`). Keeping them separate resolves an ambiguity a single `reversible_by: null` used to carry — "no inverse exists" and "an inverse exists but its effect can't be trusted" are different facts and now have different encodings.
 
 ```text
-host.isolate         reversible_by: host.unisolate
-session.revoke       reversible_by: null   (session naturally restores on re-login;
-                                            no inverse action exists, but the original
-                                            is reversible in effect)
-file.quarantine      reversible_by: file.restore
-email.quarantine     reversible_by: email.release
-email.purge          reversible_by: null   (irreversible — backup restore is out of band)
-detection.deploy     reversible_by: detection.retire
-ioc.block            reversible_by: null   (ioc.unblock exists as a standalone action, not
-                                            a tracked reversal: whether entry removal truly
-                                            undoes the block's effect is per-binding — TTL
-                                            lists and propagated RPZ/partner feeds differ.
-                                            The analyst judges the effect per their tooling;
-                                            the block record honestly stays SUCCEEDED.
-                                            Linking the pair awaits per-binding
-                                            reversibility overrides, below.)
-account.disable      reversible_by: account.enable  (the audit record of the disable is
-                                            permanent, but the world-state has an inverse —
-                                            D3FEND Restore lists Unlock Account (D3-ULA) as
-                                            first-class. Re-enabling runs the full
-                                            authorization flow at the same tier, like any
-                                            reversal. The terminal, non-re-enableable form
-                                            is "deprovision" (§2), a distinct future type.)
+                     reversible_by      reversibility   notes
+host.isolate         host.unisolate     REVERSIBLE      EDR reliably un-isolates
+host.unisolate       host.isolate       REVERSIBLE
+account.disable      account.enable     REVERSIBLE      IdP reliably re-enables (D3-ULA)
+account.enable       account.disable    REVERSIBLE
+email.quarantine     email.release      REVERSIBLE      mail system reliably releases
+email.release        email.quarantine   REVERSIBLE
+detection.deploy     detection.retire   REVERSIBLE
+ioc.block            ioc.unblock        BEST_EFFORT     inverse exists, but removal may not
+                                                        undo the effect (TTL lists, propagated
+                                                        RPZ, partner feeds) — see below
+ioc.unblock          ioc.block          BEST_EFFORT
+file.quarantine      file.restore       BEST_EFFORT     EDR-dependent whether the file is
+                                                        recoverable
+session.revoke       null               REVERSIBLE      no inverse action — the session
+                                                        self-restores on re-login
+email.purge          null               IRREVERSIBLE    no inverse; backup restore is out of band
 ```
 
-For action types with a `reversible_by`:
+### 7.1 Three separable reversal features (Position C)
 
-- The system tracks which actions are currently in `SUCCEEDED` state and reversible. The UI exposes a "reverse this action" affordance on the action detail.
+The reversal machinery bundles three things that are **independently gated**:
+
+1. **The affordance** — a "reverse this action" control appears on any `SUCCEEDED` action whose descriptor has a `reversible_by`. Driven by `reversible_by` alone.
+2. **The forward linkage** — the reversing action is its own x-action carrying `reversal_of_ref` pointing at the original. This makes *"was this block ever lifted, by whom, when?"* queryable from the reversing side. Recorded at request time, always, whenever a reversal is dispatched.
+3. **The status claim** — the original's status moves to `REVERSED` and `reversed_by_ref` is populated. This is a strong assertion — *"the effect was undone"* — and is the **only** feature gated on the reliability classification.
+
+The design rule (**Position C**, the canonical model): *keep the affordance and the forward linkage for every reversible-or-best-effort action; gate only the status claim on reliability.*
+
+- **`REVERSIBLE` original** → a fully-successful reversing dispatch marks the original `REVERSED`. We stand behind the undo.
+- **`BEST_EFFORT` original** → the reversing action still dispatches, succeeds on its own terms, and carries its forward `reversal_of_ref`; but the original **stays `SUCCEEDED`**. We do not claim `REVERSED`, because for that binding we cannot verify the effect is gone. `SUCCEEDED` here honestly means "still considered in effect as far as we can prove." The analyst judges residual effect per their tooling.
+- **`IRREVERSIBLE` original** → no `reversible_by`, so the affordance never appears; reversal is structurally impossible. Recovery (e.g., restoring purged email from backup) is a separate operation outside this system.
+
+This is why `ioc.block` ships **linked** to `ioc.unblock` (affordance + forward linkage live) at `BEST_EFFORT` (no `REVERSED` claim). The earlier "standalone action, not a reversal" framing threw away all three features because there was no way to gate only the third; Position C keeps the two that are always safe.
+
+Common to all reversible action types:
+
 - Reversal is itself an action and goes through the same authorization flow. Critically, **reversing an action is the same tier as the original, not lower.** Un-isolating a host is also T2; pushing a "retract" detection is also T3 (because retracting a rule has the same blast radius as deploying one — anything that detected on it stops firing).
-- The reversing action carries `reversal_of_ref` pointing at the original. On success, the original action's status moves to `REVERSED` and `reversed_by_ref` is populated.
-- Reversal of an irreversible action is structurally impossible: there's no `reversible_by`, so the affordance never appears. Recovery (e.g., restoring purged email from backup) is a separate operation outside this system.
+- A `PARTIAL`/`FAILED`/`TIMEOUT` reversing dispatch never marks the original `REVERSED`, regardless of reliability — you can't claim an undo that didn't fully take effect (§6.2, honest-state).
 
-### Effect-based vs action-based reversal
+**Implementation note (v0).** The reliability gate is live in the reversing saga: the status-claim step (`ActionReversed` on the original) fires only when the original is `REVERSIBLE`; a `BEST_EFFORT` original leaves the saga completing cleanly without the claim. Reliability is resolved from the original's descriptor at dispatch time (a lookup failure defaults to *not reliable* — the conservative choice). **Deferred:** (a) a backward `reversal_attempted_by_ref` pointer on the original so the best-effort attempt is queryable from the original's side too (today only the forward `reversal_of_ref` on the reversing action carries the link — the relationship is recorded, just not back-indexed); (b) the per-binding *upgrade* path (§7.3) that lets a tenant whose tool supports verified removal promote `ioc.block` to `REVERSIBLE`. Both need the reversibility classification frozen onto the persisted x-action (an event-taxonomy addition, 02 §3); until then the descriptor baseline is authoritative and best-effort is the honest default.
+
+### 7.2 Effect-based vs action-based reversal
 
 I considered modeling "the host is currently isolated" as durable state on the entity (an `x-isolation-state`) so reversal could target the *state* rather than the *action*. Rejected for v0: the system isn't the source of truth on entity state in the world (the EDR is). Reasoning over a mirrored state field invites drift. Tracking reversal at the action level is honest: "we took this action and have not yet taken its inverse." If the host was un-isolated out-of-band by the EDR admin, that's not our reversal but it's also not pretending to be.
 
-### Per-binding reversibility override
+This is the same honesty principle Position C (§7.1) applies to the reliability gate: the `REVERSED` status is a claim about the world, so it fires only when we can stand behind it.
 
-SOAR_PLAYBOOK bindings (and in principle any binding) may further constrain reversibility. The action-type manifest declares the *baseline* reversibility classification (REVERSIBLE / BEST_EFFORT / IRREVERSIBLE — implicit in `reversible_by` being non-null or null). Each binding may declare an optional `reversibility_override` that can only *downgrade* the classification, never upgrade it.
+### 7.3 Per-binding reversibility override
 
-Why: a customer's Tines playbook may bundle effects the descriptor's inverse can't undo (e.g., a `host.isolate` playbook also archives the host's session log to S3 with no restore path). The bound action is effectively IRREVERSIBLE for that binding even though `host.isolate` is REVERSIBLE in general. The analyst sees the *effective* classification (descriptor ∩ binding override) at approval time, with a tooltip showing why if it differs from the descriptor.
+The action-type manifest declares the *baseline* classification (§7). A binding may declare an optional `reversibility_override` yielding the **effective** classification the analyst sees at approval time (with a tooltip explaining any divergence from the descriptor). Movement is constrained along the ordered scale `IRREVERSIBLE < BEST_EFFORT < REVERSIBLE`:
 
-Upgrade is structurally rejected — claiming a binding makes an IRREVERSIBLE action reversible is unsafe and never permitted. The binding declaration goes through the same `policy_signer` sign-off as any other tenant-authored policy (governance-module concern when `governance_mode: gated`; in `lightweight` mode the parent role suffices).
+- **Downgrade (toward IRREVERSIBLE) — always permitted.** A customer's Tines playbook may bundle effects the descriptor's inverse can't undo (e.g., a `host.isolate` playbook also archives the host's session log to S3 with no restore path). The bound action is effectively IRREVERSIBLE for that binding even though `host.isolate` is REVERSIBLE in general. A binding may always be *more* pessimistic than the descriptor.
+- **Upgrade `BEST_EFFORT → REVERSIBLE` — permitted only via signed attestation.** This is the mechanism Position C reserves for `ioc.block`: a tenant whose denylist has a clean, verified removal API (no TTL races, no downstream propagation) may attest that *their* binding reliably undoes the effect, promoting the effective classification so a successful `ioc.unblock` marks the block `REVERSED`. The attestation is a claim of fact about the wired tool and goes through the same `policy_signer` sign-off as any tenant-authored policy (governance-module concern when `governance_mode: gated`; in `lightweight` mode the parent role suffices).
+- **Upgrade *from* `IRREVERSIBLE` — structurally rejected, never permitted.** No signature can make a purge un-happen; claiming otherwise is unsafe. `IRREVERSIBLE` has no `reversible_by`, so there is nothing to dispatch regardless.
+
+The default (no override) is the descriptor baseline — so `ioc.block` is `BEST_EFFORT` until a tenant explicitly, verifiably upgrades it. The conservative direction is the honest one: we under-claim reversibility rather than over-claim it.
 
 The `audit_depth` on the reversing action's `Execution` record is independent — a SOAR_PLAYBOOK reversal records `audit_depth: EXTERNAL` just like a SOAR_PLAYBOOK forward dispatch.
 

@@ -98,7 +98,8 @@ type ActionDescriptor interface {
     Intent() string              // LLM-facing description of effect + when to use
     // Auth/taxonomy fields below are DECLARED here but OWNED elsewhere:
     DefaultTier() Tier           // T1|T2|T3 — authoritative in 04 §2
-    Reversibility() Reversal     // reversible / irreversible mapping — 04 §7, §2.1
+    Reversibility() Reversal     // reversible / best_effort / irreversible — 04 §7 (the
+                                 // classification gates the REVERSED claim, 04 §7.1)
     D3FEND() string              // optional technique id — 04 §2.1
 }
 ```

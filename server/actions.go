@@ -365,9 +365,25 @@ func (b *Backend) startActionWorkflow(ctx context.Context, s dispatchSpec) strin
 		err  error
 	)
 	if s.ReversalOfRef != uuid.Nil {
+		// 04 §7 Position C: the REVERSED status claim on the original is gated on
+		// its effective reversibility. Resolve it from the original action's
+		// descriptor — only a RELIABLE original may be marked REVERSED on a
+		// successful undo; a best_effort original (e.g. ioc.block) keeps the
+		// linkage but stays SUCCEEDED. Per-binding overrides that could upgrade
+		// best_effort→reversible are deferred (04 §7.3), so the descriptor
+		// baseline is authoritative today. A lookup failure defaults to NOT
+		// reliable — the conservative, honest choice.
+		reliable := false
+		if orig, lerr := aggregate.LoadActionCurrent(ctx, b.cfg.Handler.DB(), s.ReversalOfRef); lerr != nil {
+			log.Printf("action %s: reversal reliability lookup for original %s failed (defaulting to best-effort): %v",
+				s.ActionID, s.ReversalOfRef, lerr)
+		} else if d, ok := b.cfg.ActionCatalog.Descriptor(orig.ActionType); ok {
+			reliable = d.ReliablyReversible()
+		}
 		wfID, err = client.StartReversalSaga(ctx, temporal.ReversalSagaInput{
 			OriginalActionID: s.ReversalOfRef.String(),
 			Reversing:        lifecycle,
+			OriginalReliable: reliable,
 		})
 	} else {
 		wfID, err = client.StartActionLifecycle(ctx, lifecycle)
