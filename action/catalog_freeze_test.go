@@ -16,14 +16,19 @@ func TestDefaultActionCatalog_Frozen(t *testing.T) {
 		reversibleBy  string
 		d3fend        string
 	}
+	// Reversals carry a D3FEND id where the Restore tactic names the restoration
+	// as a first-class technique (04 §2.1): D3-RNA, D3-RE, D3-ULA. account.disable
+	// is reversible per D3FEND Restore listing Unlock Account (04 §7).
 	golden := map[string]want{
 		"host.isolate":     {"T2", "reversible", "host.unisolate", "D3-NI"},
-		"host.unisolate":   {"T2", "reversible", "host.isolate", ""},
-		"account.disable":  {"T2", "irreversible", "", "D3-AL"},
-		"email.quarantine": {"T2", "reversible", "email.release", ""},
-		"email.release":    {"T2", "reversible", "email.quarantine", ""},
-		"email.purge":      {"T3", "irreversible", "", ""},
+		"host.unisolate":   {"T2", "reversible", "host.isolate", "D3-RNA"},
+		"account.disable":  {"T2", "reversible", "account.enable", "D3-AL"},
+		"account.enable":   {"T2", "reversible", "account.disable", "D3-ULA"},
+		"email.quarantine": {"T2", "reversible", "email.release", "D3-ER"},
+		"email.release":    {"T2", "reversible", "email.quarantine", "D3-RE"},
+		"email.purge":      {"T3", "irreversible", "", "D3-ER"},
 		"ioc.block":        {"T2", "reversible", "", "D3-NTF"},
+		"ioc.unblock":      {"T2", "reversible", "", ""},
 	}
 
 	cat := DefaultActionCatalog()

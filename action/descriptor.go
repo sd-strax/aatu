@@ -62,8 +62,9 @@ func (c *ActionCatalog) ActionTypes() []string {
 // is the broader roadmap taxonomy and MUST match these rows where they overlap;
 // TestDefaultActionCatalog_Frozen pins the set so neither can drift silently.
 // D3FEND ids are MITRE technique ids (d3fend.mitre.org), illustrative metadata
-// only (04 §2.1) — not load-bearing for control flow. Reversal actions carry no
-// D3FEND id (restoring state is not itself a defensive countermeasure).
+// only (04 §2.1) — not load-bearing for control flow. Reversal actions carry a
+// D3FEND id only where the ontology's Restore tactic names the restoration as a
+// first-class technique (D3-RNA, D3-RE, D3-ULA); other reversals carry none.
 func DefaultActionCatalog() *ActionCatalog {
 	c := NewActionCatalog()
 	for _, d := range []ActionDescriptor{
@@ -83,14 +84,25 @@ func DefaultActionCatalog() *ActionCatalog {
 			DefaultTier:   "T2", // reversing is the same tier as the original (04 §7)
 			Reversibility: "reversible",
 			ReversibleBy:  "host.isolate",
+			D3FEND:        "D3-RNA", // Restore Network Access (Restore tactic)
 		},
 		{
 			ActionType:    "account.disable",
-			Intent:        "Disable a user account, blocking new sessions. The disable record is permanent in the audit sense; re-enabling is a new authorization decision.",
+			Intent:        "Disable a user account, blocking new sessions until re-enabled. Reversible (account.enable); already-established sessions need session revocation separately.",
 			Inputs:        []capability.InputParam{{Name: "account", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
-			Reversibility: "irreversible", // 04 §7: reversible_by null
-			D3FEND:        "D3-AL",        // Account Locking
+			Reversibility: "reversible",
+			ReversibleBy:  "account.enable",
+			D3FEND:        "D3-AL", // Account Locking
+		},
+		{
+			ActionType:    "account.enable",
+			Intent:        "Re-enable a disabled user account — the inverse of account.disable. Use to retract over-containment once the account is cleared.",
+			Inputs:        []capability.InputParam{{Name: "account", Type: "entity", Required: true}},
+			DefaultTier:   "T2", // reversing is the same tier as the original (04 §7)
+			Reversibility: "reversible",
+			ReversibleBy:  "account.disable",
+			D3FEND:        "D3-ULA", // Unlock Account (Restore tactic)
 		},
 		{
 			ActionType:    "email.quarantine",
@@ -99,6 +111,7 @@ func DefaultActionCatalog() *ActionCatalog {
 			DefaultTier:   "T2",
 			Reversibility: "reversible",
 			ReversibleBy:  "email.release",
+			D3FEND:        "D3-ER", // Email Removal (reversible application)
 		},
 		{
 			ActionType:    "email.release",
@@ -107,6 +120,7 @@ func DefaultActionCatalog() *ActionCatalog {
 			DefaultTier:   "T2",
 			Reversibility: "reversible",
 			ReversibleBy:  "email.quarantine",
+			D3FEND:        "D3-RE", // Restore Email (Restore tactic)
 		},
 		{
 			ActionType:    "email.purge",
@@ -114,6 +128,7 @@ func DefaultActionCatalog() *ActionCatalog {
 			Inputs:        []capability.InputParam{{Name: "message", Type: "entity", Required: true}},
 			DefaultTier:   "T3",
 			Reversibility: "irreversible",
+			D3FEND:        "D3-ER", // Email Removal (terminal application)
 		},
 		{
 			ActionType:    "ioc.block",
@@ -121,7 +136,18 @@ func DefaultActionCatalog() *ActionCatalog {
 			Inputs:        []capability.InputParam{{Name: "indicator", Type: "entity", Required: true}},
 			DefaultTier:   "T2",
 			Reversibility: "reversible",
-			D3FEND:        "D3-NTF", // Network Traffic Filtering
+			// No ReversibleBy: ioc.unblock exists as a standalone action, not a
+			// tracked reversal — whether entry removal truly undoes the block's
+			// effect (TTL lists, propagated RPZ, partner feeds) is per-binding;
+			// linking the pair awaits per-binding reversibility overrides (04 §7).
+			D3FEND: "D3-NTF", // Network Traffic Filtering
+		},
+		{
+			ActionType:    "ioc.unblock",
+			Intent:        "Remove an IOC (hash/IP/domain) from the perimeter denylist. A standalone action, not a tracked reversal: it does not mark a prior ioc.block as REVERSED, and whether removal fully undoes propagation depends on the tenant's tooling.",
+			Inputs:        []capability.InputParam{{Name: "indicator", Type: "entity", Required: true}},
+			DefaultTier:   "T2", // re-opening traffic carries the same weight as blocking it
+			Reversibility: "reversible",
 		},
 	} {
 		c.Register(d)

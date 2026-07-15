@@ -21,13 +21,14 @@ func TestShippedActionScenario(t *testing.T) {
 		t.Fatalf("build resolver: %v", err)
 	}
 
-	// host.isolate, account.disable, and ioc.block advertise as available.
+	// host.isolate, account.disable/enable, and ioc.block advertise as available.
 	avail := map[string]ActionAvailability{}
 	for _, s := range resolver.ListActionTypes(catalog) {
 		avail[s.Descriptor.ActionType] = s.Status
 	}
 	if avail["host.isolate"] != ActionAvailable || avail["account.disable"] != ActionAvailable ||
-		avail["ioc.block"] != ActionAvailable {
+		avail["account.enable"] != ActionAvailable || avail["ioc.block"] != ActionAvailable ||
+		avail["ioc.unblock"] != ActionAvailable {
 		t.Errorf("bound actions not available: %v", avail)
 	}
 
@@ -51,6 +52,28 @@ func TestShippedActionScenario(t *testing.T) {
 	}
 	if blockRes.FinalOutcome != OutcomeSucceeded {
 		t.Errorf("ioc.block outcome = %q; want SUCCEEDED", blockRes.FinalOutcome)
+	}
+
+	// ioc.unblock dispatches as a standalone action — not a tracked reversal of
+	// the block (04 §7): no reversal_of_ref, and the block record stays SUCCEEDED.
+	unblockCmd, err := BuildRequestCommand(catalog, ActionRequest{
+		ActionType: "ioc.unblock",
+		Targets:    []aggregate.TargetSpec{{EntityRef: "ipv4-addr--1", ResolvedIdentifier: "185.220.101.5"}},
+		Rationale:  "shared CDN edge — legit traffic breaking; analyst judged removal safe",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("build ioc.unblock request: %v", err)
+	}
+	unblockRes, _, err := resolver.Resolve(context.Background(), DispatchRequest{
+		ActionID:   unblockCmd.ActionID,
+		ActionType: unblockCmd.ActionType,
+		Targets:    unblockCmd.Targets,
+	})
+	if err != nil {
+		t.Fatalf("resolve/dispatch ioc.unblock: %v", err)
+	}
+	if unblockRes.FinalOutcome != OutcomeSucceeded {
+		t.Errorf("ioc.unblock outcome = %q; want SUCCEEDED", unblockRes.FinalOutcome)
 	}
 
 	// Build a request_action for host.isolate (T2, single target), then dispatch

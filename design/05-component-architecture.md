@@ -666,12 +666,12 @@ These are minor edits that land alongside this spec. Each is small and additive;
 
 ### 14.3 04-action-authorization.md
 
-**Extend `ActionDescriptor` schema** with optional `d3fend_technique` field. Mapping is illustrative (free metadata; not enforced):
+**Extend `ActionDescriptor` schema** with optional `d3fend_technique` field. Mapping is illustrative (free metadata; not enforced) — the authoritative per-action mapping is 04-action-authorization.md §2.1:
 
 ```
-host.isolate         d3fend_technique: D3-NTI   (Network Traffic Isolation)
-account.suspend      d3fend_technique: D3-AL    (Account Locking)
-credential.reset     d3fend_technique: D3-CR    (Credential Rotation)
+host.isolate         d3fend_technique: D3-NI    (Network Isolation)
+account.disable      d3fend_technique: D3-AL    (Account Locking)
+credential.reset     d3fend_technique: D3-CR    (Credential Revocation)
 detection.deploy     d3fend_technique: D3-DA    (Detection Authorship)
 ioc.publish_to_misp  d3fend_technique: D3-IDA   (Indicator Distribution)
 ioc.publish_to_isac  d3fend_technique: D3-IDA

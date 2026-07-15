@@ -27,11 +27,31 @@ action_bindings:
       params:
         account: "${target.resolved_identifier}"
 
+  # Reversal pair of account.disable — retract over-containment once the
+  # account is cleared (D3FEND Restore: D3-ULA Unlock Account).
+  account.enable:
+    - action_type: account.enable
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        account: "${target.resolved_identifier}"
+
   # Block the C2 IOC (IP/domain/hash) at the perimeter — the "fake Tines" accepts
   # any indicator so the containment flow (block 185.220.101.5 / exfil.example.net)
   # completes end-to-end in the demo.
   ioc.block:
     - action_type: ioc.block
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        indicator: "${target.resolved_identifier}"
+
+  # Remove an indicator from the denylist — a standalone action, not a tracked
+  # reversal of ioc.block (the block record stays SUCCEEDED; see 04 §7).
+  ioc.unblock:
+    - action_type: ioc.unblock
       adapter: fixture_write
       operation: dispatch
       priority: 100

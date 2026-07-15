@@ -68,14 +68,16 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 | Kill process on endpoint | T2 | |
 | Quarantine file on endpoint | T2 | |
 | Suspend user session / revoke tokens | T2 | |
-| Suspend user account (re-enableable) | T2 | |
+| Disable user account (re-enableable) | T2 | v0 ships this as `account.disable` (AD/IdP vocabulary), reversible by `account.enable` |
+| Re-enable disabled user account | T2 | Reversal of a T2 |
 | Force MFA re-enrollment (single user) | T2 | |
 | Force password reset (single user) | T2 | |
 | Block hash/IP/domain at perimeter (with TTL) | T2 | |
+| Remove hash/IP/domain from perimeter block list | T2 | Standalone action, not a tracked reversal (§7) — re-opening traffic carries the same weight as blocking it |
 | Quarantine single email from one mailbox | T2 | Restorable from quarantine |
 | Push detection rule to production | T3 | Always |
 | Delete email from mailboxes (purge) | T3 | |
-| Disable user account (terminal, not suspend) | T3 | |
+| Deprovision user account (terminal — delete/deactivate, not re-enableable) | T3 | Distinct from the re-enableable `account.disable` above |
 | Mass session revocation (>threshold users) | T3 | Escalator from T2 |
 | Mass host isolation (>threshold hosts) | T3 | Escalator from T2 |
 | Force password reset, multiple users | T3 | Escalator from T2 |
@@ -98,32 +100,97 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 
 Each action type carries an optional `d3fend_technique` mapping to a MITRE D3FEND technique ID. This is illustrative metadata — used for coverage projections, reporting, and the agent loop's surfacing of "for technique T1XXX, available D3FEND-mapped actions in your environment are X, Y, Z." It is *not* enforced at authorization time; not load-bearing for control flow. Tenants and adapter authors may extend the mapping with additional action types. The mapping ships as part of the signed action descriptor distribution (05-component-architecture.md §11.1).
 
-**Authoritative source of truth.** The `action_type` strings, tiers, and reversibility of the *dispatchable* v0 catalog live in code — `action.DefaultActionCatalog()` (`action/descriptor.go`), pinned by `TestDefaultActionCatalog_Frozen`. This table is the broader **roadmap taxonomy**; where a row overlaps the frozen v0 subset it MUST match the code (the v0 rows are marked ✅ below). D3FEND ids are real MITRE technique ids (`d3fend.mitre.org`); reversal actions carry no id (restoring state is not itself a countermeasure).
+**Authoritative source of truth.** The `action_type` strings, tiers, and reversibility of the *dispatchable* v0 catalog live in code — `action.DefaultActionCatalog()` (`action/descriptor.go`), pinned by `TestDefaultActionCatalog_Frozen`. This table is the broader **roadmap taxonomy**; where a row overlaps the frozen v0 subset it MUST match the code (the v0 rows are marked ✅ below). D3FEND ids are real MITRE technique ids (`d3fend.mitre.org`). Reversal actions carry a D3FEND id only where the ontology's Restore tactic names the restoration as a first-class technique (D3-RNA, D3-RE, D3-ULA, D3-RF); reversals without a Restore-tactic home carry none.
 
 | Action type | D3FEND technique | v0 |
 |---|---|---|
 | `host.isolate` | D3-NI (Network Isolation) | ✅ |
-| `host.unisolate` | — (reversal of `host.isolate`) | ✅ |
-| `account.suspend` | D3-AL (Account Locking) | |
-| `account.disable` | D3-AL | ✅ |
-| `session.revoke` | D3-AL | |
-| `credential.reset` | D3-CRO (Credential Rotation) | |
+| `host.unisolate` | D3-RNA (Restore Network Access) | ✅ |
+| `account.disable` | D3-AL (Account Locking) | ✅ |
+| `account.enable` | D3-ULA (Unlock Account) | ✅ |
+| `session.revoke` | D3-ST (Session Termination) | |
+| `credential.reset` | D3-CR (Credential Revocation) + D3-RIC (Reissue Credential) | |
 | `process.kill` | D3-PT (Process Termination) | |
-| `file.quarantine` | D3-FR (File Removal) | |
-| `email.quarantine` | — (email response; not cleanly D3FEND-mapped in v0) | ✅ |
-| `email.release` | — (reversal of `email.quarantine`) | ✅ |
-| `email.purge` | — (irreversible email removal) | ✅ |
-| `ioc.block` | D3-NTF (Network Traffic Filtering) | ✅ |
+| `process.suspend` | D3-PS (Process Suspension) | |
+| `file.quarantine` | D3-FEV (File Eviction) | |
+| `file.restore` | D3-RF (Restore File) | |
+| `persistence.remove` | D3-RKD (Registry Key Deletion; scheduled-task analog) | |
+| `email.quarantine` | D3-ER (Email Removal — reversible application) | ✅ |
+| `email.release` | D3-RE (Restore Email) | ✅ |
+| `email.purge` | D3-ER (Email Removal — terminal application) | ✅ |
+| `ioc.block` | D3-NTF (Network Traffic Filtering); hash-flavored blocks also implement D3-EDL (Executable Denylisting) | ✅ |
+| `ioc.unblock` | — (standalone denylist-entry removal, deliberately *not* a tracked reversal of `ioc.block` — see §7; no Restore-tactic technique exists for it) | ✅ |
 | `detection.deploy` | D3-DA (Detection Authorship) | |
-| `detection.retire` | D3-DA (reversal) | |
-| `host.reimage` | D3-RIO (Restore Image / Operating System) | |
+| `detection.retire` | — (reversal of `detection.deploy`) | |
+| `host.reimage` | D3-RDI (Restore Disk Image) | |
 | `ioc.publish_to_misp` | D3-IDA (Indicator Distribution and Attribution) | |
 | `ioc.publish_to_isac` | D3-IDA | |
-| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique) | |
+| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique; also the dispatch vehicle for **Handoff** dispositions, §2.2) | |
 | `comm.post` | (not D3FEND-mapped — communication, not defensive technique) | |
 | `document.deliver` | (not D3FEND-mapped — reporting, not defensive technique) | |
 
-Reconciliation note (freeze): the v0 rows were corrected against the code catalog and MITRE D3FEND — `host.isolate` is D3-NI (was mis-listed D3-NTI), `credential.reset` is D3-CRO (was D3-CR), and the block action is `ioc.block`/D3-NTF (was the drifted `block.add`/D3-NI). `email.*` response actions have no clean D3FEND response technique in v0 and are left unmapped rather than carry a fabricated id.
+Reconciliation note (freeze): the v0 rows were corrected against the code catalog and MITRE D3FEND — `host.isolate` is D3-NI (was mis-listed D3-NTI), and the block action is `ioc.block`/D3-NTF (was the drifted `block.add`/D3-NI).
+
+Reconciliation note (disposition pass): verified against the D3FEND tactic payloads for Isolate/Evict/Restore (`d3fend.mitre.org` API). Corrections: `session.revoke` D3-AL → D3-ST (Session Termination is first-class under Process Eviction); `file.quarantine` D3-FR → D3-FEV (File Eviction — no D3-FR exists); `host.reimage` D3-RIO → D3-RDI (Restore Disk Image — no D3-RIO exists); `credential.reset` D3-CRO → D3-CR + D3-RIC (an incident-time forced reset is revoke-and-reissue, an Evict/Restore pair — not routine rotation, which is Harden-side); the `email.*` actions are mappable after all (D3-ER / D3-RE — the earlier "no clean mapping" hedge predated checking the Evict and Restore tactics); `account.suspend` removed as redundant — v0 ships the re-enableable form as `account.disable` (AD/IdP vocabulary), reversible by `account.enable`, and the terminal T3 form is "deprovision" in the §2 tier table; reversal actions now carry Restore-tactic ids per the amended convention above.
+
+### 2.2 Response-tactic disposition table
+
+D3FEND's three response tactics — **Isolate** (57 techniques), **Evict** (19), **Restore** (12), counting family headers — are the ontology's full "respond" surface. The dispatchable catalog above covers a deliberate subset; this section accounts for **every** technique in those tactics so nothing is silently dropped. Each technique carries exactly one of four dispositions:
+
+- **Action** — reckon dispatches it via `request_action` (shipped or roadmap). Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR).
+- **Reversal** — the undo half of an Action: a real catalog type at the same tier as its original (§7). D3FEND's Restore tactic is largely this column with first-class ids.
+- **Handoff** — a genuine response step that is not an agent-dispatchable state change: change-managed recovery, forensically destructive operations, external legal/registrar processes. Dispatch vehicle: `ticket.create` (T1, operational handoff) with a structured payload; the investigation records the handoff, links the ticket, and the conclusion notes residual state. D3FEND-mapped in the *record*, not the dispatch.
+- **Architecture** — preventive/posture controls that share a tactic with response techniques but have no incident-time dispatch. Their product surface is post-conclusion recommendations (07-post-conclusion-outputs.md), not the action catalog.
+
+Family headers whose children are individually dispositioned inherit "covered via children."
+
+**Isolate (57 — 11 Action-covered, 46 Architecture):**
+
+| D3FEND technique(s) | Disposition | Mapping |
+|---|---|---|
+| D3-NI Network Isolation (family, applied per-host) | Action | `host.isolate` ✅ |
+| D3-NTF Network Traffic Filtering; D3-ITF Inbound / D3-OTF Outbound Traffic Filtering | Action | `ioc.block` ✅ (traffic direction is a tool mechanism, not a distinct analyst action) |
+| D3-DNSDL DNS Denylisting + children D3-FRDDL, D3-FRIDL, D3-HDDL, D3-HDL, D3-RRID | Action | `ioc.block` ✅ (domain/IP indicator; the children are resolver mechanisms) |
+| D3-EDL Executable Denylisting | Action | `ioc.block` ✅ (hash indicator → EDR blocklist) |
+| D3-EI Execution Isolation (family) + D3-KBPI, D3-EAL, D3-HBPI, D3-ABPI | Architecture | sandboxing/allowlisting posture |
+| D3-AMED Access Mediation (family) + all 16 children (D3-SCF, D3-IOPR, D3-CTS, D3-PAM, D3-EPL, D3-WSAM, D3-LAMED, D3-RAM, D3-NAM, D3-NRAM, D3-LFAM, D3-RFAM, D3-EBWSAM, D3-PBWSAM, D3-OVAR, D3-OPR) | Architecture | access-control posture |
+| D3-APA Access Policy Administration (family) + D3-LFP, D3-UAP, D3F-UGPH, D3-DTP | Architecture | permissions/trust-policy posture |
+| D3-CF Content Filtering (family) + all 13 children (D3-CQ, D3-CNE, D3-CNR, D3-CNS, D3-CM, D3-CV, D3-CFC, D3-FFV, D3-FMBV, D3-FISV, D3-FMCV, D3-FMVV, D3-FCDC) | Architecture | gateway content pipeline. Note: D3-CQ Content Quarantine is the *gateway's* quarantine; the analyst-facing quarantine is `email.quarantine`, mapped via Evict/Restore |
+| D3-DNSAL DNS Allowlisting, D3-BDI Broadcast Domain Isolation, D3-ET Encrypted Tunnels, D3-DNL Directional Network Link, D3-EF Email Filtering | Architecture | allowlisting/segmentation/tunnel/data-diode/mail-gateway posture |
+
+**Evict (19 — 10 Action, 6 Handoff, 3 family headers):**
+
+| D3FEND technique | Disposition | Mapping |
+|---|---|---|
+| D3-AL Account Locking | Action | `account.disable` ✅ |
+| D3-CR Credential Revocation | Action | roadmap `credential.reset` |
+| D3-ANCI Authentication Cache Invalidation | Action (gap) | Kerberos/token-cache purge; own type or folded into `session.revoke`'s contract |
+| D3-PT Process Termination | Action | roadmap `process.kill` |
+| D3-PS Process Suspension | Action (gap) | roadmap `process.suspend` — the forensics-preserving alternative to kill |
+| D3-ST Session Termination | Action | roadmap `session.revoke` |
+| D3-ER Email Removal | Action | `email.purge` ✅ (terminal) + `email.quarantine` ✅ (reversible) |
+| D3-FEV File Eviction | Action | roadmap `file.quarantine` |
+| D3-RKD Registry Key Deletion | Action (gap) | roadmap `persistence.remove` — pairs with the `x-registry-key`/`x-scheduled-task` domain entities |
+| D3-DNSCE DNS Cache Eviction | Action (low priority) | endpoint flush; typically bundled into host remediation |
+| D3-HR Host Reboot; D3-HS Host Shutdown | Handoff | deliberately not agent-dispatchable — destroys volatile memory evidence mid-incident; post-forensics ticket |
+| D3-DKE Disk Erasure; D3-DKF Disk Formatting; D3-DKP Disk Partitioning | Handoff | rebuild operations — the manual half of the reimage flow |
+| D3-DRT Domain Registration Takedown | Handoff | registrar/legal process; ticket + the `ioc.publish_*` route |
+| D3-CE Credential Eviction; D3-PE Process Eviction; D3-OE Object Eviction (family headers) | covered via children | — |
+
+**Restore (12 — 5 Reversal, 1 Action, 4 Handoff, 2 family headers):**
+
+| D3FEND technique | Disposition | Mapping |
+|---|---|---|
+| D3-ULA Unlock Account | Reversal | `account.enable` ✅ (`account.disable.reversible_by`) |
+| D3-RNA Restore Network Access | Reversal | `host.unisolate` ✅; `ioc.unblock` ✅ ships as a standalone Action rather than a tracked reversal (§7) |
+| D3-RUAA Restore User Account Access | Reversal | umbrella: `account.enable` + credential re-issue |
+| D3-RE Restore Email | Reversal | `email.release` ✅ |
+| D3-RF Restore File | Reversal | roadmap `file.restore` (pairs `file.quarantine`, §7) |
+| D3-RIC Reissue Credential | Action | roadmap `credential.reset` — evict-and-restore in one dispatch (with D3-CR) |
+| D3-RC Restore Configuration; D3-RD Restore Database; D3-RDI Restore Disk Image; D3-RS Restore Software | Handoff | `ticket.create` to IT/infra — change-managed recovery. Boundary case: `host.reimage` is a roadmap Action (T3, MDM/EDR-dispatchable) annotated D3-RDI; the data restoration after it is the Handoff |
+| D3-RA Restore Access; D3-RO Restore Object (family headers) | covered via children | — |
+
+The shape this yields: the *dispatchable* response surface is ~15 action types, not 88 — the three tactics are dominated by posture controls (46 of Isolate's 57). Every technique that is not an Action is still accounted for: Reversals make containment retractable, Handoffs are recorded and ticketed, Architecture items surface as post-conclusion recommendations. Tenants extending the catalog (adapter authors adding action types) should assign new types a disposition here rather than growing the Action column by default.
 
 ---
 
@@ -525,8 +592,21 @@ file.quarantine      reversible_by: file.restore
 email.quarantine     reversible_by: email.release
 email.purge          reversible_by: null   (irreversible — backup restore is out of band)
 detection.deploy     reversible_by: detection.retire
-user.disable         reversible_by: null   (the disable record is permanent in the audit
-                                            sense; re-enabling is a new authorization decision)
+ioc.block            reversible_by: null   (ioc.unblock exists as a standalone action, not
+                                            a tracked reversal: whether entry removal truly
+                                            undoes the block's effect is per-binding — TTL
+                                            lists and propagated RPZ/partner feeds differ.
+                                            The analyst judges the effect per their tooling;
+                                            the block record honestly stays SUCCEEDED.
+                                            Linking the pair awaits per-binding
+                                            reversibility overrides, below.)
+account.disable      reversible_by: account.enable  (the audit record of the disable is
+                                            permanent, but the world-state has an inverse —
+                                            D3FEND Restore lists Unlock Account (D3-ULA) as
+                                            first-class. Re-enabling runs the full
+                                            authorization flow at the same tier, like any
+                                            reversal. The terminal, non-re-enableable form
+                                            is "deprovision" (§2), a distinct future type.)
 ```
 
 For action types with a `reversible_by`:
