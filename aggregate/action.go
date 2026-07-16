@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// The seven x-action lifecycle event types (04 §3.1, 02 §3). The x-action is a
+// The eight x-action lifecycle event types (04 §3.1, 02 §3). The x-action is a
 // sibling primitive tracked *inside* the investigation aggregate — its status is
 // a projection over these events, never stored state. Each transition is paired
 // with an action-* Interpretation in the same transaction (shared
@@ -23,6 +23,14 @@ const (
 	EventTypeActionDispatched = "action.dispatched" // system-emitted (C.4)
 	EventTypeActionResulted   = "action.resulted"   // system-emitted (C.4)
 	EventTypeActionReversed   = "action.reversed"   // system-emitted (C.4)
+
+	// EventTypeActionReversalAttempted records a reversing dispatch that fully
+	// succeeded but whose effect could not be verified (04 §7.1 Position C —
+	// BEST_EFFORT originals). The original's status does NOT change; only
+	// reversal_attempted_by_ref is recorded, so the attempt is queryable from
+	// the original's side without over-claiming the undo. System-emitted by the
+	// ReversalSaga.
+	EventTypeActionReversalAttempted = "action.reversal_attempted"
 
 	// EventTypeActionPolicyEvaluated records the Gate 2 policy evaluation
 	// (04 §4, 02 §3). Recorded once per action-request in the SAME transaction
@@ -125,9 +133,14 @@ type ActionPolicyEvaluated struct {
 // ActionRequested records a new x-action in REQUESTED. Paired with the
 // producing action-request Interpretation.
 type ActionRequested struct {
-	ActionID                   uuid.UUID       `json:"action_id"`
-	ActionType                 string          `json:"action_type"`
-	Tier                       string          `json:"tier"`
+	ActionID   uuid.UUID `json:"action_id"`
+	ActionType string    `json:"action_type"`
+	Tier       string    `json:"tier"`
+	// Reversibility freezes the action type's reversibility classification
+	// (04 §7: reversible | best_effort | irreversible) at request time, so the
+	// REVERSED-claim gate (04 §7.1) reads the value the analyst approved under —
+	// a later catalog edit cannot re-classify an in-flight action.
+	Reversibility              string          `json:"reversibility,omitempty"`
 	Targets                    []TargetSpec    `json:"targets"`
 	Parameters                 json.RawMessage `json:"parameters,omitempty"`
 	EvidenceRefs               []string        `json:"evidence_refs,omitempty"`
@@ -199,6 +212,17 @@ type ActionReversed struct {
 	ReversalInterpretationID uuid.UUID `json:"reversal_interpretation_id"`
 }
 
+// ActionReversalAttempted records a fully-successful reversing dispatch whose
+// effect could not be verified (04 §7.1 Position C): the original honestly
+// stays SUCCEEDED — only the back-reference is recorded, so "was a reversal
+// ever attempted?" is answerable from the original's side without claiming an
+// undo we cannot verify.
+type ActionReversalAttempted struct {
+	OriginalActionID         uuid.UUID `json:"original_action_id"`
+	ReversingActionID        uuid.UUID `json:"reversing_action_id"`
+	ReversalInterpretationID uuid.UUID `json:"reversal_interpretation_id"`
+}
+
 // --- folded state ------------------------------------------------------------
 
 // actionState is one x-action's folded state within the aggregate.
@@ -215,8 +239,10 @@ type actionState struct {
 }
 
 // foldActionEvent applies one action event to the per-action state map. Kept
-// separate from foldState so the switch there stays readable; all seven types
+// separate from foldState so the switch there stays readable; all eight types
 // are handled so the machine is complete for the C.4 dispatch events.
+// action.reversal_attempted deliberately has no case: it never changes folded
+// state (the original stays SUCCEEDED, 04 §7.1) — it only feeds the projection.
 func foldActionEvent(actions map[uuid.UUID]actionState, e Event) error {
 	get := func(id uuid.UUID) actionState { return actions[id] }
 	set := func(id uuid.UUID, s actionState) { actions[id] = s }
@@ -302,15 +328,18 @@ func foldActionEvent(actions map[uuid.UUID]actionState, e Event) error {
 // REQUESTED plus its action-request Interpretation (08 §2). The AI may issue
 // this; it carries no Authorization and cannot advance status.
 type RequestAction struct {
-	ActionID     uuid.UUID       `json:"action_id"` // the x-action id, minted by the caller
-	ActionType   string          `json:"action_type"`
-	Tier         string          `json:"tier"`
-	Targets      []TargetSpec    `json:"targets"`
-	Parameters   json.RawMessage `json:"parameters,omitempty"`
-	EvidenceRefs []string        `json:"evidence_refs,omitempty"`
-	ExpiresAt    time.Time       `json:"expires_at"`
-	Rationale    string          `json:"rationale"`
-	IsReversal   bool            `json:"is_reversal,omitempty"`
+	ActionID   uuid.UUID `json:"action_id"` // the x-action id, minted by the caller
+	ActionType string    `json:"action_type"`
+	Tier       string    `json:"tier"`
+	// Reversibility is the action type's classification from the catalog
+	// (04 §7), frozen onto the ActionRequested event — see that event's field.
+	Reversibility string          `json:"reversibility,omitempty"`
+	Targets       []TargetSpec    `json:"targets"`
+	Parameters    json.RawMessage `json:"parameters,omitempty"`
+	EvidenceRefs  []string        `json:"evidence_refs,omitempty"`
+	ExpiresAt     time.Time       `json:"expires_at"`
+	Rationale     string          `json:"rationale"`
+	IsReversal    bool            `json:"is_reversal,omitempty"`
 	// ReversalOfRef points at the original x-action this action reverses
 	// (04 §7). Set only when IsReversal; drives the ReversalSaga.
 	ReversalOfRef uuid.UUID `json:"reversal_of_ref,omitempty"`
@@ -509,6 +538,29 @@ func (c ReverseAction) Validate(env Envelope) error {
 	return nil
 }
 
+// RecordReversalAttempt records that a reversing action fully succeeded but its
+// effect could not be verified (04 §7.1 Position C — the original is
+// BEST_EFFORT): the original stays SUCCEEDED and only reversal_attempted_by_ref
+// is recorded. System-emitted by the ReversalSaga, like ReverseAction.
+type RecordReversalAttempt struct {
+	OriginalActionID  uuid.UUID `json:"original_action_id"`
+	ReversingActionID uuid.UUID `json:"reversing_action_id"`
+}
+
+// Kind returns "RecordReversalAttempt".
+func (RecordReversalAttempt) Kind() string { return "RecordReversalAttempt" }
+
+// Validate checks the envelope and both action ids.
+func (c RecordReversalAttempt) Validate(env Envelope) error {
+	if err := validateEnvelope(env); err != nil {
+		return err
+	}
+	if c.OriginalActionID == (uuid.UUID{}) || c.ReversingActionID == (uuid.UUID{}) {
+		return errors.New("RecordReversalAttempt: both action ids required")
+	}
+	return nil
+}
+
 // systemOnly reports whether a command may be issued only by a SYSTEM actor
 // (the Temporal workflows / timers). Dispatch, result, expiry, and reversal are
 // lifecycle transitions no human or AI issues directly — routing them through
@@ -516,7 +568,7 @@ func (c ReverseAction) Validate(env Envelope) error {
 // command from forging a dispatch, outcome, or reversal.
 func systemOnly(cmd Command) bool {
 	switch cmd.(type) {
-	case DispatchAction, ResultAction, ExpireAction, ReverseAction:
+	case DispatchAction, ResultAction, ExpireAction, ReverseAction, RecordReversalAttempt:
 		return true
 	default:
 		return false
@@ -544,6 +596,7 @@ func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]
 		ActionID:                   c.ActionID,
 		ActionType:                 c.ActionType,
 		Tier:                       c.Tier,
+		Reversibility:              c.Reversibility,
 		Targets:                    c.Targets,
 		Parameters:                 c.Parameters,
 		EvidenceRefs:               c.EvidenceRefs,
@@ -787,6 +840,40 @@ func applyReverseAction(env Envelope, state aggregateState, c ReverseAction) ([]
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionReversed, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionReversal,
 		fmt.Sprintf("action %s reversed by %s", c.OriginalActionID, c.ReversingActionID), nil)
+	if err != nil {
+		return nil, err
+	}
+	return []Event{domain, interp}, nil
+}
+
+// applyReversalAttempt builds the (ActionReversalAttempted, action-reversal
+// Interpretation) pair on the ORIGINAL action. Same precondition as
+// ReverseAction — only a SUCCEEDED action has an effect to attempt to reverse.
+// The interpretation_type reuses the canonical action-reversal (01: the enum is
+// closed); the domain event — not the interpretation — carries the
+// verified/unverified distinction.
+func applyReversalAttempt(env Envelope, state aggregateState, c RecordReversalAttempt) ([]Event, error) {
+	orig, ok := state.Actions[c.OriginalActionID]
+	if !ok {
+		return nil, fmt.Errorf("RecordReversalAttempt rejected: original action %s does not exist", c.OriginalActionID)
+	}
+	if orig.Status != ActionStatusSucceeded {
+		return nil, fmt.Errorf("RecordReversalAttempt rejected: original action %s is %s, not SUCCEEDED", c.OriginalActionID, orig.Status)
+	}
+
+	interpID := uuid.New()
+	payload, err := json.Marshal(ActionReversalAttempted{
+		OriginalActionID:         c.OriginalActionID,
+		ReversingActionID:        c.ReversingActionID,
+		ReversalInterpretationID: interpID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionReversalAttempted, payload)
+	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionReversal,
+		fmt.Sprintf("reversal of action %s attempted by %s; effect unverified — original stays SUCCEEDED",
+			c.OriginalActionID, c.ReversingActionID), nil)
 	if err != nil {
 		return nil, err
 	}

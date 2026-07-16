@@ -14,22 +14,33 @@ import (
 // targets, and where it sits in the lifecycle. Drives the action review queue
 // (a REQUESTED/PENDING_SECONDARY row is a pending approval) and the audit view.
 type ActionCurrent struct {
-	ActionID              uuid.UUID
-	AggregateID           AggregateID
-	ActionType            string
-	Tier                  string
-	Status                string
-	Mode                  string    // empty until approved
-	PrimaryApprover       string    // empty until approved
-	PrimaryApprovedAt     time.Time // when the primary approval was recorded; zero until approved
-	IsReversal            bool
-	ReversalOfRef         uuid.UUID // set for reversals; drives the ReversalSaga
-	RequiredMode          string    // frozen Gate 2 requirement (MANUAL|TWO_PARTY|AUTO_POLICY)
-	SecondaryApproverPool []string  // who may complete a two-party approval
-	Parameters            json.RawMessage
-	Targets               []TargetSpec
-	ExpiresAt             time.Time // approval deadline frozen at request time; zero = none
-	LastEventSequence     int64
+	ActionID          uuid.UUID
+	AggregateID       AggregateID
+	ActionType        string
+	Tier              string
+	Status            string
+	Mode              string    // empty until approved
+	PrimaryApprover   string    // empty until approved
+	PrimaryApprovedAt time.Time // when the primary approval was recorded; zero until approved
+	IsReversal        bool
+	ReversalOfRef     uuid.UUID // set for reversals; drives the ReversalSaga
+	// Reversibility is the classification frozen at request time (04 §7:
+	// reversible | best_effort | irreversible); empty for actions requested
+	// before it was frozen (callers fall back to the live catalog).
+	Reversibility string
+	// ReversedByRef is the reversing x-action once the original is REVERSED
+	// (verified undo, 04 §7.1); zero otherwise.
+	ReversedByRef uuid.UUID
+	// ReversalAttemptedByRef is the reversing x-action of a fully-successful
+	// but UNVERIFIED reversal (04 §7.1 — the original stays SUCCEEDED); zero if
+	// no unverified attempt was recorded.
+	ReversalAttemptedByRef uuid.UUID
+	RequiredMode           string   // frozen Gate 2 requirement (MANUAL|TWO_PARTY|AUTO_POLICY)
+	SecondaryApproverPool  []string // who may complete a two-party approval
+	Parameters             json.RawMessage
+	Targets                []TargetSpec
+	ExpiresAt              time.Time // approval deadline frozen at request time; zero = none
+	LastEventSequence      int64
 }
 
 // ActionCurrentProjector populates the action_current table — one row per
@@ -66,13 +77,14 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO action_current (
 				action_id, aggregate_id, tenant_id, action_type, tier, status,
-				is_reversal, reversal_of_ref, required_mode, secondary_approver_pool,
-				parameters, targets, expires_at, created_at, updated_at, last_event_sequence
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $15)
+				is_reversal, reversal_of_ref, reversibility, required_mode,
+				secondary_approver_pool, parameters, targets, expires_at,
+				created_at, updated_at, last_event_sequence
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16)
 			ON CONFLICT (action_id) DO NOTHING
 		`, p.ActionID, evt.AggregateID, evt.TenantID, p.ActionType, p.Tier, ActionStatusRequested,
-			p.IsReversal, nullUUID(p.ReversalOfRef), nullString(p.RequiredMode), pool,
-			params, targets, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
+			p.IsReversal, nullUUID(p.ReversalOfRef), nullString(p.Reversibility), nullString(p.RequiredMode),
+			pool, params, targets, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
 		if err != nil {
 			return fmt.Errorf("insert action_current: %w", err)
 		}
@@ -140,7 +152,35 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			return fmt.Errorf("unmarshal ActionReversed: %w", err)
 		}
-		return setActionStatus(ctx, tx, evt, p.OriginalActionID, ActionStatusReversed)
+		// The verified undo: status flips AND the reversing action is recorded
+		// on the original (04 §7.1 — reversed_by_ref), so "what reversed this?"
+		// is answerable from the original's row, not just the event log.
+		_, err := tx.ExecContext(ctx, `
+			UPDATE action_current
+			SET status = $2, reversed_by_ref = $3, last_event_sequence = $4, updated_at = $5
+			WHERE action_id = $1
+		`, p.OriginalActionID, ActionStatusReversed, p.ReversingActionID, evt.SequenceNo, evt.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("update action_current (reversed): %w", err)
+		}
+		return nil
+
+	case EventTypeActionReversalAttempted:
+		var p ActionReversalAttempted
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal ActionReversalAttempted: %w", err)
+		}
+		// The unverified attempt: status does NOT change (the original honestly
+		// stays SUCCEEDED, 04 §7.1) — only the back-reference is recorded.
+		_, err := tx.ExecContext(ctx, `
+			UPDATE action_current
+			SET reversal_attempted_by_ref = $2, last_event_sequence = $3, updated_at = $4
+			WHERE action_id = $1
+		`, p.OriginalActionID, p.ReversingActionID, evt.SequenceNo, evt.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("update action_current (reversal attempted): %w", err)
+		}
+		return nil
 
 	default:
 		// Every non-action event is a no-op here.
@@ -181,18 +221,20 @@ func (ActionCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) error {
 // every action_current reader so the column order cannot drift per-query.
 const actionCurrentColumns = `action_id, aggregate_id, action_type, tier, status, mode,
 	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref,
+	       reversibility, reversed_by_ref, reversal_attempted_by_ref,
 	       required_mode, secondary_approver_pool, parameters, targets, expires_at,
 	       last_event_sequence`
 
 // scanActionCurrent decodes one actionCurrentColumns row (sql.Row or sql.Rows).
 func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	var a ActionCurrent
-	var mode, approver, requiredMode sql.NullString
+	var mode, approver, requiredMode, reversibility sql.NullString
 	var primaryAt, expiresAt sql.NullTime
-	var reversalOf uuid.NullUUID
+	var reversalOf, reversedBy, attemptedBy uuid.NullUUID
 	var targets, pool, params []byte
 	err := scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
 		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf,
+		&reversibility, &reversedBy, &attemptedBy,
 		&requiredMode, &pool, &params, &targets, &expiresAt,
 		&a.LastEventSequence)
 	if err != nil {
@@ -203,8 +245,15 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	a.PrimaryApprovedAt = primaryAt.Time
 	a.ExpiresAt = expiresAt.Time
 	a.RequiredMode = requiredMode.String
+	a.Reversibility = reversibility.String
 	if reversalOf.Valid {
 		a.ReversalOfRef = reversalOf.UUID
+	}
+	if reversedBy.Valid {
+		a.ReversedByRef = reversedBy.UUID
+	}
+	if attemptedBy.Valid {
+		a.ReversalAttemptedByRef = attemptedBy.UUID
 	}
 	if len(pool) > 0 {
 		_ = json.Unmarshal(pool, &a.SecondaryApproverPool)

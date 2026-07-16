@@ -95,6 +95,12 @@ func TestBuildRequestCommand(t *testing.T) {
 	if !cmd.ExpiresAt.Equal(now.Add(DefaultRequestTTL)) {
 		t.Errorf("expires_at = %v; want now+TTL", cmd.ExpiresAt)
 	}
+	// 04 §7.1: the descriptor's reversibility classification is frozen onto the
+	// request, so the REVERSED-claim gate reads the value the analyst approved
+	// under — a later catalog edit cannot re-classify an in-flight action.
+	if cmd.Reversibility != ReversibilityReversible {
+		t.Errorf("reversibility = %q; want frozen %q", cmd.Reversibility, ReversibilityReversible)
+	}
 }
 
 func TestBlastRadiusEscalator(t *testing.T) {

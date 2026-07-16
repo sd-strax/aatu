@@ -188,6 +188,32 @@ categories in `04 §6.1`/`§6.2`.
 adapter cannot confirm the per-target effect. It never coerces to `OK` — see the idempotency residual
 in `§6`.
 
+### The optional `verify` operation (reversal verification, 04 §7.3)
+
+An adapter MAY additionally implement a verification operation for reversals:
+
+```go
+    // Verify reports whether the effect of a previously-dispatched operation is
+    // observably GONE from the tool's vantage point — the evidence that lets a
+    // BEST_EFFORT reversal earn the REVERSED claim (04 §7.3). Same result
+    // vocabulary as Dispatch: OK = verified gone, UNKNOWN = removed what this
+    // tool governs but cannot confirm the rest (propagation, partner feeds),
+    // FAIL = still in effect.
+    Verify(ctx context.Context,
+           operation string,
+           params map[string]any) (WriteResult, error)
+```
+
+Semantics per `04 §7.3` (state ownership): for a `REVERSIBLE` action the tool owns the effect state,
+so `Dispatch` success on the inverse *is* the verification and `Verify` is unnecessary. For a
+`BEST_EFFORT` action, `Dispatch` success on the inverse only records an *attempt*
+(`action.reversal_attempted`, `02 §3`); a `Verify` returning all-targets-`OK` upgrades the outcome to
+the verified undo (`action.reversed`). An adapter that does not implement `Verify` simply never
+upgrades — the conservative default. The claim is earned per-dispatch by evidence, never granted by
+configuration. Interface specified at v0; concrete implementations land with the real vendor write
+adapters (Phase F). The fixture write adapter may declare verification verdicts in fixture files to
+exercise the path.
+
 ---
 
 ## 6. Idempotency model

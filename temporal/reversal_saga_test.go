@@ -37,17 +37,25 @@ func TestReversalSaga_SucceededReverses(t *testing.T) {
 	}
 }
 
-// TestReversalSaga_BestEffortDoesNotReverse: even when the reversing action
+// TestReversalSaga_BestEffortRecordsAttempt: even when the reversing action
 // fully succeeds, a best-effort original (OriginalReliable=false, e.g. ioc.block)
-// is NOT marked REVERSED — the effect can't be verified undone, so the original
-// honestly stays SUCCEEDED (04 §7 Position C). The reversing action's own forward
-// reversal_of_ref remains the queryable link.
-func TestReversalSaga_BestEffortDoesNotReverse(t *testing.T) {
+// is NOT marked REVERSED — the effect can't be verified undone. Instead the saga
+// records action.reversal_attempted on the original (04 §7.1 Position C), so the
+// attempt is queryable from the original's side while it honestly stays
+// SUCCEEDED.
+func TestReversalSaga_BestEffortRecordsAttempt(t *testing.T) {
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
+	var a *Activities
 
 	env.OnWorkflow(ActionLifecycle, mock.Anything, mock.Anything).Return("SUCCEEDED", nil)
 	// EmitReversed intentionally NOT mocked — calling it fails the test.
+
+	var attemptedOriginal string
+	env.OnActivity(a.EmitReversalAttempted, mock.Anything, mock.MatchedBy(func(in EmitReversedInput) bool {
+		attemptedOriginal = in.OriginalActionID
+		return true
+	})).Return(nil)
 
 	env.ExecuteWorkflow(ReversalSaga, ReversalSagaInput{
 		OriginalActionID: "orig-42",
@@ -59,6 +67,9 @@ func TestReversalSaga_BestEffortDoesNotReverse(t *testing.T) {
 		t.Fatalf("saga not clean: err=%v", env.GetWorkflowError())
 	}
 	env.AssertNotCalled(t, "EmitReversed", mock.Anything, mock.Anything)
+	if attemptedOriginal != "orig-42" {
+		t.Errorf("reversal attempt recorded on %q; want orig-42", attemptedOriginal)
+	}
 }
 
 // TestReversalSaga_PartialDoesNotReverse: PARTIAL means some targets were NOT

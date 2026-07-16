@@ -67,6 +67,7 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 		ActionID:      uuid.New(),
 		ActionType:    req.ActionType,
 		Tier:          EscalateTier(d.DefaultTier, distinctTargets(req.Targets), DefaultBlastRadiusThreshold),
+		Reversibility: d.Reversibility, // frozen at request time (04 §7.1)
 		Targets:       req.Targets,
 		Parameters:    req.Parameters,
 		EvidenceRefs:  req.EvidenceRefs,

@@ -303,6 +303,43 @@ func TestReverseAction(t *testing.T) {
 	}
 }
 
+// TestRecordReversalAttempt: SYSTEM-only, legal only from SUCCEEDED, and — the
+// core of 04 §7.1 Position C — the original's status does NOT change: the
+// unverified attempt is a back-reference on the projection, never a REVERSED
+// claim.
+func TestRecordReversalAttempt(t *testing.T) {
+	origID, revID := uuid.New(), uuid.New()
+
+	sys := newTestEnvelope("alice")
+	sys.Actor.Kind = ActorSystem
+	succeeded := activeStateWithAction(sys, origID, ActionStatusSucceeded)
+
+	events, err := applyCommand(sys, RecordReversalAttempt{OriginalActionID: origID, ReversingActionID: revID}, succeeded)
+	if err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+	if events[0].Type != EventTypeActionReversalAttempted {
+		t.Errorf("domain type = %q; want reversal_attempted", events[0].Type)
+	}
+	// The honest-state assertion: folding the attempt leaves the original
+	// SUCCEEDED (no case in foldActionEvent touches it, by design).
+	if got := foldInto(succeeded.Actions, events)[origID].Status; got != ActionStatusSucceeded {
+		t.Errorf("original status after attempt = %q; must stay SUCCEEDED", got)
+	}
+
+	// Only a SUCCEEDED action has an effect to attempt to reverse.
+	req := activeStateWithAction(sys, origID, ActionStatusRequested)
+	if _, err := applyCommand(sys, RecordReversalAttempt{OriginalActionID: origID, ReversingActionID: revID}, req); err == nil {
+		t.Error("attempt on a non-SUCCEEDED action should be rejected")
+	}
+
+	// System-only: a human cannot forge an attempt record.
+	human := newTestEnvelope("alice")
+	if _, err := applyCommand(human, RecordReversalAttempt{OriginalActionID: origID, ReversingActionID: revID}, succeeded); err == nil {
+		t.Error("human RecordReversalAttempt should be rejected (system-only)")
+	}
+}
+
 // TestAIAllowlist: the AI guard is an ALLOWLIST (04 §5.6) — T1-annotate
 // commands and RequestAction pass; conclude/archive and any unlisted command
 // default to denied.

@@ -58,19 +58,6 @@ func ReversalSaga(ctx workflow.Context, in ReversalSagaInput) error {
 		return nil
 	}
 
-	// 3. The reversing dispatch fully took effect — but that alone reverses the
-	// original only when the original is RELIABLY reversible (04 §7 Position C).
-	// For a BEST_EFFORT original, entry removal is not proof the effect is gone
-	// (TTL lists, propagated RPZ, partner feeds), so we do NOT claim REVERSED: the
-	// original stays SUCCEEDED, and the reversing action's own forward
-	// reversal_of_ref is the honest, queryable record of the attempt. The analyst
-	// judges residual effect per their tooling.
-	if !in.OriginalReliable {
-		log.Info("reversing action succeeded but original is best-effort reversible; original stays SUCCEEDED",
-			"original", in.OriginalActionID, "reversing", in.Reversing.ActionID)
-		return nil
-	}
-
 	// Bounded retries: a permanent domain rejection (e.g. the original vanished)
 	// must fail the saga visibly, not spin forever.
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -78,11 +65,27 @@ func ReversalSaga(ctx workflow.Context, in ReversalSagaInput) error {
 		RetryPolicy:         &sdktemporal.RetryPolicy{MaximumAttempts: 10},
 	})
 	var a *Activities
-	return workflow.ExecuteActivity(ctx, a.EmitReversed, EmitReversedInput{
+	ref := EmitReversedInput{
 		OriginalActionID:  in.OriginalActionID,
 		ReversingActionID: in.Reversing.ActionID,
 		AggregateID:       in.Reversing.AggregateID,
 		TenantID:          in.Reversing.TenantID,
 		ApproverID:        in.Reversing.ApproverID,
-	}).Get(ctx, nil)
+	}
+
+	// 3. The reversing dispatch fully took effect — but that alone reverses the
+	// original only when the original is RELIABLY reversible (04 §7.1 Position C).
+	// For a BEST_EFFORT original, entry removal is not proof the effect is gone
+	// (TTL lists, propagated RPZ, partner feeds), so we do NOT claim REVERSED:
+	// the original stays SUCCEEDED and action.reversal_attempted records the
+	// unverified attempt on it (reversal_attempted_by_ref), so the attempt is
+	// queryable from the original's side too. The analyst judges residual effect
+	// per their tooling.
+	if !in.OriginalReliable {
+		log.Info("reversing action succeeded but original is best-effort reversible; recording attempt, original stays SUCCEEDED",
+			"original", in.OriginalActionID, "reversing", in.Reversing.ActionID)
+		return workflow.ExecuteActivity(ctx, a.EmitReversalAttempted, ref).Get(ctx, nil)
+	}
+
+	return workflow.ExecuteActivity(ctx, a.EmitReversed, ref).Get(ctx, nil)
 }

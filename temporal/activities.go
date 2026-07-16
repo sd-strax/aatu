@@ -216,6 +216,31 @@ func (a *Activities) EmitReversed(ctx context.Context, in EmitReversedInput) err
 	return err
 }
 
+// EmitReversalAttempted records ActionReversalAttempted on the original action:
+// the reversing dispatch fully succeeded but the original is BEST_EFFORT, so
+// the effect cannot be verified — the original stays SUCCEEDED and only the
+// back-reference is recorded (04 §7.1 Position C). System-emitted by the
+// ReversalSaga. Shares EmitReversedInput: same identifiers, different claim.
+func (a *Activities) EmitReversalAttempted(ctx context.Context, in EmitReversedInput) error {
+	env, err := systemEnvelope(in.AggregateID, in.TenantID, in.ApproverID)
+	if err != nil {
+		return err
+	}
+	origID, err := uuid.Parse(in.OriginalActionID)
+	if err != nil {
+		return err
+	}
+	revID, err := uuid.Parse(in.ReversingActionID)
+	if err != nil {
+		return err
+	}
+	_, err = a.handler.Handle(ctx, env, aggregate.RecordReversalAttempt{
+		OriginalActionID:  origID,
+		ReversingActionID: revID,
+	})
+	return err
+}
+
 // systemEnvelope builds the SYSTEM-actor envelope the workflow uses to emit
 // lifecycle events. The principal is the action's approver (a named human, per
 // the actor invariant); Kind is SYSTEM. uuid/time here are fine — activities are

@@ -266,6 +266,8 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return applyResultAction(env, state, c)
 	case ReverseAction:
 		return applyReverseAction(env, state, c)
+	case RecordReversalAttempt:
+		return applyReversalAttempt(env, state, c)
 	case RecordInterpretation:
 		return applyRecordInterpretation(env, state, c)
 	default:
