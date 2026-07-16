@@ -57,3 +57,39 @@ action_bindings:
       priority: 100
       params:
         indicator: "${target.resolved_identifier}"
+
+  # Ticketing family — the operational-handoff vehicle (04 §2.2 Handoff): "hand
+  # off the reimage of WIN-FILE01 to IT" completes end-to-end in the demo. The
+  # fixture write adapter is the "fake SoR". create targets the destination
+  # queue; comment/transition/close target the ticket id.
+  ticket.create:
+    - action_type: ticket.create
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        project: "${target.resolved_identifier}"
+
+  ticket.comment:
+    - action_type: ticket.comment
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        ticket: "${target.resolved_identifier}"
+
+  ticket.transition:
+    - action_type: ticket.transition
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        ticket: "${target.resolved_identifier}"
+
+  ticket.close:
+    - action_type: ticket.close
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        ticket: "${target.resolved_identifier}"

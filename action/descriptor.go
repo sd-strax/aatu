@@ -186,6 +186,46 @@ func DefaultActionCatalog() *ActionCatalog {
 			ReversibleBy:  "ioc.block",
 			D3FEND:        "D3-RNA", // Restore Network Access (Restore tactic)
 		},
+
+		// The ticketing family (04 §2, 07 §7.1): operational handoff + collaboration
+		// with the org's system of record. All T2 (external dispatch is always
+		// T2+, 04 §1) and IRREVERSIBLE-ADDITIVE: the SoR is append-only — records,
+		// notifications, and history are permanent; ticket.close is a forward
+		// transition, NEVER a reversal of ticket.create. No D3FEND ids
+		// (operational handoff, not a defensive technique).
+		{
+			ActionType: "ticket.create",
+			Intent:     "Open a ticket/incident in the org's system of record (Jira, ServiceNow, Linear) — the operational-handoff vehicle. Target the DESTINATION project/queue (resolved_identifier = project key or assignment group); put the entities the ticket concerns in evidence_refs, NOT targets. Irreversible: the record is permanent; closing later is a forward transition (ticket.close), not an undo.",
+			Inputs: []capability.InputParam{
+				{Name: "summary", Type: "string", Required: true},
+				{Name: "description", Type: "string"},
+				{Name: "issue_type", Type: "string"},
+				{Name: "assignee", Type: "string"},
+			},
+			DefaultTier:   aggregate.TierT2,
+			Reversibility: ReversibilityIrreversible,
+		},
+		{
+			ActionType:    "ticket.comment",
+			Intent:        "Add a comment to an existing ticket. Target the ticket (resolved_identifier = ticket id). Irreversible: comments are part of the permanent record.",
+			Inputs:        []capability.InputParam{{Name: "body", Type: "string", Required: true}},
+			DefaultTier:   aggregate.TierT2,
+			Reversibility: ReversibilityIrreversible,
+		},
+		{
+			ActionType:    "ticket.transition",
+			Intent:        "Move an existing ticket to another workflow state (e.g. In Progress, Blocked). Target the ticket (resolved_identifier = ticket id). Irreversible: the state history is permanent; moving back is another forward transition.",
+			Inputs:        []capability.InputParam{{Name: "to_status", Type: "string", Required: true}},
+			DefaultTier:   aggregate.TierT2,
+			Reversibility: ReversibilityIrreversible,
+		},
+		{
+			ActionType:    "ticket.close",
+			Intent:        "Close an existing ticket — a forward transition, NOT a reversal of ticket.create (the record stays). Target the ticket (resolved_identifier = ticket id).",
+			Inputs:        []capability.InputParam{{Name: "resolution", Type: "string"}},
+			DefaultTier:   aggregate.TierT2,
+			Reversibility: ReversibilityIrreversible,
+		},
 	} {
 		c.Register(d)
 	}

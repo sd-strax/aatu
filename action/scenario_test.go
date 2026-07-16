@@ -21,15 +21,19 @@ func TestShippedActionScenario(t *testing.T) {
 		t.Fatalf("build resolver: %v", err)
 	}
 
-	// host.isolate, account.disable/enable, and ioc.block advertise as available.
+	// host.isolate, account.disable/enable, ioc.block/unblock, and the ticketing
+	// family advertise as available.
 	avail := map[string]ActionAvailability{}
 	for _, s := range resolver.ListActionTypes(catalog) {
 		avail[s.Descriptor.ActionType] = s.Status
 	}
-	if avail["host.isolate"] != ActionAvailable || avail["account.disable"] != ActionAvailable ||
-		avail["account.enable"] != ActionAvailable || avail["ioc.block"] != ActionAvailable ||
-		avail["ioc.unblock"] != ActionAvailable {
-		t.Errorf("bound actions not available: %v", avail)
+	for _, at := range []string{
+		"host.isolate", "account.disable", "account.enable", "ioc.block", "ioc.unblock",
+		"ticket.create", "ticket.comment", "ticket.transition", "ticket.close",
+	} {
+		if avail[at] != ActionAvailable {
+			t.Errorf("bound action %s = %q; want available", at, avail[at])
+		}
 	}
 
 	// ioc.block dispatches end-to-end against the C2 indicator — the containment
@@ -74,6 +78,34 @@ func TestShippedActionScenario(t *testing.T) {
 	}
 	if unblockRes.FinalOutcome != OutcomeSucceeded {
 		t.Errorf("ioc.unblock outcome = %q; want SUCCEEDED", unblockRes.FinalOutcome)
+	}
+
+	// ticket.create dispatches end-to-end — the operational handoff (04 §2.2):
+	// target = the DESTINATION queue (not the hosts being handed off, which ride
+	// in evidence_refs); irreversible-additive, stays T2.
+	ticketCmd, err := BuildRequestCommand(catalog, ActionRequest{
+		ActionType:   "ticket.create",
+		Targets:      []aggregate.TargetSpec{{ResolvedIdentifier: "IT-OPS"}},
+		EvidenceRefs: []string{"x-host--1"},
+		Parameters:   []byte(`{"summary":"Reimage WIN-FILE01 after RDP lateral movement","issue_type":"remediation"}`),
+		Rationale:    "hand off host rebuild to IT after containment",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("build ticket.create request: %v", err)
+	}
+	if ticketCmd.Tier != aggregate.TierT2 || ticketCmd.Reversibility != ReversibilityIrreversible {
+		t.Errorf("ticket.create tier/reversibility = %s/%s; want T2/irreversible", ticketCmd.Tier, ticketCmd.Reversibility)
+	}
+	ticketRes, _, err := resolver.Resolve(context.Background(), DispatchRequest{
+		ActionID:   ticketCmd.ActionID,
+		ActionType: ticketCmd.ActionType,
+		Targets:    ticketCmd.Targets,
+	})
+	if err != nil {
+		t.Fatalf("resolve/dispatch ticket.create: %v", err)
+	}
+	if ticketRes.FinalOutcome != OutcomeSucceeded {
+		t.Errorf("ticket.create outcome = %q; want SUCCEEDED", ticketRes.FinalOutcome)
 	}
 
 	// Build a request_action for host.isolate (T2, single target), then dispatch

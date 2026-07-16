@@ -129,7 +129,10 @@ Each action type carries an optional `d3fend_technique` mapping to a MITRE D3FEN
 | `host.reimage` | D3-RDI (Restore Disk Image) | |
 | `ioc.publish_to_misp` | D3-IDA (Indicator Distribution and Attribution) | |
 | `ioc.publish_to_isac` | D3-IDA | |
-| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique; also the dispatch vehicle for **Handoff** dispositions, §2.2) | |
+| `ticket.create` | (not D3FEND-mapped — operational handoff, not defensive technique; also the dispatch vehicle for **Handoff** dispositions, §2.2) | ✅ |
+| `ticket.comment` | (not D3FEND-mapped — collaboration on the SoR record) | ✅ |
+| `ticket.transition` | (not D3FEND-mapped — SoR workflow-state move; forward-only) | ✅ |
+| `ticket.close` | (not D3FEND-mapped — forward transition, NOT a reversal of `ticket.create`) | ✅ |
 | `comm.post` | (not D3FEND-mapped — communication, not defensive technique) | |
 | `document.deliver` | (not D3FEND-mapped — reporting, not defensive technique) | |
 
@@ -141,7 +144,7 @@ Reconciliation note (disposition pass): verified against the D3FEND tactic paylo
 
 D3FEND's three response tactics — **Isolate** (57 techniques), **Evict** (19), **Restore** (12), counting family headers — are the ontology's full "respond" surface. The dispatchable catalog above covers a deliberate subset; this section accounts for **every** technique in those tactics so nothing is silently dropped. Each technique carries exactly one of four dispositions:
 
-- **Action** — reckon dispatches it via `request_action`. Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR). An Action row may be **v0-dispatchable** or **roadmap** — the mapping notes below flag roadmap/gap types, and §2.1's ✅ column is authoritative for what the frozen v0 catalog actually ships (the "Handoff" vehicle `ticket.create` is itself roadmap: T2, irreversible-additive, per §2).
+- **Action** — reckon dispatches it via `request_action`. Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR). An Action row may be **v0-dispatchable** or **roadmap** — the mapping notes below flag roadmap/gap types, and §2.1's ✅ column is authoritative for what the frozen v0 catalog actually ships (the "Handoff" vehicle `ticket.create` ships in the v0 catalog: T2, irreversible-additive, per §2).
 - **Reversal** — the undo half of an Action: a real catalog type at the same tier as its original (§7). D3FEND's Restore tactic is largely this column with first-class ids.
 - **Handoff** — a genuine response step that is not an agent-dispatchable state change: change-managed recovery, forensically destructive operations, external legal/registrar processes. Dispatch vehicle: `ticket.create` (T2, operational handoff — external dispatch is always T2+, §1) with a structured payload; the investigation records the handoff, links the ticket, and the conclusion notes residual state. D3FEND-mapped in the *record*, not the dispatch.
 - **Architecture** — preventive/posture controls that share a tactic with response techniques but have no incident-time dispatch. Their product surface is post-conclusion recommendations (07-post-conclusion-outputs.md), not the action catalog.

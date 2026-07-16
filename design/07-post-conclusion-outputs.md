@@ -302,6 +302,8 @@ authorization *mode* is what removes friction.
 
 Adapters for the common SoRs are first-party: `jira`, `servicenow_soc`, `linear`, `pagerduty_incidents`. Custom integrations follow the standard adapter contract.
 
+The frozen v0 catalog ships `ticket.create` / `ticket.comment` / `ticket.transition` / `ticket.close` (all T2, irreversible-additive — `action/descriptor.go`, dispatchable against the fixture write adapter in the bundled scenario). `ticket.update` (generic field edit) lands with the real SoR adapters (Phase F).
+
 ### 7.2 Templated ticket bodies
 
 The post-conclusion pipeline's `OpenFollowupTickets(grouping_id)` step:
@@ -318,6 +320,8 @@ Tenants without a SoR or who prefer manual ticketing simply don't configure any 
 ### 7.3 Bidirectional linkage
 
 When a ticket is created, the response includes the ticket id and URL. The investigation's projection is updated with a `linked_external_cases` field referencing the ticket. Future capability calls can pull updates from the ticket (`get_external_case_details`, 05 §14.2) so the investigation reflects ongoing work in the SoR.
+
+v0 note: the `ticket.create` x-action itself — its request, evidence_refs, and result in the investigation aggregate — is the investigation↔ticket link at v0. The `linked_external_cases` projection lands with the real SoR adapters (Phase F), whose responses carry the actual ticket id/URL that field needs (the fixture adapter's `WriteResult` has no structured response payload to draw it from).
 
 ---
 

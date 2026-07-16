@@ -31,6 +31,14 @@ func TestDefaultActionCatalog_Frozen(t *testing.T) {
 		"email.purge":      {"T3", "irreversible", "", "D3-ER"},
 		"ioc.block":        {"T2", "best_effort", "ioc.unblock", "D3-NTF"},
 		"ioc.unblock":      {"T2", "best_effort", "ioc.block", "D3-RNA"},
+		// The ticketing family (04 §2, 07 §7.1): all T2 (external dispatch is
+		// always T2+), all irreversible-ADDITIVE (append-only SoR; ticket.close is
+		// a forward transition, never a reversal — hence no reversal pairs), no
+		// D3FEND (operational handoff, not a defensive technique).
+		"ticket.create":     {"T2", "irreversible", "", ""},
+		"ticket.comment":    {"T2", "irreversible", "", ""},
+		"ticket.transition": {"T2", "irreversible", "", ""},
+		"ticket.close":      {"T2", "irreversible", "", ""},
 	}
 
 	cat := DefaultActionCatalog()

@@ -1,0 +1,30 @@
+# Example Gate 2 policy: auto-approve routine ticketing (04 §2, §4).
+#
+# SHIPPED DISABLED. This file lives in examples/ and is NOT loaded — Gate 2
+# only reads *.policy.yaml from the configured `capability.policy_dir`
+# (runtime buildGate2). Ticketing is a T2 external dispatch like any other
+# (04 §1: there is no "T1 external action"); routine filing becomes
+# frictionless via THIS policy — an accountable, tenant-signed, revocable
+# decision — never via a lower tier.
+#
+# To enable, graduated:
+#   1. Copy this file into your `capability.policy_dir` and restart. With
+#      `shadow: true` (below) the policy is EVALUATED AND RECORDED on every
+#      matching request (`would_have_fired` in the action.policy_evaluated
+#      audit event, 04 §4.4) but never drives the decision — watch what it
+#      *would* have auto-approved before trusting it.
+#   2. When satisfied, set `shadow: false` and set `authored_by` /
+#      `signed_off_by` to the accountable humans. Auto-approvals are
+#      attributed to that accountable human (04 §4.1).
+#
+# Note the predicate keeps the tier guard: a blast-radius-escalated T3
+# (mass ticketing, >10 distinct targets in one request) still falls through
+# to manual — and the non-removable baseline DENY independently blocks
+# AI-delegated T3 auto-approval regardless of this policy.
+
+id: "policy/example-ticket-auto-approve/1.0.0"
+action_match: ["ticket.*"]
+predicate: 'ctx.action.tier == "T2"'
+effect: AUTO_APPROVE
+shadow: true
+authored_by: "example — replace with the accountable human before enabling"
