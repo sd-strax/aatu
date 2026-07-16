@@ -2,7 +2,7 @@
 
 ## 0. Framing
 
-The investigation agent (`05 §2.7`, `05 §3.4`) is driven by a system prompt plus a set of tools. As
+The investigation agent (`05 §2` (commitment 7), `05 §3.4`) is driven by a system prompt plus a set of tools. As
 soon as the loop met a real analyst, a pattern emerged: the agent misbehaved in small ways —
 hallucinating an out-of-product step, summarizing when asked for raw data, offering a
 methodologically out-of-order next step and then conceding instantly when challenged. Each is
@@ -160,7 +160,7 @@ wants happens in the base prompt (code + evals). Keeping tenant nuance out of th
 coupling product behavior to any one deployment, and is consistent with the open-core boundary: the
 OSS engine ships the base prompt and has no awareness of paid modules (`CLAUDE.md`, "Open core").
 
-**Open boundary decision.** The loop is client-side (BYOK, `05 §2.7`), so the base prompt is assembled
+**Open boundary decision.** The loop is client-side (BYOK, `05 §2` commitment 7), so the base prompt is assembled
 client-side today. As prompt management matures, whether the base reasoning prompt stays client-shipped
 (versioned with each surface) or moves server-provided (versioned once, tenant-agnostic, identical
 across CLI and VS Code) is a deliberate fork — recorded in `§7`. The current lean is server-provided,
@@ -202,6 +202,6 @@ work, appropriately its own phase.
 ---
 
 *End of design note. Builds on `01-domain-model.md` (primitives, evidence edges), `04-action-authorization.md`
-(the canonical mechanism examples), `05-component-architecture.md §2.7`/`§3.4` (the agent loop), and
+(the canonical mechanism examples), `05-component-architecture.md §2` (commitment 7) and `§3.4` (the agent loop), and
 `06-knowledge-service.md` (SOPs as the tenant-behavior channel). This note governs how agent behavior
 is managed; it defines no new primitive.*

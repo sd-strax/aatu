@@ -456,6 +456,9 @@ x-action
   action_type         string (controlled vocabulary, e.g.,
                       "host.isolate", "email.purge", "detection.deploy")
   tier                T2 | T3
+  reversibility       reversible | best_effort | irreversible
+                      (frozen from the catalog at request time; gates the
+                       REVERSED claim, 04-action-authorization.md §7.1)
   status              REQUESTED | PENDING_SECONDARY | APPROVED |
                       EXECUTING | SUCCEEDED | FAILED | REJECTED |
                       EXPIRED | REVERSED
@@ -471,7 +474,12 @@ x-action
   evidence_refs       list<EvidenceRef>
   investigation_ref   grouping--<uuid>
   reversal_of_ref     optional x-action id (if this reverses another)
-  reversed_by_ref     optional x-action id (set when this is reversed)
+  reversed_by_ref     optional x-action id (set when this is reversed —
+                      the verified undo, 04-action-authorization.md §7.1)
+  reversal_attempted_by_ref
+                      optional x-action id (set when a best_effort reversal
+                      dispatched but its effect could not be verified; the
+                      original stays SUCCEEDED, 04-action-authorization.md §7.1)
   expires_at          timestamp (REQUESTED expires if not approved
                       by this time; system emits ActionExpired)
   assignee_ref        optional Analyst id (claimed by reviewer)

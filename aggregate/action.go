@@ -10,7 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The eight x-action lifecycle event types (04 §3.1, 02 §3). The x-action is a
+// The eight x-action lifecycle event types (04 §3.1, 02 §3) — plus the separate
+// policy_evaluated audit event at the end of this block, which is NOT a
+// lifecycle transition (it never moves status). The x-action is a
 // sibling primitive tracked *inside* the investigation aggregate — its status is
 // a projection over these events, never stored state. Each transition is paired
 // with an action-* Interpretation in the same transaction (shared

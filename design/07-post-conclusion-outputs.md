@@ -428,7 +428,7 @@ Add `linkage` and `post_conclusion` to the canonical `interpretation_type` enum 
 
 ### 11.2 02-persistence.md
 
-Add `InvestigationLinked` to the v0+ event types in §3 (was deferred under "Cross-investigation linkage events" in §8 — surfaced now). The event taxonomy total moves to ~19 at v1+.
+Add `InvestigationLinked` to the v0+ event types in §3 (was deferred under "Cross-investigation linkage events" in §8 — surfaced now). It is already counted in 02 §3's ~20-event total (which also includes `ActionReversalAttempted`, 04 §7.1).
 
 ### 11.3 03-capability-layer.md
 

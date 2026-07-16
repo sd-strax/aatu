@@ -92,7 +92,7 @@ SOP
 
 ### 2.2 Lifecycle
 
-The lifecycle state machine is controlled by a deployment-level config: `governance_mode: lightweight | gated`. Both modes are present in the OSS engine; the *operational surface* around the gated workflow (review queue UI, signoff history, citation analytics, audit export) is what the paid governance module sells (see 05 §13.3).
+The lifecycle state machine is controlled by a deployment-level config: `governance_mode: lightweight | gated`. Both modes are present in the OSS engine; the *operational surface* around the gated workflow (review queue UI, signoff history, citation analytics, audit export) is the province of the governance module (see 05 §13.3).
 
 **`lightweight` (OSS default; appropriate for solo and small teams):**
 

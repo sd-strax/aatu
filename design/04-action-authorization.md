@@ -137,7 +137,7 @@ Reconciliation note (disposition pass): verified against the D3FEND tactic paylo
 
 D3FEND's three response tactics — **Isolate** (57 techniques), **Evict** (19), **Restore** (12), counting family headers — are the ontology's full "respond" surface. The dispatchable catalog above covers a deliberate subset; this section accounts for **every** technique in those tactics so nothing is silently dropped. Each technique carries exactly one of four dispositions:
 
-- **Action** — reckon dispatches it via `request_action` (shipped or roadmap). Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR).
+- **Action** — reckon dispatches it via `request_action`. Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR). An Action row may be **v0-dispatchable** or **roadmap** — the mapping notes below flag roadmap/gap types, and §2.1's ✅ column is authoritative for what the frozen v0 catalog actually ships (the "Handoff" vehicle `ticket.create` is itself roadmap: see §7's T1 note).
 - **Reversal** — the undo half of an Action: a real catalog type at the same tier as its original (§7). D3FEND's Restore tactic is largely this column with first-class ids.
 - **Handoff** — a genuine response step that is not an agent-dispatchable state change: change-managed recovery, forensically destructive operations, external legal/registrar processes. Dispatch vehicle: `ticket.create` (T1, operational handoff) with a structured payload; the investigation records the handoff, links the ticket, and the conclusion notes residual state. D3FEND-mapped in the *record*, not the dispatch.
 - **Architecture** — preventive/posture controls that share a tactic with response techniques but have no incident-time dispatch. Their product surface is post-conclusion recommendations (07-post-conclusion-outputs.md), not the action catalog.
@@ -431,7 +431,7 @@ This is a baseline policy that ships with the system and cannot be deleted, only
 
 ```yaml
 id: policy/dc-two-party/1.0.0
-action_match: ["host.isolate", "user.disable", "session.revoke"]
+action_match: ["host.isolate", "account.disable", "session.revoke"]
 effect: REQUIRE_TWO_PARTY
 predicate: |
   ctx.targets.any_in("domain-controller")
@@ -441,7 +441,7 @@ predicate: |
 
 ```yaml
 id: policy/no-auto-on-inferred-evidence/1.0.0
-action_match: ["host.isolate", "email.purge", "user.disable"]
+action_match: ["host.isolate", "email.purge", "account.disable"]
 effect: DENY
 predicate: |
   !ctx.evidence.all_direct
