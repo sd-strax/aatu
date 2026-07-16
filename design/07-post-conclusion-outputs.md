@@ -283,12 +283,22 @@ Per the symmetry property (05 §6.4, action types are extensible), ticketing is 
 ```
 ticket.create        adapter operation: create_issue / create_incident
                      parameters: project, type, summary, description, assignee, labels
-                     tier: T1 (no external blast radius beyond opening a ticket)
+                     tier: T2 (external dispatch is always T2+ — 04 §1; low blast
+                           radius, but it writes to the org's system of record.
+                           Irreversible-ADDITIVE: the SoR is append-only, the
+                           record and its notifications are permanent; closing is
+                           a forward transition, not a reversal. reversible_by:
+                           null. Target = the destination project/queue; the
+                           entities the ticket concerns ride in evidence_refs.)
 
 ticket.update        adapter operation: update_issue / update_incident
                      parameters: ticket_id, fields_to_update
-                     tier: T1
+                     tier: T2 (target = the ticket, resolved_identifier = its id)
 ```
+
+Routine ticketing feels frictionless via a Gate 2 auto-approve policy (04 §4) — shipped as a
+disabled example the tenant enables, never via a lower tier. Tier is calibrated to harm; the
+authorization *mode* is what removes friction.
 
 Adapters for the common SoRs are first-party: `jira`, `servicenow_soc`, `linear`, `pagerduty_incidents`. Custom integrations follow the standard adapter contract.
 
@@ -301,7 +311,7 @@ The post-conclusion pipeline's `OpenFollowupTickets(grouping_id)` step:
    - "If any user-account was compromised, open a credential-reset ticket"
    - "If any host was reimaged, open a verification ticket for the IT team"
 2. For each rule that fires, render the ticket body from a template using investigation content
-3. Submit `ticket.create` actions through the standard authorization flow; auto-approve policies typically make this fast for low-tier ticket types
+3. Submit `ticket.create` actions through the standard authorization flow; a tenant-enabled auto-approve policy typically makes this fast for routine ticket types
 
 Tenants without a SoR or who prefer manual ticketing simply don't configure any rules; the step is a no-op.
 

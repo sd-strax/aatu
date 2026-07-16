@@ -97,12 +97,21 @@ type ActionDescriptor interface {
     Inputs() InputSchema         // schema for request_action.parameters
     Intent() string              // LLM-facing description of effect + when to use
     // Auth/taxonomy fields below are DECLARED here but OWNED elsewhere:
-    DefaultTier() Tier           // T1|T2|T3 — authoritative in 04 §2
+    DefaultTier() Tier           // T2|T3 — authoritative in 04 §2; see tier/surface
+                                 // mapping below (there is no T1 descriptor)
     Reversibility() Reversal     // reversible / best_effort / irreversible — 04 §7 (the
                                  // classification gates the REVERSED claim, 04 §7.1)
     D3FEND() string              // optional technique id — 04 §2.1
 }
 ```
+
+**Why `T2|T3` and not `T1|T2|T3`: the tiers map one-to-one onto architectural surfaces.** T0 = a
+capability read verb (`03`); T1 = interpretation-layer CRUD, recorded as Interpretations with **no
+descriptor** (`01`/`02`); T2/T3 = an `ActionDescriptor` + write adapter (this spec + `04`). A "T1
+descriptor" is a category error — and, since `DefaultTier` is declared by adapter authors (§8), it
+would be a tier-escape hatch: an external write registered below Gate 2 entirely. Frictionless
+dispatch comes from an auto-approve policy (`04 §4`), never from tier-escape; the enum makes that
+structural at the contract, matching the aggregate's own `T2|T3` validation.
 
 `DefaultTier`, `Reversibility`, and `D3FEND` are surfaced on the descriptor (and in the adapter
 manifest, `05 §11`) for discoverability, but `04`/`05` remain their single source of truth — `08`

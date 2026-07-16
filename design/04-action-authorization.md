@@ -22,11 +22,15 @@ The proposed four tiers are mostly right but conflate two orthogonal axes: **rev
 
 **T1 — ANNOTATE.** Mutations confined to the interpretation layer of the system itself: create/edit hypotheses, add Sightings, tag entities, propose detections (as drafts, not deployed), write Notes, change investigation lifecycle (`DRAFT → ACTIVE → PAUSED`). No friction. Always recorded as Interpretations in the normal way. The AI agent operates freely here.
 
+**T1 is exclusively reckon-internal — there is no "T1 external action."** Any dispatch that leaves reckon is an `x-action` at T2 or above, however low-stakes (ticketing, chat). Low-stakes external dispatches achieve low *friction* via an auto-approve policy (§4) — an accountable, tenant-signed, revocable decision — never via a lower *tier*. Tier is calibrated to harm; authorization mode is what removes friction. (This is also why `x-action.tier` is `T2 | T3` and the tiers map one-to-one onto architectural surfaces: T0 = capability read verb, T1 = interpretation-layer CRUD with no action descriptor, T2/T3 = `ActionDescriptor` + write adapter — see 08 §3.)
+
 **T2 — REVERSIBLE EXTERNAL ACTION.** Side effects on the outside world that can be cleanly undone: host isolation, session revocation, file quarantine, account suspension (not deletion), single-message mailbox quarantine, process kill on a running session. Single-key confirm in the IDE/CLI with the proposed action and its cited evidence rendered. The AI agent may *request* but never execute.
 
-**T3 — IRREVERSIBLE OR HIGH-BLAST-RADIUS ACTION.** Either (a) genuinely irreversible — delete email from mailboxes, force credential rotation org-wide, push detection rule to production, delete data, terminate accounts — or (b) any T2 action whose target set exceeds a configured blast-radius threshold. Requires explicit typed confirmation (re-type the action verb and target count), and may require second-analyst sign-off depending on policy. Always full audit trail with mandatory rationale.
+**T3 — IRREVERSIBLY DESTRUCTIVE/DISRUPTIVE OR HIGH-BLAST-RADIUS ACTION.** Either (a) irreversibly destructive or disruptive — delete email from mailboxes, force credential rotation org-wide, push detection rule to production, delete data, terminate accounts — or (b) any T2 action whose target set exceeds a configured blast-radius threshold. Irreversibility *amplifies* harm; it is not an independent T3 trigger: an irreversible but low-harm **additive** act — filing a ticket into an append-only system of record, submitting a hash to a private sandbox — stays T2 (see the submit-to-sandbox and ticketing rows in §2). What demands T3 is irreversibly destroying, disrupting, or disclosing something of value. Requires explicit typed confirmation (re-type the action verb and target count), and may require second-analyst sign-off depending on policy. Always full audit trail with mandatory rationale.
 
 **Escalation rule:** any T2 action targeting more than `policy.blast_radius.t2_to_t3_threshold` distinct entities is automatically promoted to T3. Default threshold: 10 entities, configurable per action class. This is non-negotiable in code — it's not a policy override the org can disable, only adjust.
+
+The escalator counts distinct targets *per request*; a series of single-target requests is individually sub-threshold (velocity-based aggregation across requests is a v1+ policy concern, applying to every action type equally).
 
 The escalator promotes the *tier*, not the *authorization mode*. An analyst-authored auto-approval policy whose predicate matches an escalated T3 action will still auto-approve it. This is intentional: analysts who author such policies are accountable for the predicates' blast-radius implications, and the spec does not second-guess them. AI-originated auto-approvals on T3 are separately blocked at the policy layer by the baseline DENY in §4.3 (Example 2), which is non-removable.
 
@@ -54,7 +58,7 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 | Query EDR telemetry, SIEM logs, identity logs | T0 | |
 | Pivot on entity, fetch enrichment | T0 | |
 | Read another investigation's content | T0 | RBAC still applies |
-| Submit hash to internal sandbox | T1 | If private-only |
+| Detonate hash/file in internal private sandbox | T0 | Enrichment: a capability query with a submission side effect, returning an observation — not an x-action. Private-only; public/shared submission is the T2 disclosure row below |
 | Submit file/hash to VT or external sandbox | T2 | Information disclosure |
 | Create/edit hypothesis, Sighting, Note | T1 | |
 | Tag entity, label investigation | T1 | |
@@ -86,9 +90,9 @@ Default tiers for common SOC actions. Orgs can shift any action *up* a tier via 
 | Reimage host | T3 | |
 | Permanent block list addition (no TTL) | T3 | |
 | Disable detection rule in production | T3 | Same blast radius as enabling one |
-| Open ticket / incident in SoR (Jira, ServiceNow, Linear) | T1 | Operational handoff; no external blast radius beyond the SoR |
-| Update existing ticket | T1 | |
-| Post to chat channel (Slack, Teams) | T1 | Org-internal communication |
+| Open ticket / incident in SoR (Jira, ServiceNow, Linear) | T2 | Operational handoff. External dispatch → T2+ (§1); irreversible-*additive* (append-only SoR — closing is a forward transition, not a reversal), which does not demand T3 (§1). Target = the destination project/queue; concerned entities ride in evidence_refs. Routine filing is frictionless via a tenant-enabled auto-approve policy |
+| Update / comment / transition existing ticket | T2 | Target = the ticket. Same auto-approve pattern |
+| Post to chat channel (Slack, Teams) | T2 | Org-internal communication, but an external dispatch (§1); auto-approve candidate |
 | Page on-call (PagerDuty, OpsGenie) | T2 | Disrupts a human; analyst should be sure |
 | Send templated email (notification, status update) | T2 | Reaches recipients; reversibility is sending a correction |
 | Publish IOC to internal TI feed (org-controlled, MISP private) | T2 | Org-internal distribution; reversal supported by feed admin |
@@ -137,9 +141,9 @@ Reconciliation note (disposition pass): verified against the D3FEND tactic paylo
 
 D3FEND's three response tactics — **Isolate** (57 techniques), **Evict** (19), **Restore** (12), counting family headers — are the ontology's full "respond" surface. The dispatchable catalog above covers a deliberate subset; this section accounts for **every** technique in those tactics so nothing is silently dropped. Each technique carries exactly one of four dispositions:
 
-- **Action** — reckon dispatches it via `request_action`. Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR). An Action row may be **v0-dispatchable** or **roadmap** — the mapping notes below flag roadmap/gap types, and §2.1's ✅ column is authoritative for what the frozen v0 catalog actually ships (the "Handoff" vehicle `ticket.create` is itself roadmap: see §7's T1 note).
+- **Action** — reckon dispatches it via `request_action`. Criteria: discrete target entity, discrete state change, an API on the other end (EDR/IdP/mail/firewall/SOAR). An Action row may be **v0-dispatchable** or **roadmap** — the mapping notes below flag roadmap/gap types, and §2.1's ✅ column is authoritative for what the frozen v0 catalog actually ships (the "Handoff" vehicle `ticket.create` is itself roadmap: T2, irreversible-additive, per §2).
 - **Reversal** — the undo half of an Action: a real catalog type at the same tier as its original (§7). D3FEND's Restore tactic is largely this column with first-class ids.
-- **Handoff** — a genuine response step that is not an agent-dispatchable state change: change-managed recovery, forensically destructive operations, external legal/registrar processes. Dispatch vehicle: `ticket.create` (T1, operational handoff) with a structured payload; the investigation records the handoff, links the ticket, and the conclusion notes residual state. D3FEND-mapped in the *record*, not the dispatch.
+- **Handoff** — a genuine response step that is not an agent-dispatchable state change: change-managed recovery, forensically destructive operations, external legal/registrar processes. Dispatch vehicle: `ticket.create` (T2, operational handoff — external dispatch is always T2+, §1) with a structured payload; the investigation records the handoff, links the ticket, and the conclusion notes residual state. D3FEND-mapped in the *record*, not the dispatch.
 - **Architecture** — preventive/posture controls that share a tactic with response techniques but have no incident-time dispatch. Their product surface is post-conclusion recommendations (07-post-conclusion-outputs.md), not the action catalog.
 
 Family headers whose children are individually dispositioned inherit "covered via children."
