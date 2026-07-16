@@ -186,7 +186,8 @@ Shape (forward-looking):
   regression is attributable and a change is defensible.
 
 This makes prompt iteration a graded loop rather than vibes-and-regressions. It is a distinct piece of
-work, appropriately its own phase.
+work, appropriately its own phase — designed in `10-eval-harness.md` (assertion catalogue, scoring
+model, run attribution, harness architecture).
 
 ## 7. Open questions / deferred to v1+
 
@@ -197,7 +198,9 @@ work, appropriately its own phase.
   undecided.
 - **Prompt externalization + versioning (`§4.2`).** Structure and the version-attribution mechanism
   are agreed in shape, not yet designed in detail.
-- **Eval harness scope (`§6`).** The assertion catalogue and scoring model are their own design pass.
+- **Eval harness scope (`§6`).** ~~The assertion catalogue and scoring model are their own design
+  pass.~~ Designed: `10-eval-harness.md`. Its own open questions (judge design, flakiness/cost
+  budgets, assertion versioning) live in `10 §9`.
 
 ---
 
