@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sd-strax/reckon/agent"
 	"github.com/sd-strax/reckon/config"
@@ -75,7 +76,13 @@ func runInvestigate(invID string) error {
 	}
 
 	client := agent.NewClient(backendURL, agentCred, humanCred)
-	llm := &agent.Anthropic{APIKey: apiKey, Model: envOr("RECKON_MODEL", agent.DefaultAnthropicModel)}
+	llm := &agent.Anthropic{
+		APIKey: apiKey,
+		Model:  envOr("RECKON_MODEL", agent.DefaultAnthropicModel),
+		OnRetry: func(attempt int, wait time.Duration, _ error) {
+			fmt.Fprintf(os.Stderr, "  provider busy (attempt %d), retrying in %s…\n", attempt, wait.Round(time.Second))
+		},
+	}
 
 	r := &repl{client: client, invID: invID}
 

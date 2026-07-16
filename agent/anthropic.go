@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -19,6 +20,18 @@ const (
 	anthropicVersion = "2023-06-01"
 )
 
+const (
+	// Transient-error retry budget for the Messages API. A 429/5xx/529 is
+	// provider-side backpressure (rate limit, transient fault, "overloaded"),
+	// not a request defect — riding it out with exponential backoff keeps a long
+	// agent turn, or an unattended eval trial, from dying on a momentary blip
+	// (the 529 overloaded_error is the common one). defaultAnthropicRetries
+	// retries → up to that many + 1 attempts.
+	defaultAnthropicRetries = 4
+	anthropicRetryBase      = 2 * time.Second
+	anthropicRetryMax       = 30 * time.Second
+)
+
 // Anthropic implements LLM over the Anthropic Messages API with the analyst's
 // own key (BYOK, 05 §2.7): the key lives in this client-side process and is
 // sent only to the provider — never to the reckon backend.
@@ -27,6 +40,17 @@ type Anthropic struct {
 	Model   string       // defaults to DefaultAnthropicModel
 	BaseURL string       // defaults to the public API; overridable for tests
 	HTTP    *http.Client // defaults to a 300s-timeout client (long completions)
+
+	// MaxRetries bounds transient-error retries (429/5xx/529). Zero uses
+	// defaultAnthropicRetries; a negative value disables retries.
+	MaxRetries int
+	// RetryBaseDelay is the first backoff step (doubled per attempt, capped).
+	// Zero uses anthropicRetryBase; overridable to keep tests fast.
+	RetryBaseDelay time.Duration
+	// OnRetry, when set, is called before each backoff sleep so a surface can
+	// report the wait (a silent 30s pause otherwise looks like a hang). attempt
+	// is 1-based (the attempt that just failed); err is why.
+	OnRetry func(attempt int, wait time.Duration, err error)
 }
 
 // Messages API wire shapes (only the fields the loop uses).
@@ -111,9 +135,44 @@ func (a *Anthropic) Complete(ctx context.Context, req CompleteRequest) (Complete
 	if err != nil {
 		return CompleteResponse{}, fmt.Errorf("anthropic: marshal: %w", err)
 	}
+
+	retries := a.MaxRetries
+	if retries == 0 {
+		retries = defaultAnthropicRetries
+	}
+	retryBase := a.RetryBaseDelay
+	if retryBase <= 0 {
+		retryBase = anthropicRetryBase
+	}
+
+	// attempt is 1-based: attempt 1 is the first try, then up to `retries` more.
+	for attempt := 1; ; attempt++ {
+		res, retryable, retryAfter, err := a.doOnce(ctx, base, httpc, raw)
+		if err == nil {
+			return res, nil
+		}
+		if !retryable || attempt > retries {
+			return CompleteResponse{}, err
+		}
+		wait := backoffDelay(retryBase, attempt, retryAfter)
+		if a.OnRetry != nil {
+			a.OnRetry(attempt, wait, err)
+		}
+		select {
+		case <-ctx.Done():
+			return CompleteResponse{}, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// doOnce runs one Messages call. It reports whether a failure is worth retrying
+// (transport blip, 429/5xx/529) and any provider-supplied Retry-After, so
+// Complete can back off; a request defect (4xx other than 429) is terminal.
+func (a *Anthropic) doOnce(ctx context.Context, base string, httpc *http.Client, raw []byte) (CompleteResponse, bool, time.Duration, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(raw))
 	if err != nil {
-		return CompleteResponse{}, err
+		return CompleteResponse{}, false, 0, err
 	}
 	httpReq.Header.Set("x-api-key", a.APIKey)
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
@@ -121,26 +180,30 @@ func (a *Anthropic) Complete(ctx context.Context, req CompleteRequest) (Complete
 
 	resp, err := httpc.Do(httpReq)
 	if err != nil {
-		return CompleteResponse{}, fmt.Errorf("anthropic: %w", err)
+		// Transport-level failure (connection reset, timeout): transient, retry.
+		return CompleteResponse{}, true, 0, fmt.Errorf("anthropic: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return CompleteResponse{}, fmt.Errorf("anthropic: read response: %w", err)
+		return CompleteResponse{}, true, 0, fmt.Errorf("anthropic: read response: %w", err)
 	}
 
-	var out anthropicResponse
-	if err := json.Unmarshal(body, &out); err != nil {
-		return CompleteResponse{}, fmt.Errorf("anthropic: decode (%d): %w", resp.StatusCode, err)
-	}
 	if resp.StatusCode != http.StatusOK {
+		var out anthropicResponse
+		_ = json.Unmarshal(body, &out)
 		msg := string(body)
 		if out.Error != nil {
 			msg = out.Error.Type + ": " + out.Error.Message
 		}
-		return CompleteResponse{}, fmt.Errorf("anthropic: %d %s", resp.StatusCode, msg)
+		return CompleteResponse{}, isRetryableStatus(resp.StatusCode), retryAfter(resp.Header),
+			fmt.Errorf("anthropic: %d %s", resp.StatusCode, msg)
 	}
 
+	var out anthropicResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return CompleteResponse{}, false, 0, fmt.Errorf("anthropic: decode (%d): %w", resp.StatusCode, err)
+	}
 	res := CompleteResponse{StopReason: out.StopReason}
 	for _, blk := range out.Content {
 		switch blk.Type {
@@ -152,7 +215,63 @@ func (a *Anthropic) Complete(ctx context.Context, req CompleteRequest) (Complete
 			})
 		}
 	}
-	return res, nil
+	return res, false, 0, nil
+}
+
+// isRetryableStatus reports whether an HTTP status is provider-side backpressure
+// worth retrying: 429 (rate limit), 500/502/503 (transient fault), and 529
+// (Anthropic's non-standard overloaded_error). Every other 4xx is a request
+// defect that a retry would only repeat.
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		529:                            // overloaded_error (no net/http constant)
+		return true
+	}
+	return false
+}
+
+// retryAfter parses a Retry-After header expressed in seconds (the form the
+// Messages API sends on 429); an absent or non-integer value yields 0, leaving
+// Complete to fall back to exponential backoff.
+func retryAfter(h http.Header) time.Duration {
+	v := h.Get("Retry-After")
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+// backoffDelay is the wait before a retry: a provider-supplied Retry-After when
+// present (capped), else exponential backoff (base·2^(attempt-1)) with full
+// jitter over the lower half, capped at anthropicRetryMax. Jitter is derived
+// from the wall clock — good enough to desynchronize retries without a PRNG
+// dependency.
+func backoffDelay(base time.Duration, attempt int, ra time.Duration) time.Duration {
+	if ra > 0 {
+		return capDelay(ra)
+	}
+	shift := attempt - 1
+	if shift > 16 { // guard the shift; the cap dominates well before this
+		shift = 16
+	}
+	d := capDelay(base << shift)
+	half := d / 2
+	jitter := time.Duration(time.Now().UnixNano() % int64(half+1))
+	return half + jitter
+}
+
+func capDelay(d time.Duration) time.Duration {
+	if d > anthropicRetryMax {
+		return anthropicRetryMax
+	}
+	return d
 }
 
 // toAnthropicMessages converts the loop's messages to the wire shape.

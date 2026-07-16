@@ -163,8 +163,10 @@ func runTrial(ctx context.Context, client *agent.Client, backendURL string, huma
 	}
 
 	session, err := agent.NewSession(ctx, agent.Config{
-		Backend:         client,
-		LLM:             &agent.Anthropic{APIKey: apiKey, Model: model},
+		Backend: client,
+		LLM: &agent.Anthropic{APIKey: apiKey, Model: model, OnRetry: func(attempt int, wait time.Duration, err error) {
+			logf("eval: trial %d — provider backpressure (attempt %d), retrying in %s: %v", trial, attempt, wait.Round(time.Second), err)
+		}},
 		InvestigationID: invID,
 	})
 	if err != nil {

@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestAnthropic_Complete: the provider round-trips the request (system, tools,
@@ -72,9 +74,11 @@ func TestAnthropic_Complete(t *testing.T) {
 }
 
 // TestAnthropic_APIError: a non-200 with the API error envelope surfaces the
-// provider's message.
+// provider's message. A 400 is a request defect — it must NOT be retried.
 func TestAnthropic_APIError(t *testing.T) {
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens required"}}`))
 	}))
@@ -84,5 +88,66 @@ func TestAnthropic_APIError(t *testing.T) {
 	_, err := a.Complete(context.Background(), CompleteRequest{MaxTokens: 1})
 	if err == nil || !strings.Contains(err.Error(), "invalid_request_error") {
 		t.Errorf("error = %v; want the provider message surfaced", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("400 was attempted %d times; a request defect must not be retried", n)
+	}
+}
+
+// TestAnthropic_RetriesOverload: a 529 overloaded_error is transient — the
+// client rides it out with backoff and succeeds once the provider recovers,
+// firing OnRetry for each wait.
+func TestAnthropic_RetriesOverload(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.WriteHeader(529)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	var retries atomic.Int32
+	a := &Anthropic{
+		APIKey:         "k",
+		BaseURL:        srv.URL,
+		RetryBaseDelay: time.Millisecond, // keep the test fast
+		OnRetry:        func(int, time.Duration, error) { retries.Add(1) },
+	}
+	resp, err := a.Complete(context.Background(), CompleteRequest{MaxTokens: 1})
+	if err != nil {
+		t.Fatalf("Complete after transient 529s: %v", err)
+	}
+	if resp.StopReason != StopEndTurn || len(resp.Content) != 1 {
+		t.Errorf("response after recovery mangled: %+v", resp)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("attempts = %d; want 3 (two 529s + success)", n)
+	}
+	if n := retries.Load(); n != 2 {
+		t.Errorf("OnRetry fired %d times; want 2", n)
+	}
+}
+
+// TestAnthropic_RetryBudgetExhausted: sustained overload past the budget
+// surfaces the last error rather than looping forever.
+func TestAnthropic_RetryBudgetExhausted(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(529)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))
+	}))
+	defer srv.Close()
+
+	a := &Anthropic{APIKey: "k", BaseURL: srv.URL, MaxRetries: 2, RetryBaseDelay: time.Millisecond}
+	_, err := a.Complete(context.Background(), CompleteRequest{MaxTokens: 1})
+	if err == nil || !strings.Contains(err.Error(), "overloaded_error") {
+		t.Errorf("error = %v; want the overloaded_error surfaced after the budget", err)
+	}
+	if n := calls.Load(); n != 3 { // 1 initial + 2 retries
+		t.Errorf("attempts = %d; want 3 (initial + MaxRetries)", n)
 	}
 }
