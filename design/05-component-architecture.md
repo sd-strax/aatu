@@ -263,8 +263,18 @@ tenant_memberships array of {tenant_id, roles[]} — all tenants the user
                   belongs to, used by the IDE to allow tenant switching
 roles             array of role names valid for the active tenant_id
                   (drawn from the canonical role set in §5.4)
-delegate_kind     "HUMAN" (the reckon-IdP-issued user is always a human;
-                  AI agents are delegates, not principals)
+delegate_kind     custom claim naming the LLM delegate acting on the
+                  principal's behalf; ABSENT when the human acts directly.
+                  Issuer-controlled via two realm clients: `reckon` (human
+                  path, no mapper) and `reckon-agent` (hardcoded mapper
+                  stamps the vendor, v0 "claude"). `sub` is the SAME analyst
+                  on both — the principal is always a human; AI agents are
+                  delegates, never principals. Because public clients cannot
+                  inject claims, the claim can be neither forged nor shed:
+                  it only ever REDUCES privilege (AI-write-protection
+                  allowlist, Gate 2 baseline DENY). Canonical contract:
+                  implementation/jwt-claims.md; guarded by
+                  supervisor/keycloak_realm_test.go.
 exp, iat, nbf     standard
 ```
 
