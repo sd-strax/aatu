@@ -304,6 +304,22 @@ func TestSession_Turn(t *testing.T) {
 		t.Errorf("rationale bound violated: %d runes", len([]rune(summary.Rationale)))
 	}
 
+	// The TurnResult exposes the COMMITTED record byte-identically (the eval
+	// harness grades this — 10 §1.1): same transcript bytes, same tool-call log
+	// as what rode the commit transaction.
+	if res.Transcript != summary.Transcript.Body {
+		t.Error("TurnResult.Transcript differs from the committed transcript bytes")
+	}
+	if len(res.ToolCalls) != len(summary.ToolCalls) {
+		t.Fatalf("TurnResult.ToolCalls = %d entries; committed log has %d", len(res.ToolCalls), len(summary.ToolCalls))
+	}
+	for i := range res.ToolCalls {
+		if res.ToolCalls[i].ToolName != summary.ToolCalls[i].ToolName ||
+			string(res.ToolCalls[i].Args) != string(summary.ToolCalls[i].Args) {
+			t.Errorf("TurnResult.ToolCalls[%d] differs from the committed log", i)
+		}
+	}
+
 	// The model received the tool results (hypothesis ref surfaced back).
 	last := llm.requests[len(llm.requests)-1]
 	var sawRef bool

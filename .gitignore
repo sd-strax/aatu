@@ -13,6 +13,9 @@ go.work.sum
 dist/
 vendor/
 
+# Eval-run artifacts (transcripts + reports are local; baselines are committed)
+eval/artifacts/
+
 # Coverage and profiling
 *.out
 coverage.html

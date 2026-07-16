@@ -1,4 +1,4 @@
-.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint
+.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval
 .DEFAULT_GOAL := help
 
 help: ## List available targets
@@ -43,3 +43,6 @@ ci-full: lint test-all build ## Pre-release check: lint + full test suite incl. 
 
 bundle: build ## Build an air-gap-able distribution tarball for the current OS/arch
 	@bash scripts/build-bundle.sh
+
+eval: ## Behavioral eval run (design/10): real model + running local stack; costs tokens. Needs ANTHROPIC_API_KEY.
+	RECKON_EVAL=1 go test -count=1 -run TestEvalRun -v -timeout 40m ./eval/

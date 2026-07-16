@@ -69,6 +69,15 @@ type TurnResult struct {
 	PendingActions []ActionStatus
 	// ToolRounds is how many model→tool rounds the turn took.
 	ToolRounds int
+	// Transcript is the turn's committed transcript — the exact bytes that were
+	// content-hashed into the side store (10 §1.1): Turn fails when the commit
+	// fails, so a returned Transcript with a non-empty InterpretationID IS the
+	// persisted record, byte for byte. The eval harness grades this (10 §5)
+	// instead of scraping hook output.
+	Transcript string
+	// ToolCalls is the turn's committed tool-call log — the same slice that rode
+	// the commit transaction (05 §3.4).
+	ToolCalls []ToolCall
 }
 
 // NewSession assembles the session: investigation context and the live tool
@@ -121,6 +130,11 @@ func NewSession(ctx context.Context, cfg Config) (*Session, error) {
 // Tools exposes the assembled tool set (for surfaces that display it).
 func (s *Session) Tools() []ToolDef { return s.tools }
 
+// System exposes the assembled system prompt. The eval harness hashes it as the
+// prompt-version identifier for run attribution (09 §4.2, 10 §1.4) until the
+// product stamps a version itself.
+func (s *Session) System() string { return s.system }
+
 // Turn runs one analyst turn: the model reasons and dispatches tools until it
 // ends its turn (or the round budget is spent), then the whole turn — full
 // transcript bytes plus the tool-call log — is committed to the reasoning
@@ -162,6 +176,8 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 				Text:           finalText.String(),
 				PendingActions: s.refreshPending(ctx),
 				ToolRounds:     rounds,
+				Transcript:     transcript.String(),
+				ToolCalls:      toolLog,
 			}, fmt.Errorf("agent: model call: %w", err)
 		}
 		s.messages = append(s.messages, Message{Role: RoleAssistant, Content: resp.Content})
@@ -227,6 +243,8 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 		Text:           finalText.String(),
 		PendingActions: s.refreshPending(ctx),
 		ToolRounds:     rounds,
+		Transcript:     transcript.String(),
+		ToolCalls:      toolLog,
 	}
 
 	// Commit the turn to the reasoning thread: the transcript bytes are hashed
