@@ -1,4 +1,4 @@
-.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval
+.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval eval-accept
 .DEFAULT_GOAL := help
 
 help: ## List available targets
@@ -46,3 +46,6 @@ bundle: build ## Build an air-gap-able distribution tarball for the current OS/a
 
 eval: ## Behavioral eval run (design/10): real model + running local stack; costs tokens. Needs ANTHROPIC_API_KEY.
 	RECKON_EVAL=1 go test -count=1 -run TestEvalRun -v -timeout 40m ./eval/
+
+eval-accept: ## Accept the latest eval run as the committed per-model baseline (design/10 §4.4). Token-free; refuses a MUST-failing run (RECKON_EVAL_FORCE=1 to override).
+	RECKON_EVAL_ACCEPT=1 go test -count=1 -run '^TestAcceptBaseline$$' -v ./eval/

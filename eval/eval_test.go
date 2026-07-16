@@ -42,7 +42,7 @@ func TestEvalRun(t *testing.T) {
 	// Regression check against the committed baseline for this scenario+model
 	// (10 §4.4). No baseline (first run) is not a failure — the accepted run's
 	// summary gets committed to eval/baselines/ by review.
-	baselinePath := filepath.Join("baselines", report.Attribution.ScenarioID+"--"+report.Attribution.Model+".json")
+	baselinePath := BaselinePath("baselines", report.Attribution.ScenarioID, report.Attribution.Model)
 	base, err := LoadBaseline(baselinePath)
 	if err != nil {
 		t.Fatalf("load baseline: %v", err)
@@ -57,4 +57,29 @@ func TestEvalRun(t *testing.T) {
 	if n := report.MustFailures(); n > 0 {
 		t.Errorf("%d MUST assertion(s) failed — see the summary above and the artifact dir", n)
 	}
+}
+
+// TestAcceptBaseline commits a completed run's report as the per-model baseline
+// (10 §4.4). Token-free — it reads an existing report.json (RECKON_EVAL_REPORT,
+// else the latest run under artifacts/), never the model. Gated so it never
+// runs in the normal suite; invoke via `make eval-accept`. Refuses a run with
+// MUST failures unless RECKON_EVAL_FORCE=1.
+func TestAcceptBaseline(t *testing.T) {
+	if os.Getenv("RECKON_EVAL_ACCEPT") != "1" {
+		t.Skip("baseline accept disabled; set RECKON_EVAL_ACCEPT=1 (use `make eval-accept`)")
+	}
+	reportPath := os.Getenv("RECKON_EVAL_REPORT")
+	if reportPath == "" {
+		p, err := LatestReport("artifacts")
+		if err != nil {
+			t.Fatalf("find latest report: %v", err)
+		}
+		reportPath = p
+	}
+	force := os.Getenv("RECKON_EVAL_FORCE") == "1"
+	path, err := AcceptBaseline(reportPath, "baselines", force)
+	if err != nil {
+		t.Fatalf("accept baseline: %v", err)
+	}
+	fmt.Printf("accepted %s\n  as baseline %s\n  (commit it alongside the prompt change — 10 §4.4)\n", reportPath, path)
 }

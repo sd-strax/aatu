@@ -126,10 +126,24 @@ fails on a regression: a MUST going `PASS → FAIL`, or a SHOULD pass rate
 dropping more than one trial's worth. A **missing** baseline is not a failure —
 the first run for a scenario+model has nothing to regress against.
 
-To accept a run as the new baseline, commit its reduced summary (scores, not
-transcripts) to `eval/baselines/`. Baselines are **per-model**, and the
-supported-model set is baseline-defined: "reckon supports model X" is true
-exactly when X has a passing baseline for the current prompt + catalogue.
+To accept a run as the new baseline:
+
+```bash
+make eval-accept       # reduces the latest run's report.json → eval/baselines/<scenario>--<model>.json
+git add eval/baselines && git commit   # the summary travels with the prompt change
+```
+
+`eval-accept` is **token-free** — it reads the `report.json` the run already
+wrote (the latest under `artifacts/`, or `RECKON_EVAL_REPORT=<path>` for a
+specific one), reduces it to the committable summary (scores, not transcripts),
+and writes the per-model baseline. It **refuses a run with MUST failures** — a
+baseline is an *accepted* run, and the regression rule is meaningless against a
+bar that itself fails a correctness assertion; `RECKON_EVAL_FORCE=1` overrides.
+SHOULD failures bake fine (the baseline records the rate for future comparison).
+
+Baselines are **per-model**, and the supported-model set is baseline-defined:
+"reckon supports model X" is true exactly when X has a passing baseline for the
+current prompt + catalogue.
 
 ## The assertion catalogue
 
