@@ -171,7 +171,7 @@ func intrinsicTools(actionTypes []ActionType) []ToolDef {
 					}, "entity_ref", "resolved_identifier"),
 					"description": "the distinct targets; blast radius drives the trust tier",
 				},
-				"parameters":    map[string]any{"type": "object", "description": "action-type-specific parameters, optional"},
+				"parameters":    parametersSchema(actionTypes),
 				"evidence_refs": strList("refs grounding this action"),
 				"rationale":     str("why this action, now"),
 			}, "action_type", "targets", "rationale"),
@@ -289,6 +289,72 @@ func UnwrapStringifiedObject(raw json.RawMessage) json.RawMessage {
 		return raw // not valid object JSON — let the backend reject honestly
 	}
 	return json.RawMessage(trimmed)
+}
+
+// parametersSchema builds the request_action `parameters` property as a concrete
+// object schema: the union of every action type's non-entity declared inputs
+// (08 §3), each annotated with which action_type(s) use it. A bare
+// {"type":"object"} with NO properties is precisely what leads a model to emit
+// the field as a STRINGIFIED JSON blob (the H6 finding); giving it real
+// properties makes the model fill a structured object instead. The union is
+// deliberately permissive (the model picks action_type at call time, so a single
+// schema cannot be per-type): the description tells it to include only its
+// action's keys, and the backend enforces per-type required-ness + rejects
+// unknown keys.
+func parametersSchema(actionTypes []ActionType) map[string]any {
+	props := map[string]any{}
+	owners := map[string][]string{}
+	for _, a := range actionTypes {
+		for _, in := range a.Descriptor.Inputs {
+			if in.Type == "entity" {
+				continue // entity inputs ride `targets`, not `parameters`
+			}
+			if _, seen := props[in.Name]; !seen {
+				props[in.Name] = map[string]any{"type": jsonSchemaType(in.Type), "description": in.Desc}
+			}
+			owners[in.Name] = appendUnique(owners[in.Name], a.Descriptor.ActionType)
+		}
+	}
+	if len(props) == 0 {
+		return map[string]any{"type": "object",
+			"description": "Action-type-specific parameters as a JSON object (this catalog declares none)."}
+	}
+	for name := range props {
+		pm := props[name].(map[string]any)
+		usedBy := "used by: " + strings.Join(owners[name], ", ")
+		if d := strings.TrimSpace(pm["description"].(string)); d != "" {
+			pm["description"] = d + " (" + usedBy + ")"
+		} else {
+			pm["description"] = usedBy
+		}
+	}
+	return map[string]any{
+		"type":       "object",
+		"properties": props,
+		"description": "The action-type-specific parameters, as a JSON OBJECT — never a JSON string. " +
+			"Include only the keys listed for your chosen action_type (see the tool description above); omit the others.",
+	}
+}
+
+// jsonSchemaType maps an InputParam type to a JSON Schema scalar type, defaulting
+// to string for anything non-scalar (entity inputs never reach here).
+func jsonSchemaType(t string) string {
+	switch t {
+	case "string", "number", "integer", "boolean":
+		return t
+	default:
+		return "string"
+	}
+}
+
+// appendUnique appends v to s if absent, preserving order.
+func appendUnique(s []string, v string) []string {
+	for _, x := range s {
+		if x == v {
+			return s
+		}
+	}
+	return append(s, v)
 }
 
 // dispatchTool executes one model-issued tool call against the backend and

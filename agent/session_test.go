@@ -265,6 +265,24 @@ func TestRequestActionDescription_Parameters(t *testing.T) {
 	if strings.Contains(desc, "host (required)") {
 		t.Errorf("entity inputs ride targets and must not be listed as parameters:\n%s", desc)
 	}
+
+	// The `parameters` schema is a concrete object with real properties (not a
+	// bare {"type":"object"}), so the model fills a structured object rather than
+	// stringifying it (the H6 fix). Entity inputs are excluded.
+	schema := parametersSchema([]ActionType{ticket, isolate})
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters schema has no properties: %+v", schema)
+	}
+	if _, ok := props["summary"]; !ok {
+		t.Errorf("parameters properties missing 'summary': %+v", props)
+	}
+	if _, ok := props["host"]; ok {
+		t.Error("entity input 'host' must not appear in parameters properties")
+	}
+	if d, _ := schema["description"].(string); !strings.Contains(d, "never a JSON string") {
+		t.Errorf("parameters description should warn against stringifying: %q", d)
+	}
 }
 
 // TestSession_Turn: a full turn — capability call, hypothesis proposal, action
