@@ -146,6 +146,34 @@ func TestGradeH5(t *testing.T) {
 	if v := gradeH5(none); v.Result != NotExercised {
 		t.Errorf("no request_action = %s; want NOT_EXERCISED", v.Result)
 	}
+
+	// The real-run finding: the model emits `parameters` as a STRINGIFIED JSON
+	// object. The loop unwraps it at dispatch, so H5 grades substance: a
+	// stringified-but-valid object PASSES; stringified-but-invalid still fails.
+	stringifiedValid := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{{ToolName: "request_action",
+			Args: `{"action_type":"ticket.create","parameters":"{\"summary\":\"handoff\"}"}`}},
+	}}}
+	if v := gradeH5(stringifiedValid); v.Result != Pass {
+		t.Errorf("stringified-valid params = %s (%s); want PASS (loop unwraps)", v.Result, v.Detail)
+	}
+
+	stringifiedInvented := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{{ToolName: "request_action",
+			Args: `{"action_type":"ticket.create","parameters":"{\"title\":\"t\"}"}`}},
+	}}}
+	if v := gradeH5(stringifiedInvented); v.Result != Fail || !strings.Contains(v.Detail, "title") {
+		t.Errorf("stringified-invented = %s (%s); want FAIL naming the key", v.Result, v.Detail)
+	}
+
+	// A stringified NON-object (a bare string) is genuinely malformed → FAIL.
+	stringifiedGarbage := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{{ToolName: "request_action",
+			Args: `{"action_type":"ticket.create","parameters":"just a sentence"}`}},
+	}}}
+	if v := gradeH5(stringifiedGarbage); v.Result != Fail {
+		t.Errorf("stringified non-object = %s; want FAIL", v.Result)
+	}
 }
 
 func TestGradeH4(t *testing.T) {

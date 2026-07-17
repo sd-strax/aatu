@@ -50,7 +50,7 @@ type Assertion struct {
 
 // CatalogueVersion attributes the assertion set to each run (10 §1.4). Bump on
 // any assertion addition, removal, or grading change.
-const CatalogueVersion = "v0.2" // v0.2: +H5 (parameter-schema conformance)
+const CatalogueVersion = "v0.3" // v0.3: H5 grades substance (unwraps stringified parameters)
 
 // Catalogue is the v0 deterministic slice of the 10 §3 assertion catalogue —
 // the assertions gradeable from the committed transcript + tool-call log
@@ -258,8 +258,8 @@ func gradeH5(tr *TrialRecord) Verdict {
 			}
 			exercised = true
 			var args struct {
-				ActionType string                     `json:"action_type"`
-				Parameters map[string]json.RawMessage `json:"parameters"`
+				ActionType string          `json:"action_type"`
+				Parameters json.RawMessage `json:"parameters"`
 			}
 			if err := json.Unmarshal([]byte(tc.Args), &args); err != nil {
 				return Verdict{Result: Fail, Detail: "unparseable request_action args: " + err.Error()}
@@ -268,12 +268,23 @@ func gradeH5(tr *TrialRecord) Verdict {
 			if !known {
 				continue // vocabulary drift is H3's verdict, not H5's
 			}
+			// Grade substance, not encoding: apply the same normalization the loop
+			// applies at dispatch (a stringified-object parameters is unwrapped), so
+			// H5 fails only on genuinely wrong keys / missing required, not on a
+			// benign double-encoding the loop already handles.
+			raw := unwrapStringifiedObject(args.Parameters)
+			var params map[string]json.RawMessage
+			if len(raw) > 0 && string(raw) != "null" {
+				if err := json.Unmarshal(raw, &params); err != nil {
+					return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: parameters is not a JSON object (turn %d)", args.ActionType, turn.Index)}
+				}
+			}
 			declared := map[string]bool{}
 			for _, s := range specs {
 				declared[s.Name] = true
 			}
 			var invented []string
-			for k := range args.Parameters {
+			for k := range params {
 				if !declared[k] {
 					invented = append(invented, k)
 				}
@@ -287,7 +298,7 @@ func gradeH5(tr *TrialRecord) Verdict {
 				if !s.Required {
 					continue
 				}
-				if v, ok := args.Parameters[s.Name]; !ok || string(v) == `""` || string(v) == "null" {
+				if v, ok := params[s.Name]; !ok || string(v) == `""` || string(v) == "null" {
 					return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: required parameter %q missing (turn %d)", args.ActionType, s.Name, turn.Index)}
 				}
 			}
@@ -297,6 +308,30 @@ func gradeH5(tr *TrialRecord) Verdict {
 		return Verdict{Result: NotExercised, Detail: "no request_action in the trial"}
 	}
 	return Verdict{Result: Pass}
+}
+
+// unwrapStringifiedObject mirrors agent.UnwrapStringifiedObject (kept in step
+// with it, replicated so the grader package stays free of an agent dependency):
+// a `parameters` field the model emitted as a stringified JSON object is
+// unwrapped to the object so H5 grades substance, matching what the loop
+// dispatches. A non-object string is left as-is for the shape check to reject.
+func unwrapStringifiedObject(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || raw[0] != '"' {
+		return raw
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return raw
+	}
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, "{") {
+		return raw
+	}
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &probe) != nil {
+		return raw
+	}
+	return json.RawMessage(trimmed)
 }
 
 // --- H4: ground truth before status claims ----------------------------------

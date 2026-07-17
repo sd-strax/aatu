@@ -213,6 +213,30 @@ func TestSession_ToolAssembly(t *testing.T) {
 	}
 }
 
+// TestUnwrapStringifiedObject: the loop unwraps a model-stringified parameters
+// object (the eval-harness finding) so a real write adapter templating
+// ${parameters.x} sees the field, and leaves everything else untouched.
+func TestUnwrapStringifiedObject(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"stringified object", `"{\"summary\":\"x\"}"`, `{"summary":"x"}`},
+		{"stringified object with whitespace", `"  {\"a\":1}  "`, `{"a":1}`},
+		{"already an object", `{"summary":"x"}`, `{"summary":"x"}`},
+		{"empty", ``, ``},
+		{"null", `null`, `null`},
+		{"plain string left alone", `"just text"`, `"just text"`},
+		{"stringified non-object left alone", `"[1,2,3]"`, `"[1,2,3]"`},
+		{"stringified invalid json left alone", `"{not json}"`, `"{not json}"`},
+	}
+	for _, c := range cases {
+		got := string(UnwrapStringifiedObject(json.RawMessage(c.in)))
+		if got != c.want {
+			t.Errorf("%s: UnwrapStringifiedObject(%s) = %s; want %s", c.name, c.in, got, c.want)
+		}
+	}
+}
+
 // TestRequestActionDescription_Parameters: the description surfaces each
 // type's declared non-entity inputs — the parameters vocabulary the backend
 // validates — so the model cannot invent keys ("title" for ticket.create's

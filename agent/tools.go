@@ -262,6 +262,35 @@ func actionTypeSchema(actionTypes []ActionType) map[string]any {
 	}
 }
 
+// UnwrapStringifiedObject corrects a common model quirk: emitting a nested
+// object field — request_action.parameters — as a STRINGIFIED JSON string
+// (`"{\"summary\":...}"`) instead of a JSON object. When raw is a JSON string
+// whose contents parse as a JSON object, it returns the unwrapped object bytes;
+// otherwise it returns raw unchanged so the backend still validates the shape.
+// This is the loop being liberal in what it accepts from the model (05 §3.4):
+// a benign double-encoding must not cost a rejected action — or, against a real
+// write adapter templating ${parameters.x}, a silently empty field. The eval
+// harness applies the same normalization so H5 grades the request's substance
+// (keys), not its encoding.
+func UnwrapStringifiedObject(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || raw[0] != '"' {
+		return raw
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return raw
+	}
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, "{") {
+		return raw // a plain string, not a stringified object — leave it
+	}
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &probe) != nil {
+		return raw // not valid object JSON — let the backend reject honestly
+	}
+	return json.RawMessage(trimmed)
+}
+
 // dispatchTool executes one model-issued tool call against the backend and
 // returns the result content to feed back. A backend rejection (4xx/5xx)
 // becomes an isError result — the engine's explanation goes to the model, which
@@ -415,7 +444,7 @@ func (s *Session) dispatch(ctx context.Context, name string, input json.RawMessa
 		resp, err := s.backend.RequestAction(ctx, ActionRequest{
 			ActionType:       in.ActionType,
 			Targets:          in.Targets,
-			Parameters:       in.Parameters,
+			Parameters:       UnwrapStringifiedObject(in.Parameters),
 			EvidenceRefs:     in.EvidenceRefs,
 			Rationale:        in.Rationale,
 			InvestigationRef: s.investigationID,
