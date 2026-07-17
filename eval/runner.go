@@ -142,6 +142,12 @@ func Run(ctx context.Context, rc RunConfig) (*Report, error) {
 		return nil, fmt.Errorf("eval: no trial completed: %v", trialErrors)
 	}
 
+	var runUsage Usage
+	for _, tr := range trials {
+		for _, turn := range tr.Turns {
+			runUsage.Add(turn.Usage)
+		}
+	}
 	report := &Report{
 		Attribution: Attribution{
 			PromptVersion:     promptHash,
@@ -154,6 +160,7 @@ func Run(ctx context.Context, rc RunConfig) (*Report, error) {
 		},
 		Results:     Grade(s, trials),
 		TrialErrors: trialErrors,
+		Usage:       runUsage,
 	}
 	if raw, err := json.MarshalIndent(report, "", "  "); err == nil {
 		_ = os.WriteFile(filepath.Join(artifactDir, "report.json"), raw, 0o600)
@@ -193,6 +200,8 @@ func runTrial(ctx context.Context, client *agent.Client, backendURL string, huma
 			rec.Transcript = res.Transcript
 			rec.InterpretationID = res.InterpretationID
 			rec.ToolRounds = res.ToolRounds
+			rec.Usage = Usage{Input: res.Usage.Input, Output: res.Usage.Output,
+				CacheWrite: res.Usage.CacheWrite, CacheRead: res.Usage.CacheRead}
 			for _, tc := range res.ToolCalls {
 				rec.ToolCalls = append(rec.ToolCalls, ToolCall{ToolName: tc.ToolName, Args: string(tc.Args)})
 			}

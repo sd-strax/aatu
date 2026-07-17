@@ -78,6 +78,10 @@ type TurnResult struct {
 	// ToolCalls is the turn's committed tool-call log — the same slice that rode
 	// the commit transaction (05 §3.4).
 	ToolCalls []ToolCall
+	// Usage is the token accounting summed over every model call this turn made
+	// (a turn spans one call per tool round). Surfaces feed it to a cost readout;
+	// the eval harness aggregates it into the run report.
+	Usage Usage
 }
 
 // NewSession assembles the session: investigation context and the live tool
@@ -148,6 +152,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	fmt.Fprintf(&transcript, "[user] %s\n", sanitizeTranscript(userMsg))
 
 	var toolLog []ToolCall
+	var turnUsage Usage
 	var finalText strings.Builder
 	// A turn aborted by a model-call failure leaves the history ending in a
 	// user message (the tool results, or the aborted turn's own text). Merge
@@ -178,8 +183,10 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 				ToolRounds:     rounds,
 				Transcript:     transcript.String(),
 				ToolCalls:      toolLog,
+				Usage:          turnUsage,
 			}, fmt.Errorf("agent: model call: %w", err)
 		}
+		turnUsage.Add(resp.Usage)
 		s.messages = append(s.messages, Message{Role: RoleAssistant, Content: resp.Content})
 
 		var toolUses []ContentBlock
@@ -245,6 +252,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 		ToolRounds:     rounds,
 		Transcript:     transcript.String(),
 		ToolCalls:      toolLog,
+		Usage:          turnUsage,
 	}
 
 	// Commit the turn to the reasoning thread: the transcript bytes are hashed

@@ -54,6 +54,73 @@ type Report struct {
 	Results     []AssertionResult `json:"results"`
 	// TrialErrors records trials that aborted before completing the script.
 	TrialErrors []string `json:"trial_errors,omitempty"`
+	// Usage is the token accounting summed across every model call of the run —
+	// what the run cost, so "what is this costing me" is a number, not a guess.
+	Usage Usage `json:"usage"`
+}
+
+// modelPricing is per-million-token USD rates for one model (Anthropic public
+// pricing). CacheWrite/CacheRead are the prompt-caching premium/discount on the
+// standard input rate. Prices change — this is a report-time estimate the run
+// prints, not a billing source of truth.
+type modelPricing struct {
+	inputPerM, outputPerM, cacheWritePerM, cacheReadPerM float64
+}
+
+// pricing keys are model ids. Absent a match, the run prints tokens without a
+// dollar estimate (and says so) rather than guessing.
+var pricing = map[string]modelPricing{
+	// Sonnet 4.x tier.
+	"claude-sonnet-4-6": {inputPerM: 3, outputPerM: 15, cacheWritePerM: 3.75, cacheReadPerM: 0.30},
+	// Haiku 4.5 tier.
+	"claude-haiku-4-5-20251001": {inputPerM: 1, outputPerM: 5, cacheWritePerM: 1.25, cacheReadPerM: 0.10},
+	// Opus 4.x tier.
+	"claude-opus-4-8": {inputPerM: 15, outputPerM: 75, cacheWritePerM: 18.75, cacheReadPerM: 1.50},
+}
+
+// EstimatedCost returns the run's estimated USD cost and whether the model's
+// pricing was known. Anthropic reports Input, CacheWrite, and CacheRead as
+// disjoint token counts, so each is billed at its own rate.
+func (r *Report) EstimatedCost() (float64, bool) {
+	p, ok := pricing[r.Attribution.Model]
+	if !ok {
+		return 0, false
+	}
+	u := r.Usage
+	cost := float64(u.Input)/1e6*p.inputPerM +
+		float64(u.Output)/1e6*p.outputPerM +
+		float64(u.CacheWrite)/1e6*p.cacheWritePerM +
+		float64(u.CacheRead)/1e6*p.cacheReadPerM
+	return cost, true
+}
+
+// usageLine renders the run's token + cost readout, including what prompt
+// caching saved (cache-read tokens rebilled at full input rate minus what they
+// actually cost) so the caching win is visible.
+func (r *Report) usageLine() string {
+	u := r.Usage
+	totalIn := u.Input + u.CacheWrite + u.CacheRead
+	var b strings.Builder
+	fmt.Fprintf(&b, "usage: %s in (%s cache-read, %s cache-write) + %s out",
+		humanTokens(totalIn), humanTokens(u.CacheRead), humanTokens(u.CacheWrite), humanTokens(u.Output))
+	if cost, ok := r.EstimatedCost(); ok {
+		fmt.Fprintf(&b, "  ≈ $%.2f", cost)
+		if p, pok := pricing[r.Attribution.Model]; pok && u.CacheRead > 0 {
+			saved := float64(u.CacheRead) / 1e6 * (p.inputPerM - p.cacheReadPerM)
+			fmt.Fprintf(&b, " (caching saved ≈ $%.2f)", saved)
+		}
+	} else {
+		fmt.Fprintf(&b, "  (no pricing for %s — tokens only)", r.Attribution.Model)
+	}
+	return b.String()
+}
+
+// humanTokens renders a token count compactly (e.g. 12345 → "12.3k").
+func humanTokens(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
 // Grade evaluates the scenario's assertion placements against the recorded
@@ -150,6 +217,9 @@ func (r *Report) Summary() string {
 		}
 		fmt.Fprintf(&b, "%-14s %-6s %-13s [%s]%s  %s\n",
 			res.Key(), res.Severity, res.Result, strings.Join(marks, " "), rate, res.Statement)
+	}
+	if r.Usage != (Usage{}) {
+		fmt.Fprintf(&b, "\n%s\n", r.usageLine())
 	}
 	if n := r.MustFailures(); n > 0 {
 		fmt.Fprintf(&b, "\n%d MUST assertion(s) failed — defects.\n", n)

@@ -27,7 +27,8 @@ func TestAnthropic_Complete(t *testing.T) {
 		    {"type":"text","text":"checking"},
 		    {"type":"tool_use","id":"tu1","name":"enumerate_logons","input":{"entity":{"host":{"hostname":"H1"}}}}
 		  ],
-		  "stop_reason":"tool_use"
+		  "stop_reason":"tool_use",
+		  "usage":{"input_tokens":40,"output_tokens":12,"cache_creation_input_tokens":30,"cache_read_input_tokens":100}
 		}`))
 	}))
 	defer srv.Close()
@@ -50,8 +51,12 @@ func TestAnthropic_Complete(t *testing.T) {
 	if gotHeaders.Get("x-api-key") != "k" || gotHeaders.Get("anthropic-version") == "" {
 		t.Errorf("auth headers missing: %v", gotHeaders)
 	}
-	if got.Model != DefaultAnthropicModel || got.System != "sys" || got.MaxTokens != 128 {
+	if got.Model != DefaultAnthropicModel || got.MaxTokens != 128 {
 		t.Errorf("request envelope mangled: %+v", got)
+	}
+	// System travels as the array form (so a cache_control breakpoint can ride it).
+	if len(got.System) != 1 || got.System[0].Text != "sys" || got.System[0].Type != "text" {
+		t.Errorf("system block mangled: %+v", got.System)
 	}
 	if len(got.Tools) != 1 || got.Tools[0].Name != "enumerate_logons" {
 		t.Errorf("tools mangled: %+v", got.Tools)
@@ -64,12 +69,49 @@ func TestAnthropic_Complete(t *testing.T) {
 		t.Errorf("tool_result mangled: %+v", tr)
 	}
 
+	// Prompt-cache breakpoints ride the static system+tools prefix and the last
+	// message block (05 §2.7): the loop resends these every call.
+	if got.System[0].CacheControl == nil || got.Tools[0].CacheControl == nil {
+		t.Error("cache breakpoints missing on system/tools")
+	}
+	if last := got.Messages[2].Content[0]; last.CacheControl == nil {
+		t.Error("cache breakpoint missing on the last message block")
+	}
+
 	if resp.StopReason != StopToolUse || len(resp.Content) != 2 {
 		t.Fatalf("response mangled: %+v", resp)
 	}
 	tu := resp.Content[1]
 	if tu.Type != BlockToolUse || tu.ToolName != "enumerate_logons" || tu.ToolUseID != "tu1" {
 		t.Errorf("tool_use mapping mangled: %+v", tu)
+	}
+	// Usage parses, with the cache counters kept disjoint from Input.
+	if resp.Usage != (Usage{Input: 40, Output: 12, CacheWrite: 30, CacheRead: 100}) {
+		t.Errorf("usage mangled: %+v", resp.Usage)
+	}
+}
+
+// TestAnthropic_CachingDisabled: DisableCaching omits every cache breakpoint.
+func TestAnthropic_CachingDisabled(t *testing.T) {
+	var got anthropicRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &got)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	a := &Anthropic{APIKey: "k", BaseURL: srv.URL, DisableCaching: true}
+	if _, err := a.Complete(context.Background(), CompleteRequest{
+		System: "sys", MaxTokens: 8,
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}}},
+		Tools:    []ToolDef{{Name: "t", InputSchema: map[string]any{"type": "object"}}},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got.System[0].CacheControl != nil || got.Tools[0].CacheControl != nil ||
+		got.Messages[0].Content[0].CacheControl != nil {
+		t.Error("DisableCaching should omit all cache breakpoints")
 	}
 }
 

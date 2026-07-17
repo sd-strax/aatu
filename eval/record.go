@@ -24,6 +24,7 @@ type TurnRecord struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	InterpretationID string     `json:"interpretation_id,omitempty"`
 	ToolRounds       int        `json:"tool_rounds"`
+	Usage            Usage      `json:"usage"`
 	Err              string     `json:"err,omitempty"` // turn-level failure (model call, commit)
 }
 
@@ -39,6 +40,25 @@ type ToolCall struct {
 type ParamSpec struct {
 	Name     string `json:"name"`
 	Required bool   `json:"required"`
+}
+
+// Usage mirrors agent.Usage (token accounting) without importing agent into
+// grader unit tests' synthetic records. Input/Output are uncached tokens;
+// CacheWrite/CacheRead are prompt-caching counters (billed at a premium/discount
+// respectively) — a call's total input is Input + CacheWrite + CacheRead.
+type Usage struct {
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	CacheWrite int `json:"cache_write"`
+	CacheRead  int `json:"cache_read"`
+}
+
+// Add accumulates another record's usage.
+func (u *Usage) Add(o Usage) {
+	u.Input += o.Input
+	u.Output += o.Output
+	u.CacheWrite += o.CacheWrite
+	u.CacheRead += o.CacheRead
 }
 
 // TrialRecord is one full scripted conversation (10 §2): the per-turn records

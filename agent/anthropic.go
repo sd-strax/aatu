@@ -51,6 +51,11 @@ type Anthropic struct {
 	// report the wait (a silent 30s pause otherwise looks like a hang). attempt
 	// is 1-based (the attempt that just failed); err is why.
 	OnRetry func(attempt int, wait time.Duration, err error)
+	// DisableCaching turns off prompt-cache breakpoints. Default (false) caches
+	// the repeated system+tools prefix and the accumulating conversation, which
+	// is purely beneficial for the loop; set true only against a gateway that
+	// rejects cache_control.
+	DisableCaching bool
 }
 
 // Messages API wire shapes (only the fields the loop uses).
@@ -58,15 +63,33 @@ type Anthropic struct {
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
+	System    []anthropicText    `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 }
 
+// anthropicText is a system-prompt block (the array form of `system`, which the
+// string form does not allow a cache_control breakpoint on).
+type anthropicText struct {
+	Type         string        `json:"type"` // "text"
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+// cacheControl marks a prompt-caching breakpoint: everything in the request up
+// to and including the marked element is cached and, on a later call within the
+// TTL, billed as a cheap cache read instead of full input (05 §2.7).
+type cacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+func ephemeral() *cacheControl { return &cacheControl{Type: "ephemeral"} }
+
 type anthropicTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"input_schema"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	InputSchema  map[string]any `json:"input_schema"`
+	CacheControl *cacheControl  `json:"cache_control,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -89,15 +112,27 @@ type anthropicBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicResponse struct {
 	Content    []anthropicBlock `json:"content"`
 	StopReason string           `json:"stop_reason"`
+	Usage      anthropicUsage   `json:"usage"`
 	Error      *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// anthropicUsage is the per-call token accounting. input_tokens excludes the
+// cache counters, which Anthropic reports separately.
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 // Complete runs one non-streaming Messages call. Streaming is an E.4 polish —
@@ -122,13 +157,25 @@ func (a *Anthropic) Complete(ctx context.Context, req CompleteRequest) (Complete
 	wire := anthropicRequest{
 		Model:     model,
 		MaxTokens: req.MaxTokens,
-		System:    req.System,
 		Messages:  toAnthropicMessages(req.Messages),
 	}
+	if req.System != "" {
+		wire.System = []anthropicText{{Type: "text", Text: req.System}}
+	}
 	for _, t := range req.Tools {
-		// ToolDef and anthropicTool share field shape (tags differ, which
-		// conversion ignores) — keep them in lockstep with a direct conversion.
-		wire.Tools = append(wire.Tools, anthropicTool(t))
+		wire.Tools = append(wire.Tools, anthropicTool{
+			Name: t.Name, Description: t.Description, InputSchema: t.InputSchema,
+		})
+	}
+	// Prompt caching (05 §2.7): the agentic loop resends the same system prompt
+	// and tool set on every call (~15 per trial), and a growing conversation
+	// prefix within a turn's tool rounds. Marking those static/accumulating
+	// prefixes with cache breakpoints bills them as cheap cache reads after the
+	// first call instead of full input every time — the dominant cost. Cheaper
+	// than sending them uncached and harmless below the cache minimum (the
+	// marker is ignored). Disable with DisableCaching (e.g. an unsupported base).
+	if !a.DisableCaching {
+		markCacheBreakpoints(&wire)
 	}
 
 	raw, err := json.Marshal(wire)
@@ -204,7 +251,15 @@ func (a *Anthropic) doOnce(ctx context.Context, base string, httpc *http.Client,
 	if err := json.Unmarshal(body, &out); err != nil {
 		return CompleteResponse{}, false, 0, fmt.Errorf("anthropic: decode (%d): %w", resp.StatusCode, err)
 	}
-	res := CompleteResponse{StopReason: out.StopReason}
+	res := CompleteResponse{
+		StopReason: out.StopReason,
+		Usage: Usage{
+			Input:      out.Usage.InputTokens,
+			Output:     out.Usage.OutputTokens,
+			CacheWrite: out.Usage.CacheCreationInputTokens,
+			CacheRead:  out.Usage.CacheReadInputTokens,
+		},
+	}
 	for _, blk := range out.Content {
 		switch blk.Type {
 		case "text":
@@ -216,6 +271,26 @@ func (a *Anthropic) doOnce(ctx context.Context, base string, httpc *http.Client,
 		}
 	}
 	return res, false, 0, nil
+}
+
+// markCacheBreakpoints places prompt-cache breakpoints on the request's stable
+// and accumulating prefixes (05 §2.7): the last system block and the last tool
+// (the static system+tools prefix, resent every call) and the last content
+// block of the last message (so a turn's growing tool-round history is cached
+// incrementally). At most three of the four allowed breakpoints; each is a
+// no-op below the model's cache minimum.
+func markCacheBreakpoints(wire *anthropicRequest) {
+	if n := len(wire.System); n > 0 {
+		wire.System[n-1].CacheControl = ephemeral()
+	}
+	if n := len(wire.Tools); n > 0 {
+		wire.Tools[n-1].CacheControl = ephemeral()
+	}
+	if n := len(wire.Messages); n > 0 {
+		if c := len(wire.Messages[n-1].Content); c > 0 {
+			wire.Messages[n-1].Content[c-1].CacheControl = ephemeral()
+		}
+	}
 }
 
 // isRetryableStatus reports whether an HTTP status is provider-side backpressure

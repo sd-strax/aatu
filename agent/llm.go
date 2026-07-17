@@ -84,11 +84,33 @@ type CompleteRequest struct {
 	MaxTokens int
 }
 
-// CompleteResponse is the model's reply: content blocks (text and/or tool_use)
-// and the stop reason.
+// CompleteResponse is the model's reply: content blocks (text and/or tool_use),
+// the stop reason, and the token usage the provider reported for this call.
 type CompleteResponse struct {
 	Content    []ContentBlock
 	StopReason string
+	Usage      Usage
+}
+
+// Usage is the token accounting for model calls, in the provider-neutral shape.
+// Input/Output are the uncached tokens billed at the standard rate; the two
+// cache counters are Anthropic prompt-caching (05 §2.7): CacheWrite tokens are
+// billed at a premium when a prefix is first cached, CacheRead at a deep
+// discount on subsequent hits. Anthropic reports all four disjointly, so a
+// call's total input is Input + CacheWrite + CacheRead.
+type Usage struct {
+	Input      int
+	Output     int
+	CacheWrite int
+	CacheRead  int
+}
+
+// Add accumulates another call's usage (a turn spans several model calls).
+func (u *Usage) Add(o Usage) {
+	u.Input += o.Input
+	u.Output += o.Output
+	u.CacheWrite += o.CacheWrite
+	u.CacheRead += o.CacheRead
 }
 
 // LLM is the provider seam. The Anthropic implementation lands with the CLI

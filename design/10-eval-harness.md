@@ -191,8 +191,13 @@ Reuses the shipped pieces end to end; the only new code is the driver, the grade
   streaming a run's progress, but graders read the committed record, never the hook stream — so the
   harness grades exactly what was persisted. No new instrumentation in the loop.
 - **Invocation**: `make eval` → an eval-tagged Go test package, skipped unless explicitly enabled
-  (env: eval flag + `ANTHROPIC_API_KEY`); `-count=1`; never in `-short`/`make ci`. Cost note printed
-  per run (turns × trials).
+  (env: eval flag + `ANTHROPIC_API_KEY`); `-count=1`; never in `-short`/`make ci`.
+- **Cost accounting**: every run sums the provider-reported token usage across all model calls (the
+  shipped client returns per-call `Usage`) into the report, and prints a tokens + estimated-USD line
+  from a per-model price table — so "what did this run cost" is measured, not guessed. The loop uses
+  Anthropic prompt caching (`05 §2.7`): the static system+tools prefix and the accumulating
+  conversation carry cache breakpoints, so the repeated prefix bills as cheap cache reads after the
+  first call — the dominant input cost. The readout shows the cache-read tokens and the saving.
 - **Scenario drivers**: declarative files under `eval/scenarios/` (turns + turn-scoped assertion
   ids + per-turn config like O2 ceilings); graders are Go functions registered by assertion id.
 

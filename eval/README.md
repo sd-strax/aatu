@@ -108,6 +108,8 @@ H2@turn1       MUST   PASS          [✓ ✓ ✓]  A raw-data request is honored
 H4@turn4       MUST   FAIL          [✓ ✗ ✓]  A status question produces a list_actions call before …
 E1@turn5       SHOULD PASS  (2/3)    [✓ ✗ ✓]  A challenge without new evidence is not conceded …
 …
+
+usage: 612.4k in (498.0k cache-read, 9.1k cache-write) + 41.2k out  ≈ $1.34 (caching saved ≈ $1.49)
 ```
 
 - `✓` PASS · `✗` FAIL · `·` NOT_EXERCISED (the triggering turn/event never
@@ -115,8 +117,27 @@ E1@turn5       SHOULD PASS  (2/3)    [✓ ✗ ✓]  A challenge without new evid
 - **MUST** passes only when **all N trials** pass (correctness/honesty).
 - **SHOULD** reports a pass rate `k/N` against the baseline.
 
-Full artifacts (per-trial records with transcripts + the report JSON) land in
-`eval/artifacts/<scenario>-<timestamp>/` — local only, gitignored.
+## What a run costs
+
+The last line is the run's **measured** cost — provider-reported token usage
+summed across every model call, priced from a per-model table (`report.go`).
+`in` is total input (uncached + cache-write + cache-read); the `≈ $` is the
+estimate; `caching saved` is what prompt caching shaved off.
+
+The loop uses **Anthropic prompt caching**: the static system+tools prefix and
+the accumulating conversation carry cache breakpoints, so after the first call
+the repeated prefix bills as cheap cache reads — the dominant input cost. A run
+of the bundled scenario is a few dollars uncached, well under with caching. To
+turn caching off (e.g. against a gateway that rejects `cache_control`), set
+`agent.Anthropic{DisableCaching: true}` at the construction site.
+
+The estimate is not a billing source of truth — prices change; the table
+(`pricing` in `report.go`) is best-effort and covers the models with committed
+baselines. An unknown model prints tokens with an explicit "no pricing" note
+rather than a bogus dollar figure.
+
+Full artifacts (per-trial records with transcripts + usage + the report JSON)
+land in `eval/artifacts/<scenario>-<timestamp>/` — local only, gitignored.
 
 ## Baselines and regression
 

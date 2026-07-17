@@ -149,6 +149,13 @@ func runInvestigate(invID string) error {
 			}
 		}
 
+		// A compact token readout per turn — tokens are model-agnostic (no dollar
+		// estimate here; the eval report owns pricing). cache-read tokens show
+		// prompt caching working.
+		if u := res.Usage; u != (agent.Usage{}) {
+			fmt.Printf("  [%d in / %d out, %d cached]\n", u.Input+u.CacheWrite+u.CacheRead, u.Output, u.CacheRead)
+		}
+
 		// Actions awaiting the ANALYST — everything pending on the investigation,
 		// not just this turn's proposals — offered inline, on the human token.
 		// This is the human-in-the-loop seam, not UI sugar.
