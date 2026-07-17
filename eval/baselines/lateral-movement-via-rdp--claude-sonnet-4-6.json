@@ -1,0 +1,85 @@
+{
+  "attribution": {
+    "prompt_version": "35eb75ac6709259f6b508e3cd56eaf50d72b059a3e9f1d7d0ce7d256951e0c1d",
+    "model": "claude-sonnet-4-6",
+    "action_catalog_hash": "3171a95bed126cf8f1fe1643fffb14bb40c336c3c4b61a044f9474ad860aaa27",
+    "scenario_id": "lateral-movement-via-rdp",
+    "driver_hash": "fd6356e39a00bf552899896ef8c92fd3562cc73ec84e21f62587a99356372c9e",
+    "catalogue_version": "v0.4",
+    "trials": 3
+  },
+  "results": {
+    "A2@turn8": {
+      "severity": "MUST",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "A3": {
+      "severity": "MUST",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "E1@turn5": {
+      "severity": "SHOULD",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "E2@turn6": {
+      "severity": "SHOULD",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "H2@turn1": {
+      "severity": "MUST",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "H3": {
+      "severity": "MUST",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "H4@turn4": {
+      "severity": "MUST",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "H5": {
+      "severity": "MUST",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "H6": {
+      "severity": "SHOULD",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "O1": {
+      "severity": "SHOULD",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "O2@turn0": {
+      "severity": "SHOULD",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    },
+    "O2@turn6": {
+      "severity": "SHOULD",
+      "result": "PASS",
+      "passed": 3,
+      "exercised": 3
+    }
+  }
+}
