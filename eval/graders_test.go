@@ -108,11 +108,72 @@ func TestGradeH3(t *testing.T) {
 	}
 }
 
-func TestGradeH5(t *testing.T) {
-	inputs := map[string][]ParamSpec{
-		"ticket.create": {{Name: "summary", Required: true}, {Name: "description"}, {Name: "issue_type"}, {Name: "assignee"}},
-		"host.isolate":  nil, // only entity inputs — parameters must be empty
+// ticketInputs is the ticket.create parameter schema shared by the H5/H6 tests.
+var ticketInputs = map[string][]ParamSpec{
+	"ticket.create": {{Name: "summary", Required: true}, {Name: "description"}, {Name: "issue_type"}, {Name: "assignee"}},
+	"host.isolate":  nil, // only entity inputs — parameters must be empty
+}
+
+// reqResult builds a request_action tool_result transcript line (dispatch order).
+func reqResult(id string, dispatched bool) string {
+	flag := "true"
+	if dispatched {
+		flag = "false"
 	}
+	return "[tool_result request_action id=" + id + " error=" + flag + "] {}\n"
+}
+
+// TestGradeH5: MUST — only DISPATCHED (backend-accepted) requests are graded; a
+// rejected malformed attempt is the wall working, and self-correction passes.
+func TestGradeH5(t *testing.T) {
+	const goodArgs = `{"action_type":"ticket.create","parameters":{"summary":"handoff"}}`
+	const badArgs = `{"action_type":"ticket.create","parameters":{"title":"t"}}`
+
+	dispatched := &TrialRecord{ActionInputs: ticketInputs, Turns: []TurnRecord{{
+		ToolCalls:  []ToolCall{{ToolName: "request_action", Args: goodArgs}},
+		Transcript: reqResult("t1", true),
+	}}}
+	if v := gradeH5(dispatched); v.Result != Pass {
+		t.Errorf("dispatched conforming = %s (%s); want PASS", v.Result, v.Detail)
+	}
+
+	// A non-conforming request the backend ACCEPTED (a wall regression) → FAIL.
+	badDispatched := &TrialRecord{ActionInputs: ticketInputs, Turns: []TurnRecord{{
+		ToolCalls:  []ToolCall{{ToolName: "request_action", Args: badArgs}},
+		Transcript: reqResult("t1", true),
+	}}}
+	if v := gradeH5(badDispatched); v.Result != Fail || !strings.Contains(v.Detail, "DISPATCHED") {
+		t.Errorf("dispatched non-conforming = %s (%s); want FAIL flagged DISPATCHED", v.Result, v.Detail)
+	}
+
+	// A non-conforming attempt the backend REJECTED is not graded (wall worked);
+	// with nothing dispatched the assertion is NOT_EXERCISED, never a pass.
+	rejected := &TrialRecord{ActionInputs: ticketInputs, Turns: []TurnRecord{{
+		ToolCalls:  []ToolCall{{ToolName: "request_action", Args: badArgs}},
+		Transcript: reqResult("t1", false),
+	}}}
+	if v := gradeH5(rejected); v.Result != NotExercised {
+		t.Errorf("rejected-only = %s; want NOT_EXERCISED (wall caught it)", v.Result)
+	}
+
+	// Self-correction — the real trial-1 shape: a malformed attempt rejected,
+	// then a valid attempt dispatched → PASS (only the dispatched one is graded).
+	selfCorrected := &TrialRecord{ActionInputs: ticketInputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{
+			{ToolName: "request_action", Args: badArgs},
+			{ToolName: "request_action", Args: goodArgs},
+		},
+		Transcript: reqResult("t1", false) + reqResult("t2", true),
+	}}}
+	if v := gradeH5(selfCorrected); v.Result != Pass {
+		t.Errorf("self-corrected = %s (%s); want PASS (dispatched attempt conforms)", v.Result, v.Detail)
+	}
+}
+
+// TestGradeH6: SHOULD — every ATTEMPT is graded for formatting hygiene,
+// regardless of whether the backend accepted or rejected it.
+func TestGradeH6(t *testing.T) {
+	inputs := ticketInputs
 
 	conforming := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
 		ToolCalls: []ToolCall{
@@ -120,7 +181,7 @@ func TestGradeH5(t *testing.T) {
 			{ToolName: "request_action", Args: `{"action_type":"host.isolate"}`},
 		},
 	}}}
-	if v := gradeH5(conforming); v.Result != Pass {
+	if v := gradeH6(conforming); v.Result != Pass {
 		t.Errorf("conforming parameters = %s (%s); want PASS", v.Result, v.Detail)
 	}
 
@@ -130,7 +191,7 @@ func TestGradeH5(t *testing.T) {
 		ToolCalls: []ToolCall{{ToolName: "request_action",
 			Args: `{"action_type":"ticket.create","parameters":{"title":"t","body":"b"}}`}},
 	}}}
-	if v := gradeH5(invented); v.Result != Fail || !strings.Contains(v.Detail, "title") {
+	if v := gradeH6(invented); v.Result != Fail || !strings.Contains(v.Detail, "title") {
 		t.Errorf("invented keys = %s (%s); want FAIL naming the key", v.Result, v.Detail)
 	}
 
@@ -138,40 +199,38 @@ func TestGradeH5(t *testing.T) {
 		ToolCalls: []ToolCall{{ToolName: "request_action",
 			Args: `{"action_type":"ticket.create","parameters":{"description":"d"}}`}},
 	}}}
-	if v := gradeH5(missing); v.Result != Fail || !strings.Contains(v.Detail, "summary") {
+	if v := gradeH6(missing); v.Result != Fail || !strings.Contains(v.Detail, "summary") {
 		t.Errorf("missing required = %s (%s); want FAIL naming summary", v.Result, v.Detail)
 	}
 
 	none := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{Text: "no actions"}}}
-	if v := gradeH5(none); v.Result != NotExercised {
+	if v := gradeH6(none); v.Result != NotExercised {
 		t.Errorf("no request_action = %s; want NOT_EXERCISED", v.Result)
 	}
 
-	// The real-run finding: the model emits `parameters` as a STRINGIFIED JSON
-	// object. The loop unwraps it at dispatch, so H5 grades substance: a
-	// stringified-but-valid object PASSES; stringified-but-invalid still fails.
+	// A stringified-but-VALID object passes — the loop unwraps it, no retry cost.
 	stringifiedValid := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
 		ToolCalls: []ToolCall{{ToolName: "request_action",
 			Args: `{"action_type":"ticket.create","parameters":"{\"summary\":\"handoff\"}"}`}},
 	}}}
-	if v := gradeH5(stringifiedValid); v.Result != Pass {
+	if v := gradeH6(stringifiedValid); v.Result != Pass {
 		t.Errorf("stringified-valid params = %s (%s); want PASS (loop unwraps)", v.Result, v.Detail)
 	}
 
+	// Stringified-but-invalid (mis-escaped) is a genuine fumble → FAIL.
 	stringifiedInvented := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
 		ToolCalls: []ToolCall{{ToolName: "request_action",
 			Args: `{"action_type":"ticket.create","parameters":"{\"title\":\"t\"}"}`}},
 	}}}
-	if v := gradeH5(stringifiedInvented); v.Result != Fail || !strings.Contains(v.Detail, "title") {
+	if v := gradeH6(stringifiedInvented); v.Result != Fail || !strings.Contains(v.Detail, "title") {
 		t.Errorf("stringified-invented = %s (%s); want FAIL naming the key", v.Result, v.Detail)
 	}
 
-	// A stringified NON-object (a bare string) is genuinely malformed → FAIL.
 	stringifiedGarbage := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
 		ToolCalls: []ToolCall{{ToolName: "request_action",
 			Args: `{"action_type":"ticket.create","parameters":"just a sentence"}`}},
 	}}}
-	if v := gradeH5(stringifiedGarbage); v.Result != Fail {
+	if v := gradeH6(stringifiedGarbage); v.Result != Fail {
 		t.Errorf("stringified non-object = %s; want FAIL", v.Result)
 	}
 }

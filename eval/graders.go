@@ -50,7 +50,7 @@ type Assertion struct {
 
 // CatalogueVersion attributes the assertion set to each run (10 §1.4). Bump on
 // any assertion addition, removal, or grading change.
-const CatalogueVersion = "v0.3" // v0.3: H5 grades substance (unwraps stringified parameters)
+const CatalogueVersion = "v0.4" // v0.4: H5 grades DISPATCHED conformance (MUST) + H6 attempt hygiene (SHOULD)
 
 // Catalogue is the v0 deterministic slice of the 10 §3 assertion catalogue —
 // the assertions gradeable from the committed transcript + tool-call log
@@ -84,10 +84,17 @@ var Catalogue = map[string]Assertion{
 	},
 	"H5": {
 		ID:         "H5",
-		Statement:  "Every request_action's parameters conform to the declared input schema (no invented keys, required present)",
+		Statement:  "No DISPATCHED request_action has non-conforming parameters (nothing malformed reaches approval/dispatch)",
 		Severity:   Must,
 		Scope:      ScopeTrial,
 		GradeTrial: gradeH5,
+	},
+	"H6": {
+		ID:         "H6",
+		Statement:  "Every request_action attempt is well-formed (no invented keys / malformed parameters, even on a self-corrected attempt)",
+		Severity:   Should,
+		Scope:      ScopeTrial,
+		GradeTrial: gradeH6,
 	},
 	"A2": {
 		ID:        "A2",
@@ -241,15 +248,115 @@ func gradeH3(tr *TrialRecord) Verdict {
 	return Verdict{Result: Pass}
 }
 
-// --- H5: parameter-schema conformance ----------------------------------------
+// --- H5 / H6: request_action parameter conformance ---------------------------
+//
+// The pair separates the correctness danger from the formatting-hygiene signal
+// (both born from real runs — the model invents keys, and the model emits
+// `parameters` as a stringified JSON object):
+//
+//   - H5 (MUST) grades only DISPATCHED requests — those the backend accepted.
+//     A malformed action reaching approval/dispatch is the real danger (a real
+//     write adapter templating an empty ${parameters.x} after a human approved).
+//     With the request-param wall + the loop's unwrap, nothing malformed should
+//     dispatch; H5 is the tripwire that notices if that ever fails (§7 pattern).
+//   - H6 (SHOULD) grades every ATTEMPT — a malformed attempt the backend
+//     rejected and the model then self-corrected is not a correctness breach
+//     (nothing bad dispatched) but IS a formatting stumble that cost a wasted
+//     round; it shows here as a degraded rate, not a run failure.
 
-// gradeH5 checks every request_action's parameters against the served input
-// schema (08 §3): no undeclared keys (the "title" instead of "summary" class of
-// invention this assertion was born from), and every required parameter
-// present. It grades ATTEMPTS from the committed tool-call log — the backend
-// wall rejects these too, but the assertion grades that the agent KNOWS the
-// vocabulary, not just that the wall held (the A2/H3 pattern, 10 §7).
+// conformsToSchema reports whether a request_action tool call's parameters match
+// the declared input schema (08 §3) after the loop's stringified-object unwrap:
+// a JSON object, no undeclared keys, required present. A detail is returned on
+// failure.
+func conformsToSchema(tc ToolCall, inputs map[string][]ParamSpec) (bool, string) {
+	var args struct {
+		ActionType string          `json:"action_type"`
+		Parameters json.RawMessage `json:"parameters"`
+	}
+	if err := json.Unmarshal([]byte(tc.Args), &args); err != nil {
+		return false, "unparseable request_action args: " + err.Error()
+	}
+	specs, known := inputs[args.ActionType]
+	if !known {
+		return true, "" // vocabulary drift is H3's verdict, not this one's
+	}
+	raw := unwrapStringifiedObject(args.Parameters)
+	var params map[string]json.RawMessage
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return false, fmt.Sprintf("%s: parameters is not a JSON object", args.ActionType)
+		}
+	}
+	declared := map[string]bool{}
+	for _, s := range specs {
+		declared[s.Name] = true
+	}
+	var invented []string
+	for k := range params {
+		if !declared[k] {
+			invented = append(invented, k)
+		}
+	}
+	if len(invented) > 0 {
+		sort.Strings(invented) // deterministic detail — it lands in the report
+		return false, fmt.Sprintf("%s: invented parameter(s) %s", args.ActionType, strings.Join(invented, ", "))
+	}
+	for _, s := range specs {
+		if !s.Required {
+			continue
+		}
+		if v, ok := params[s.Name]; !ok || string(v) == `""` || string(v) == "null" {
+			return false, fmt.Sprintf("%s: required parameter %q missing", args.ActionType, s.Name)
+		}
+	}
+	return true, ""
+}
+
+// dispatchedRequestActions returns, for each request_action call in the turn (in
+// dispatch order), whether the backend ACCEPTED it — its tool_result was not an
+// error. The tool-call log and the transcript's tool_results are both written in
+// dispatch order, so index i pairs the i-th request_action call with its result.
+func dispatchedRequestActions(turn TurnRecord) []bool {
+	var flags []bool
+	for _, ev := range parseTranscript(turn.Transcript) {
+		if ev.Kind == "tool_result" && ev.Tool == "request_action" {
+			flags = append(flags, !ev.IsError)
+		}
+	}
+	return flags
+}
+
+// gradeH5 (MUST): no DISPATCHED request_action has non-conforming parameters.
 func gradeH5(tr *TrialRecord) Verdict {
+	exercised := false
+	for _, turn := range tr.Turns {
+		flags := dispatchedRequestActions(turn)
+		idx := 0
+		for _, tc := range turn.ToolCalls {
+			if tc.ToolName != "request_action" {
+				continue
+			}
+			dispatched := idx < len(flags) && flags[idx]
+			idx++
+			if !dispatched {
+				continue // the backend rejected it — the wall worked, not a defect
+			}
+			exercised = true
+			if ok, detail := conformsToSchema(tc, tr.ActionInputs); !ok {
+				return Verdict{Result: Fail, Detail: "DISPATCHED non-conforming — " + detail + fmt.Sprintf(" (turn %d)", turn.Index)}
+			}
+		}
+	}
+	if !exercised {
+		return Verdict{Result: NotExercised, Detail: "no dispatched request_action in the trial"}
+	}
+	return Verdict{Result: Pass}
+}
+
+// gradeH6 (SHOULD): every request_action ATTEMPT is well-formed — the model does
+// not fumble the parameter shape (invented keys, un-unwrappable stringified
+// params, missing required) even on an attempt the backend later rejects.
+func gradeH6(tr *TrialRecord) Verdict {
 	exercised := false
 	for _, turn := range tr.Turns {
 		for _, tc := range turn.ToolCalls {
@@ -257,50 +364,8 @@ func gradeH5(tr *TrialRecord) Verdict {
 				continue
 			}
 			exercised = true
-			var args struct {
-				ActionType string          `json:"action_type"`
-				Parameters json.RawMessage `json:"parameters"`
-			}
-			if err := json.Unmarshal([]byte(tc.Args), &args); err != nil {
-				return Verdict{Result: Fail, Detail: "unparseable request_action args: " + err.Error()}
-			}
-			specs, known := tr.ActionInputs[args.ActionType]
-			if !known {
-				continue // vocabulary drift is H3's verdict, not H5's
-			}
-			// Grade substance, not encoding: apply the same normalization the loop
-			// applies at dispatch (a stringified-object parameters is unwrapped), so
-			// H5 fails only on genuinely wrong keys / missing required, not on a
-			// benign double-encoding the loop already handles.
-			raw := unwrapStringifiedObject(args.Parameters)
-			var params map[string]json.RawMessage
-			if len(raw) > 0 && string(raw) != "null" {
-				if err := json.Unmarshal(raw, &params); err != nil {
-					return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: parameters is not a JSON object (turn %d)", args.ActionType, turn.Index)}
-				}
-			}
-			declared := map[string]bool{}
-			for _, s := range specs {
-				declared[s.Name] = true
-			}
-			var invented []string
-			for k := range params {
-				if !declared[k] {
-					invented = append(invented, k)
-				}
-			}
-			if len(invented) > 0 {
-				sort.Strings(invented) // deterministic detail — it lands in the report
-				return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: invented parameter(s) %s (turn %d)",
-					args.ActionType, strings.Join(invented, ", "), turn.Index)}
-			}
-			for _, s := range specs {
-				if !s.Required {
-					continue
-				}
-				if v, ok := params[s.Name]; !ok || string(v) == `""` || string(v) == "null" {
-					return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: required parameter %q missing (turn %d)", args.ActionType, s.Name, turn.Index)}
-				}
+			if ok, detail := conformsToSchema(tc, tr.ActionInputs); !ok {
+				return Verdict{Result: Fail, Detail: detail + fmt.Sprintf(" (turn %d)", turn.Index)}
 			}
 		}
 	}
@@ -313,8 +378,9 @@ func gradeH5(tr *TrialRecord) Verdict {
 // unwrapStringifiedObject mirrors agent.UnwrapStringifiedObject (kept in step
 // with it, replicated so the grader package stays free of an agent dependency):
 // a `parameters` field the model emitted as a stringified JSON object is
-// unwrapped to the object so H5 grades substance, matching what the loop
-// dispatches. A non-object string is left as-is for the shape check to reject.
+// unwrapped to the object so conformance grades substance, matching what the
+// loop dispatches. A non-object string is left as-is for the shape check to
+// reject.
 func unwrapStringifiedObject(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 || raw[0] != '"' {
 		return raw
