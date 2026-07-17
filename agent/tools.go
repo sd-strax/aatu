@@ -201,9 +201,32 @@ func requestActionDescription(actionTypes []ActionType) string {
 		d := a.Descriptor
 		fmt.Fprintf(&b, "\n- %s [%s, %s, %s]: %s",
 			d.ActionType, d.DefaultTier, d.Reversibility, a.Status, d.Intent)
+		// The declared parameter schema (08 §3): entity inputs ride `targets`;
+		// the rest are the ONLY keys `parameters` accepts — the backend rejects
+		// unknown keys and missing required ones at request time.
+		if params := paramList(a); params != "" {
+			fmt.Fprintf(&b, "\n  parameters: %s", params)
+		}
 	}
-	b.WriteString("\n\nIf the action you need is not in this list, or is marked 'unavailable' (no tool is wired for it), do NOT request it — tell the analyst it must be performed manually.")
+	b.WriteString("\n\nEach action's `parameters` object accepts exactly its listed parameter keys (targets carry the entities). If the action you need is not in this list, or is marked 'unavailable' (no tool is wired for it), do NOT request it — tell the analyst it must be performed manually.")
 	return b.String()
+}
+
+// paramList renders an action type's non-entity inputs — the declared
+// request_action.parameters vocabulary — as "name (required), name, …".
+func paramList(a ActionType) string {
+	var parts []string
+	for _, in := range a.Descriptor.Inputs {
+		if in.Type == "entity" {
+			continue // satisfied via targets
+		}
+		p := in.Name
+		if in.Required {
+			p += " (required)"
+		}
+		parts = append(parts, p)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // actionTypeSchema builds the action_type property. When the catalog is known it

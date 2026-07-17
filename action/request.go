@@ -3,6 +3,7 @@ package action
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +58,9 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 			return aggregate.RequestAction{}, fmt.Errorf("action_type %q: target %d has no resolved_identifier", req.ActionType, i)
 		}
 	}
+	if err := validateParameters(d, req.Parameters); err != nil {
+		return aggregate.RequestAction{}, err
+	}
 
 	ttl := req.TTL
 	if ttl == 0 {
@@ -76,6 +80,56 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 		IsReversal:    req.ReversalOfRef != uuid.Nil,
 		ReversalOfRef: req.ReversalOfRef,
 	}, nil
+}
+
+// validateParameters checks a request's parameters against the descriptor's
+// declared Inputs (08 §3: Inputs is THE schema for request_action.parameters).
+// Entity-typed inputs ride the targets list (validated above), so only
+// non-entity inputs are checked here: required ones must be present and
+// non-empty, and unknown keys are rejected — a key the descriptor never
+// declared is a typo or hallucination ("title" for ticket.create's "summary")
+// that would otherwise sail through approval and only fail — or silently
+// render empty — when a real binding templates ${parameters.<name>} at
+// dispatch, AFTER the human approved. The error names the declared keys so a
+// model caller can self-correct in one round.
+func validateParameters(d ActionDescriptor, raw json.RawMessage) error {
+	declared := map[string]bool{}
+	var names, missing []string
+	for _, in := range d.Inputs {
+		if in.Type == "entity" {
+			continue // satisfied via targets
+		}
+		declared[in.Name] = true
+		names = append(names, in.Name)
+	}
+
+	params := map[string]json.RawMessage{}
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("action_type %q: parameters is not a JSON object: %w", d.ActionType, err)
+		}
+	}
+
+	for k := range params {
+		if !declared[k] {
+			return fmt.Errorf("action_type %q: unknown parameter %q (declared inputs: %s)",
+				d.ActionType, k, strings.Join(names, ", "))
+		}
+	}
+	for _, in := range d.Inputs {
+		if in.Type == "entity" || !in.Required {
+			continue
+		}
+		v, ok := params[in.Name]
+		if !ok || string(v) == `""` || string(v) == "null" {
+			missing = append(missing, in.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("action_type %q: missing required parameter(s): %s",
+			d.ActionType, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // EscalateTier applies the non-negotiable blast-radius escalator (04 §1): a T2

@@ -13,7 +13,7 @@ description: >
 trials: 3
 
 # Trial-wide assertions (graded once per trial over the full record).
-assert: [H3, A3, O1]
+assert: [H3, H5, A3, O1]
 
 turns:
   # Seed + pivot: alerts and logon enumeration (G3/G4 land later; O2 here).

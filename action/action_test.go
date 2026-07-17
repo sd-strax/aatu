@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,10 +158,50 @@ func TestBuildRequestCommandRejections(t *testing.T) {
 		"no targets":     {ActionType: "host.isolate", Rationale: "r"},
 		"no rationale":   {ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("x")}},
 		"unresolved tgt": {ActionType: "host.isolate", Targets: []aggregate.TargetSpec{{EntityRef: "x-host--1"}}, Rationale: "r"},
+		// Parameter-schema validation (08 §3: Inputs is the schema for
+		// request_action.parameters). Both found by the eval harness: the model
+		// invented {"title","body"} for ticket.create instead of the declared
+		// {summary, description, ...} — undetected until a real binding would
+		// template ${parameters.summary} post-approval.
+		"undeclared parameter key": {ActionType: "ticket.create",
+			Targets:    []aggregate.TargetSpec{target("IT-OPS")},
+			Parameters: []byte(`{"title":"t","body":"b"}`), Rationale: "r"},
+		"missing required parameter": {ActionType: "ticket.create",
+			Targets:    []aggregate.TargetSpec{target("IT-OPS")},
+			Parameters: []byte(`{"description":"d"}`), Rationale: "r"},
+		"required parameter empty": {ActionType: "ticket.create",
+			Targets:    []aggregate.TargetSpec{target("IT-OPS")},
+			Parameters: []byte(`{"summary":""}`), Rationale: "r"},
+		"parameters not an object": {ActionType: "ticket.create",
+			Targets:    []aggregate.TargetSpec{target("IT-OPS")},
+			Parameters: []byte(`["summary"]`), Rationale: "r"},
 	}
 	for name, req := range cases {
 		if _, err := BuildRequestCommand(catalog, req, now); err == nil {
 			t.Errorf("%s: expected rejection", name)
+		}
+	}
+
+	// The rejection message names the declared keys so a model caller can
+	// self-correct in one round.
+	_, err := BuildRequestCommand(catalog, ActionRequest{ActionType: "ticket.create",
+		Targets:    []aggregate.TargetSpec{target("IT-OPS")},
+		Parameters: []byte(`{"title":"t"}`), Rationale: "r"}, now)
+	if err == nil || !strings.Contains(err.Error(), "summary") {
+		t.Errorf("unknown-key error should name the declared inputs; got %v", err)
+	}
+
+	// Entity-typed inputs ride targets, not parameters: an action whose only
+	// declared input is an entity accepts empty parameters, and an action with
+	// optional string inputs accepts their absence.
+	for _, ok := range []ActionRequest{
+		{ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("WIN-A")}, Rationale: "r"},
+		{ActionType: "ticket.close", Targets: []aggregate.TargetSpec{target("IT-1")}, Rationale: "r"}, // resolution is optional
+		{ActionType: "ticket.create", Targets: []aggregate.TargetSpec{target("IT-OPS")},
+			Parameters: []byte(`{"summary":"handoff"}`), Rationale: "r"},
+	} {
+		if _, err := BuildRequestCommand(catalog, ok, now); err != nil {
+			t.Errorf("%s: unexpected rejection: %v", ok.ActionType, err)
 		}
 	}
 }

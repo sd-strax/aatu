@@ -213,6 +213,36 @@ func TestSession_ToolAssembly(t *testing.T) {
 	}
 }
 
+// TestRequestActionDescription_Parameters: the description surfaces each
+// type's declared non-entity inputs — the parameters vocabulary the backend
+// validates — so the model cannot invent keys ("title" for ticket.create's
+// "summary", the eval-harness finding). Entity inputs ride targets and are
+// omitted.
+func TestRequestActionDescription_Parameters(t *testing.T) {
+	var ticket ActionType
+	ticket.Descriptor.ActionType = "ticket.create"
+	ticket.Descriptor.Intent = "Open a ticket."
+	ticket.Descriptor.Inputs = []ActionInput{
+		{Name: "summary", Type: "string", Required: true},
+		{Name: "description", Type: "string"},
+	}
+	ticket.Status = "available"
+
+	var isolate ActionType
+	isolate.Descriptor.ActionType = "host.isolate"
+	isolate.Descriptor.Intent = "Isolate a host."
+	isolate.Descriptor.Inputs = []ActionInput{{Name: "host", Type: "entity", Required: true}}
+	isolate.Status = "available"
+
+	desc := requestActionDescription([]ActionType{ticket, isolate})
+	if !strings.Contains(desc, "summary (required)") || !strings.Contains(desc, "description") {
+		t.Errorf("description should list ticket.create's parameter vocabulary:\n%s", desc)
+	}
+	if strings.Contains(desc, "host (required)") {
+		t.Errorf("entity inputs ride targets and must not be listed as parameters:\n%s", desc)
+	}
+}
+
 // TestSession_Turn: a full turn — capability call, hypothesis proposal, action
 // request, final text — dispatches each tool with the AGENT token, feeds
 // results back, and commits the transcript + tool-call log as one turn-summary

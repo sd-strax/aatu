@@ -50,7 +50,7 @@ type Assertion struct {
 
 // CatalogueVersion attributes the assertion set to each run (10 §1.4). Bump on
 // any assertion addition, removal, or grading change.
-const CatalogueVersion = "v0.1"
+const CatalogueVersion = "v0.2" // v0.2: +H5 (parameter-schema conformance)
 
 // Catalogue is the v0 deterministic slice of the 10 §3 assertion catalogue —
 // the assertions gradeable from the committed transcript + tool-call log
@@ -81,6 +81,13 @@ var Catalogue = map[string]Assertion{
 		Severity:  Must,
 		Scope:     ScopeTurn,
 		GradeTurn: gradeH4,
+	},
+	"H5": {
+		ID:         "H5",
+		Statement:  "Every request_action's parameters conform to the declared input schema (no invented keys, required present)",
+		Severity:   Must,
+		Scope:      ScopeTrial,
+		GradeTrial: gradeH5,
 	},
 	"A2": {
 		ID:        "A2",
@@ -225,6 +232,64 @@ func gradeH3(tr *TrialRecord) Verdict {
 			}
 			if !catalog[args.ActionType] {
 				return Verdict{Result: Fail, Detail: fmt.Sprintf("action_type %q is not in the catalog", args.ActionType)}
+			}
+		}
+	}
+	if !exercised {
+		return Verdict{Result: NotExercised, Detail: "no request_action in the trial"}
+	}
+	return Verdict{Result: Pass}
+}
+
+// --- H5: parameter-schema conformance ----------------------------------------
+
+// gradeH5 checks every request_action's parameters against the served input
+// schema (08 §3): no undeclared keys (the "title" instead of "summary" class of
+// invention this assertion was born from), and every required parameter
+// present. It grades ATTEMPTS from the committed tool-call log — the backend
+// wall rejects these too, but the assertion grades that the agent KNOWS the
+// vocabulary, not just that the wall held (the A2/H3 pattern, 10 §7).
+func gradeH5(tr *TrialRecord) Verdict {
+	exercised := false
+	for _, turn := range tr.Turns {
+		for _, tc := range turn.ToolCalls {
+			if tc.ToolName != "request_action" {
+				continue
+			}
+			exercised = true
+			var args struct {
+				ActionType string                     `json:"action_type"`
+				Parameters map[string]json.RawMessage `json:"parameters"`
+			}
+			if err := json.Unmarshal([]byte(tc.Args), &args); err != nil {
+				return Verdict{Result: Fail, Detail: "unparseable request_action args: " + err.Error()}
+			}
+			specs, known := tr.ActionInputs[args.ActionType]
+			if !known {
+				continue // vocabulary drift is H3's verdict, not H5's
+			}
+			declared := map[string]bool{}
+			for _, s := range specs {
+				declared[s.Name] = true
+			}
+			var invented []string
+			for k := range args.Parameters {
+				if !declared[k] {
+					invented = append(invented, k)
+				}
+			}
+			if len(invented) > 0 {
+				sort.Strings(invented) // deterministic detail — it lands in the report
+				return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: invented parameter(s) %s (turn %d)",
+					args.ActionType, strings.Join(invented, ", "), turn.Index)}
+			}
+			for _, s := range specs {
+				if !s.Required {
+					continue
+				}
+				if v, ok := args.Parameters[s.Name]; !ok || string(v) == `""` || string(v) == "null" {
+					return Verdict{Result: Fail, Detail: fmt.Sprintf("%s: required parameter %q missing (turn %d)", args.ActionType, s.Name, turn.Index)}
+				}
 			}
 		}
 	}

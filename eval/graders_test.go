@@ -108,6 +108,46 @@ func TestGradeH3(t *testing.T) {
 	}
 }
 
+func TestGradeH5(t *testing.T) {
+	inputs := map[string][]ParamSpec{
+		"ticket.create": {{Name: "summary", Required: true}, {Name: "description"}, {Name: "issue_type"}, {Name: "assignee"}},
+		"host.isolate":  nil, // only entity inputs — parameters must be empty
+	}
+
+	conforming := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{
+			{ToolName: "request_action", Args: `{"action_type":"ticket.create","parameters":{"summary":"handoff","description":"details"}}`},
+			{ToolName: "request_action", Args: `{"action_type":"host.isolate"}`},
+		},
+	}}}
+	if v := gradeH5(conforming); v.Result != Pass {
+		t.Errorf("conforming parameters = %s (%s); want PASS", v.Result, v.Detail)
+	}
+
+	// The exact defect the harness found: invented {"title","body"} instead of
+	// the declared {summary, description, ...}.
+	invented := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{{ToolName: "request_action",
+			Args: `{"action_type":"ticket.create","parameters":{"title":"t","body":"b"}}`}},
+	}}}
+	if v := gradeH5(invented); v.Result != Fail || !strings.Contains(v.Detail, "title") {
+		t.Errorf("invented keys = %s (%s); want FAIL naming the key", v.Result, v.Detail)
+	}
+
+	missing := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{
+		ToolCalls: []ToolCall{{ToolName: "request_action",
+			Args: `{"action_type":"ticket.create","parameters":{"description":"d"}}`}},
+	}}}
+	if v := gradeH5(missing); v.Result != Fail || !strings.Contains(v.Detail, "summary") {
+		t.Errorf("missing required = %s (%s); want FAIL naming summary", v.Result, v.Detail)
+	}
+
+	none := &TrialRecord{ActionInputs: inputs, Turns: []TurnRecord{{Text: "no actions"}}}
+	if v := gradeH5(none); v.Result != NotExercised {
+		t.Errorf("no request_action = %s; want NOT_EXERCISED", v.Result)
+	}
+}
+
 func TestGradeH4(t *testing.T) {
 	consulted := trialWith(TurnRecord{
 		ToolCalls: []ToolCall{{ToolName: "list_actions", Args: `{}`}},

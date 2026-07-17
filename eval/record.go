@@ -34,6 +34,13 @@ type ToolCall struct {
 	Args     string `json:"args,omitempty"`
 }
 
+// ParamSpec is one declared parameter of an action type (the non-entity slice
+// of the descriptor's Inputs, 08 §3).
+type ParamSpec struct {
+	Name     string `json:"name"`
+	Required bool   `json:"required"`
+}
+
 // TrialRecord is one full scripted conversation (10 §2): the per-turn records
 // plus the context graders need (the action vocabulary the session saw).
 type TrialRecord struct {
@@ -43,6 +50,9 @@ type TrialRecord struct {
 	// ActionCatalog is the action_type vocabulary the backend served at session
 	// build — H3's ground truth.
 	ActionCatalog []string `json:"action_catalog,omitempty"`
+	// ActionInputs is each action type's declared non-entity parameter schema
+	// (08 §3) as served by the backend — H5's ground truth.
+	ActionInputs map[string][]ParamSpec `json:"action_inputs,omitempty"`
 	// Aborted is set when the trial stopped before completing its script (a
 	// turn-level error); unreached turn-scoped assertions grade NOT_EXERCISED.
 	Aborted bool `json:"aborted,omitempty"`

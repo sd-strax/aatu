@@ -74,13 +74,23 @@ func Run(ctx context.Context, rc RunConfig) (*Report, error) {
 	}
 	client := agent.NewClient(backendURL, agentCred, humanCred)
 
-	// The served action vocabulary: H3's ground truth and part of the run's
-	// attribution. An error means the action layer is off — recorded as such.
+	// The served action vocabulary: H3's ground truth, the declared parameter
+	// schemas (H5's), and part of the run's attribution. An error means the
+	// action layer is off — recorded as such.
 	var catalog []string
+	actionInputs := map[string][]ParamSpec{}
 	catalogHash := "unavailable"
 	if actionTypes, err := client.ListActionTypes(ctx); err == nil {
 		for _, a := range actionTypes {
 			catalog = append(catalog, a.Descriptor.ActionType)
+			var specs []ParamSpec
+			for _, in := range a.Descriptor.Inputs {
+				if in.Type == "entity" {
+					continue // entity inputs ride targets (08 §3)
+				}
+				specs = append(specs, ParamSpec{Name: in.Name, Required: in.Required})
+			}
+			actionInputs[a.Descriptor.ActionType] = specs
 		}
 		if raw, err := json.Marshal(actionTypes); err == nil {
 			sum := sha256.Sum256(raw)
@@ -121,6 +131,7 @@ func Run(ctx context.Context, rc RunConfig) (*Report, error) {
 		}
 		if tr != nil {
 			tr.ActionCatalog = catalog
+			tr.ActionInputs = actionInputs
 			trials = append(trials, tr)
 			if raw, err := json.MarshalIndent(tr, "", "  "); err == nil {
 				_ = os.WriteFile(filepath.Join(artifactDir, fmt.Sprintf("trial-%d.json", n)), raw, 0o600)

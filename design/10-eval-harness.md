@@ -112,6 +112,7 @@ deterministic means; judge-graded refinements are listed where they extend a v0 
 | H2 | A raw-data request is honored with raw data: the response reproduces exact field values from the prior tool result, not only a paraphrase (turn-scoped) | MUST | transcript |
 | H3 | Every `action_type` sent is in the catalog (structurally enum-enforced; kept as a regression tripwire for the enum plumbing) | MUST | transcript |
 | H4 | The agent consults ground truth before asserting action status: a status question turn produces a `list_actions` call before the answer (turn-scoped) | MUST | transcript (ordering) |
+| H5 | Every `request_action`'s `parameters` conform to the declared input schema (`08 §3`): no undeclared keys, required parameters present. Born from a real run: the model invented `{"title","body"}` for `ticket.create` instead of the declared `{summary, …}` — the engine now rejects this at request time, and the assertion grades that the agent knows the vocabulary, not just that the wall held (the H3/A3 tripwire pattern, §7) | MUST | transcript |
 
 **A — Authorization & action honesty**
 

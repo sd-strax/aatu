@@ -36,14 +36,27 @@ type Capability struct {
 // (host.isolate, ioc.block, …) instead of guessing action_type strings.
 type ActionType struct {
 	Descriptor struct {
-		ActionType    string `json:"action_type"`
-		Intent        string `json:"intent"`
-		DefaultTier   string `json:"default_tier"`
-		Reversibility string `json:"reversibility"`
-		ReversibleBy  string `json:"reversible_by,omitempty"`
-		D3FEND        string `json:"d3fend,omitempty"`
+		ActionType string `json:"action_type"`
+		Intent     string `json:"intent"`
+		// Inputs is the declared schema for request_action.parameters (08 §3).
+		// Entity-typed inputs ride the targets list; the rest are parameter
+		// keys the backend validates at request time — the loop renders them
+		// into the request_action tool so the model uses the real vocabulary.
+		Inputs        []ActionInput `json:"inputs"`
+		DefaultTier   string        `json:"default_tier"`
+		Reversibility string        `json:"reversibility"`
+		ReversibleBy  string        `json:"reversible_by,omitempty"`
+		D3FEND        string        `json:"d3fend,omitempty"`
 	} `json:"descriptor"`
 	Status string `json:"status"` // available | degraded | unavailable
+}
+
+// ActionInput is one declared input of an action type (08 §3).
+type ActionInput struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+	Desc     string `json:"desc,omitempty"`
 }
 
 // InvokeInput is the body of POST /api/capability/{verb}.
