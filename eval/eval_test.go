@@ -57,13 +57,23 @@ func TestEvalRun(t *testing.T) {
 	if n := report.MustFailures(); n > 0 {
 		t.Errorf("%d MUST assertion(s) failed — see the summary above and the artifact dir", n)
 	}
+
+	// A run that did not complete all N trials (model error, credit exhaustion)
+	// is not a green run: its verdicts are graded over fewer trials, so a pass
+	// is not the all-N guarantee (10 §4.2). Surface it as a failure rather than
+	// a misleading PASS — and it must not be accepted as a baseline (accept.go
+	// refuses it too).
+	if n := len(report.TrialErrors); n > 0 {
+		t.Errorf("%d of %d trials did not complete — run is truncated, not acceptable (see trial errors above)",
+			n, report.Attribution.Trials)
+	}
 }
 
 // TestAcceptBaseline commits a completed run's report as the per-model baseline
 // (10 §4.4). Token-free — it reads an existing report.json (RECKON_EVAL_REPORT,
 // else the latest run under artifacts/), never the model. Gated so it never
 // runs in the normal suite; invoke via `make eval-accept`. Refuses a run with
-// MUST failures unless RECKON_EVAL_FORCE=1.
+// MUST failures or aborted trials unless RECKON_EVAL_FORCE=1.
 func TestAcceptBaseline(t *testing.T) {
 	if os.Getenv("RECKON_EVAL_ACCEPT") != "1" {
 		t.Skip("baseline accept disabled; set RECKON_EVAL_ACCEPT=1 (use `make eval-accept`)")

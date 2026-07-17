@@ -88,6 +88,35 @@ func TestAcceptBaseline_RefusesMustFailure(t *testing.T) {
 	}
 }
 
+// TestAcceptBaseline_RefusesTruncatedRun: a run where a trial aborted (model
+// error, credit exhaustion) is not an acceptable baseline unless forced — its
+// verdicts are graded over fewer than N trials. This is the exact gap a
+// credit-exhausted run exposed: all exercised assertions passed (no MUST
+// failure), but two of three trials never completed.
+func TestAcceptBaseline_RefusesTruncatedRun(t *testing.T) {
+	dir := t.TempDir()
+	rep := cleanReport()
+	rep.TrialErrors = []string{"trial 2: turn 8: model call: 400 credit balance too low"}
+	reportPath := writeReport(t, filepath.Join(dir, "run1"), rep)
+	baselineDir := filepath.Join(dir, "baselines")
+
+	_, err := AcceptBaseline(reportPath, baselineDir, false)
+	if err == nil || !strings.Contains(err.Error(), "aborted trial") {
+		t.Fatalf("err = %v; want refusal on a truncated run", err)
+	}
+	if _, statErr := os.Stat(BaselinePath(baselineDir, "s", "m")); statErr == nil {
+		t.Error("baseline written despite an aborted trial")
+	}
+
+	// Force overrides the guard (a deliberate accept of a partial run).
+	if _, err := AcceptBaseline(reportPath, baselineDir, true); err != nil {
+		t.Fatalf("forced accept: %v", err)
+	}
+	if _, statErr := os.Stat(BaselinePath(baselineDir, "s", "m")); statErr != nil {
+		t.Errorf("forced accept did not write the baseline: %v", statErr)
+	}
+}
+
 // TestLatestReport: the newest timestamped run directory wins.
 func TestLatestReport(t *testing.T) {
 	dir := t.TempDir()

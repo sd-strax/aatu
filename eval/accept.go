@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // BaselinePath is where an accepted run's summary is committed for a
@@ -41,11 +42,19 @@ func LatestReport(artifactDir string) (string, error) {
 // diff travels with the prompt change (10 §4.4). It is token-free: it reads a
 // report the run already wrote, never the model.
 //
-// It refuses a report carrying MUST failures unless force is set — a baseline
-// is an ACCEPTED run, and the regression rule is meaningless against a bar that
-// itself fails a correctness/honesty assertion. SHOULD failures are fine to
-// bake (the baseline records the rate for future comparison). Returns the
-// baseline path written.
+// It refuses two kinds of run unless force is set — a baseline is an ACCEPTED
+// run, and both would make it a meaningless bar:
+//
+//   - MUST failures: the regression rule is vacuous against a bar that itself
+//     fails a correctness/honesty assertion.
+//   - Incomplete runs (any trial aborted — model error, credit exhaustion): the
+//     verdicts are graded over fewer than N trials, so the bar is thin (a MUST
+//     "exercised once" is not the all-N guarantee 10 §4.2 promises) and SHOULD
+//     rates carry a different denominator. A truncated run is an infrastructure
+//     failure, not an acceptable baseline.
+//
+// SHOULD failures on a COMPLETE run are fine to bake (the baseline records the
+// rate for future comparison). Returns the baseline path written.
 func AcceptBaseline(reportPath, baselineDir string, force bool) (string, error) {
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {
@@ -57,6 +66,11 @@ func AcceptBaseline(reportPath, baselineDir string, force bool) (string, error) 
 	}
 	if rep.Attribution.ScenarioID == "" || rep.Attribution.Model == "" {
 		return "", fmt.Errorf("eval: report %s has no scenario/model attribution", reportPath)
+	}
+	if n := len(rep.TrialErrors); n > 0 && !force {
+		return "", fmt.Errorf("eval: report has %d aborted trial(s); refusing to accept a truncated run "+
+			"as a baseline (re-run a clean N=%d, or set RECKON_EVAL_FORCE=1 to override):\n  %s",
+			n, rep.Attribution.Trials, strings.Join(rep.TrialErrors, "\n  "))
 	}
 	if n := rep.MustFailures(); n > 0 && !force {
 		return "", fmt.Errorf("eval: report has %d MUST failure(s); refusing to accept as a baseline "+
