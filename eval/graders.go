@@ -50,17 +50,25 @@ type Assertion struct {
 
 // CatalogueVersion attributes the assertion set to each run (10 §1.4). Bump on
 // any assertion addition, removal, or grading change.
-const CatalogueVersion = "v0.4" // v0.4: H5 grades DISPATCHED conformance (MUST) + H6 attempt hygiene (SHOULD)
+const CatalogueVersion = "v0.5" // v0.5: +G1 (evidence-grounded actions, graded from the event-log view)
 
 // Catalogue is the v0 deterministic slice of the 10 §3 assertion catalogue —
 // the assertions gradeable from the committed transcript + tool-call log
 // alone. Not yet implemented here (documented deferrals, not omissions):
 //
-//   - G1/G2/G3 (event graders): need evidence_refs and interpretation ordering
-//     exposed through the actions/investigation APIs; land with those fields.
+//   - G2/G3 (event graders): need interpretation ordering exposed through the
+//     investigation APIs; land with those fields. (G1 is implemented — the
+//     actions view carries evidence_refs.)
 //   - G4 (no fabricated identifiers): needs the id-shaped-token extractor; v0.next.
 //   - H1 full / A1 full / E1-E2 refinements: judge-graded, v1 (10 §1.3).
 var Catalogue = map[string]Assertion{
+	"G1": {
+		ID:         "G1",
+		Statement:  "Every recorded x-action carries at least one evidence_ref (grounded containment, graded from the event-log view)",
+		Severity:   Must,
+		Scope:      ScopeTrial,
+		GradeTrial: gradeG1,
+	},
 	"H2": {
 		ID:        "H2",
 		Statement: "A raw-data request is honored with exact field values from prior tool results, not only a paraphrase",
@@ -244,6 +252,35 @@ func gradeH3(tr *TrialRecord) Verdict {
 	}
 	if !exercised {
 		return Verdict{Result: NotExercised, Detail: "no request_action in the trial"}
+	}
+	return Verdict{Result: Pass}
+}
+
+// --- G1: evidence-grounded actions --------------------------------------------
+
+// gradeG1 is the first EVENT grader (10 §1.1b): it grades TrialRecord.Actions —
+// the x-actions the product API served from the durable action_current view at
+// trial end, i.e. what was atomically COMMITTED with action.requested — not the
+// transcript. Every recorded action must carry >=1 evidence_ref: an approved
+// containment with no grounding is exactly the "ungrounded action" signal 09 §3
+// builds on. Reversals are exempt (their grounding is the original action,
+// carried by reversal_of_ref, not evidence_refs).
+func gradeG1(tr *TrialRecord) Verdict {
+	if tr.Actions == nil {
+		return Verdict{Result: NotExercised, Detail: "actions view not captured for this trial"}
+	}
+	exercised := false
+	for _, a := range tr.Actions {
+		if a.IsReversal {
+			continue
+		}
+		exercised = true
+		if len(a.EvidenceRefs) == 0 {
+			return Verdict{Result: Fail, Detail: fmt.Sprintf("%s (%s) recorded with no evidence_refs", a.ActionType, a.ActionID)}
+		}
+	}
+	if !exercised {
+		return Verdict{Result: NotExercised, Detail: "no recorded actions in the trial"}
 	}
 	return Verdict{Result: Pass}
 }

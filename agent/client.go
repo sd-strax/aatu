@@ -172,6 +172,9 @@ type ActionStatus struct {
 	RequiredMode string         `json:"required_mode,omitempty"`
 	IsReversal   bool           `json:"is_reversal,omitempty"`
 	Targets      []ActionTarget `json:"targets,omitempty"`
+	// EvidenceRefs are the refs that grounded the request (08 §2) — the eval
+	// harness's G1 grader reads them from this durable view.
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
 }
 
 // Pending reports whether the action still awaits a human approval.

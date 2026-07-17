@@ -292,6 +292,7 @@ func TestListInvestigationActions(t *testing.T) {
 	_, first := postAction(t, b, mintToken(t, nil), RequestActionBody{
 		ActionType:       "host.isolate",
 		Targets:          []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-FILE01"}},
+		EvidenceRefs:     []string{"observed-data--od1"},
 		Rationale:        "contain",
 		InvestigationRef: invID.String(),
 	})
@@ -335,6 +336,10 @@ func TestListInvestigationActions(t *testing.T) {
 		iso.RequiredMode != aggregate.AuthModeManual ||
 		len(iso.Targets) != 1 || iso.Targets[0].ResolvedIdentifier != "WIN-FILE01" {
 		t.Errorf("host.isolate row mangled: %+v", iso)
+	}
+	// The grounding surfaces on the durable view (10 §3 G1 reads it here).
+	if len(iso.EvidenceRefs) != 1 || iso.EvidenceRefs[0] != "observed-data--od1" {
+		t.Errorf("evidence_refs not served: %+v", iso.EvidenceRefs)
 	}
 	if dis := byID[second.ActionID]; dis.ActionType != "account.disable" {
 		t.Errorf("account.disable row mangled: %+v", dis)

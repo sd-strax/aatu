@@ -42,6 +42,17 @@ type ParamSpec struct {
 	Required bool   `json:"required"`
 }
 
+// ActionRow is one x-action from the investigation's durable actions view
+// (mirrors agent.ActionStatus without the agent dependency): the event-log
+// truth an auditor reads, and what G1 grades.
+type ActionRow struct {
+	ActionID     string   `json:"action_id"`
+	ActionType   string   `json:"action_type"`
+	Status       string   `json:"status"`
+	IsReversal   bool     `json:"is_reversal,omitempty"`
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+}
+
 // Usage mirrors agent.Usage (token accounting) without importing agent into
 // grader unit tests' synthetic records. Input/Output are uncached tokens;
 // CacheWrite/CacheRead are prompt-caching counters (billed at a premium/discount
@@ -73,6 +84,10 @@ type TrialRecord struct {
 	// ActionInputs is each action type's declared non-entity parameter schema
 	// (08 §3) as served by the backend — H5's ground truth.
 	ActionInputs map[string][]ParamSpec `json:"action_inputs,omitempty"`
+	// Actions is the investigation's x-actions as the product API served them at
+	// trial end — the EVENT-LOG layer read back through the durable view
+	// (10 §1.1b), not the transcript. Event graders (G1) grade these.
+	Actions []ActionRow `json:"actions,omitempty"`
 	// Aborted is set when the trial stopped before completing its script (a
 	// turn-level error); unreached turn-scoped assertions grade NOT_EXERCISED.
 	Aborted bool `json:"aborted,omitempty"`

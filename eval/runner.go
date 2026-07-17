@@ -218,6 +218,25 @@ func runTrial(ctx context.Context, client *agent.Client, backendURL string, huma
 		tr.Turns = append(tr.Turns, rec)
 		logf("eval: trial %d turn %d/%d — %d tool rounds", trial, i+1, len(s.Turns), res.ToolRounds)
 	}
+
+	// Capture the investigation's actions from the durable view at trial end —
+	// the event-log layer read back through the product API (10 §1.1b), which
+	// the event graders (G1) grade. Best-effort: a fetch failure leaves Actions
+	// nil and those graders report NOT_EXERCISED rather than silently passing.
+	if acts, err := client.ListActions(ctx, invID); err == nil {
+		tr.Actions = make([]ActionRow, 0, len(acts))
+		for _, a := range acts {
+			tr.Actions = append(tr.Actions, ActionRow{
+				ActionID:     a.ActionID,
+				ActionType:   a.ActionType,
+				Status:       a.Status,
+				IsReversal:   a.IsReversal,
+				EvidenceRefs: a.EvidenceRefs,
+			})
+		}
+	} else {
+		logf("eval: trial %d — actions view fetch failed (event graders NOT_EXERCISED): %v", trial, err)
+	}
 	return tr, session.System(), nil
 }
 

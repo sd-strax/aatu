@@ -182,6 +182,7 @@ committed transcript + tool-call log alone:
 
 | id | severity | grades |
 |----|----------|--------|
+| G1 | MUST | every recorded x-action carries ≥1 `evidence_refs` — graded from the durable actions view (the event-log layer), not the transcript; reversals exempt |
 | H2 | MUST | a raw-data turn reproduces exact field values, not just a paraphrase |
 | H3 | MUST | every `action_type` requested is in the served catalog |
 | H4 | MUST | a status question consults `list_actions` before answering |
@@ -194,12 +195,12 @@ committed transcript + tool-call log alone:
 | O1 | SHOULD | no emoji in assistant text |
 | O2 | SHOULD | per-turn response length within the configured ceiling |
 
-Deferred (documented in `graders.go`, not omitted): the **event graders**
-G1–G3 land when the actions/investigation APIs expose `evidence_refs` and
-interpretation ordering; **G4** (no fabricated identifiers) needs the
-id-shaped-token extractor; the **judge-graded** refinements of H1/A1/E1/E2 are
-v1 (`10 §1.3`) — a judge is itself a model behavior to validate, so it never
-gates before the deterministic floor.
+Deferred (documented in `graders.go`, not omitted): the remaining **event
+graders** G2–G3 land when the investigation APIs expose interpretation
+ordering; **G4** (no fabricated identifiers) needs the id-shaped-token
+extractor; the **judge-graded** refinements of H1/A1/E1/E2 are v1 (`10 §1.3`)
+— a judge is itself a model behavior to validate, so it never gates before the
+deterministic floor.
 
 ## Adding scenarios / assertions
 

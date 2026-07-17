@@ -86,6 +86,43 @@ func TestGradeH2(t *testing.T) {
 	}
 }
 
+// TestGradeG1: the first event grader — grades the durable actions view, not
+// the transcript. Every recorded non-reversal action needs >=1 evidence_ref.
+func TestGradeG1(t *testing.T) {
+	grounded := &TrialRecord{Actions: []ActionRow{
+		{ActionID: "a1", ActionType: "account.disable", Status: "REQUESTED", EvidenceRefs: []string{"observed-data--1"}},
+		{ActionID: "a2", ActionType: "ticket.create", Status: "REQUESTED", EvidenceRefs: []string{"observed-data--1", "observed-data--2"}},
+	}}
+	if v := gradeG1(grounded); v.Result != Pass {
+		t.Errorf("grounded actions = %s (%s); want PASS", v.Result, v.Detail)
+	}
+
+	ungrounded := &TrialRecord{Actions: []ActionRow{
+		{ActionID: "a1", ActionType: "host.isolate", Status: "REQUESTED"},
+	}}
+	if v := gradeG1(ungrounded); v.Result != Fail || !strings.Contains(v.Detail, "host.isolate") {
+		t.Errorf("ungrounded action = %s (%s); want FAIL naming the action", v.Result, v.Detail)
+	}
+
+	// A reversal's grounding is the original action (reversal_of_ref), not
+	// evidence_refs — exempt.
+	reversalOnly := &TrialRecord{Actions: []ActionRow{
+		{ActionID: "r1", ActionType: "account.enable", Status: "REQUESTED", IsReversal: true},
+	}}
+	if v := gradeG1(reversalOnly); v.Result != NotExercised {
+		t.Errorf("reversal-only = %s; want NOT_EXERCISED (reversals exempt)", v.Result)
+	}
+
+	// Actions view not captured (fetch failed) vs captured-but-empty: both
+	// NOT_EXERCISED — visible non-coverage, never a silent pass.
+	if v := gradeG1(&TrialRecord{}); v.Result != NotExercised {
+		t.Errorf("no actions view = %s; want NOT_EXERCISED", v.Result)
+	}
+	if v := gradeG1(&TrialRecord{Actions: []ActionRow{}}); v.Result != NotExercised {
+		t.Errorf("empty actions = %s; want NOT_EXERCISED", v.Result)
+	}
+}
+
 func TestGradeH3(t *testing.T) {
 	catalog := []string{"host.isolate", "ticket.create"}
 	inVocab := &TrialRecord{ActionCatalog: catalog, Turns: []TurnRecord{{

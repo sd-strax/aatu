@@ -31,12 +31,13 @@ func TestAction_RequestApproveProjection(t *testing.T) {
 
 	actionID := uuid.New()
 	mustHandle(t, h, cmdEnv(aggID), RequestAction{
-		ActionID:   actionID,
-		ActionType: "host.isolate",
-		Tier:       TierT2,
-		Targets:    []TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-DC01"}},
-		ExpiresAt:  time.Now().Add(time.Hour),
-		Rationale:  "contain",
+		ActionID:     actionID,
+		ActionType:   "host.isolate",
+		Tier:         TierT2,
+		Targets:      []TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-DC01"}},
+		EvidenceRefs: []string{"observed-data--od1", "observed-data--od2"},
+		ExpiresAt:    time.Now().Add(time.Hour),
+		Rationale:    "contain",
 	})
 
 	// Projected as REQUESTED with no mode yet.
@@ -49,6 +50,10 @@ func TestAction_RequestApproveProjection(t *testing.T) {
 	}
 	if len(ac.Targets) != 1 || ac.Targets[0].ResolvedIdentifier != "WIN-DC01" {
 		t.Errorf("targets not projected: %+v", ac.Targets)
+	}
+	// The grounding rides the projection (10 §3 G1: the actions API serves it).
+	if len(ac.EvidenceRefs) != 2 || ac.EvidenceRefs[0] != "observed-data--od1" {
+		t.Errorf("evidence_refs not projected: %+v", ac.EvidenceRefs)
 	}
 
 	// Approve (principal "alice" == approver).

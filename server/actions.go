@@ -53,6 +53,7 @@ type ActionView struct {
 	Mode         string                 `json:"mode,omitempty"`
 	IsReversal   bool                   `json:"is_reversal,omitempty"`
 	Targets      []aggregate.TargetSpec `json:"targets,omitempty"`
+	EvidenceRefs []string               `json:"evidence_refs,omitempty"`
 	ExpiresAt    *time.Time             `json:"expires_at,omitempty"`
 }
 
@@ -87,6 +88,7 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 			Mode:         a.Mode,
 			IsReversal:   a.IsReversal,
 			Targets:      a.Targets,
+			EvidenceRefs: a.EvidenceRefs,
 		}
 		if !a.ExpiresAt.IsZero() {
 			t := a.ExpiresAt

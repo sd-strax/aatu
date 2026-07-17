@@ -39,8 +39,12 @@ type ActionCurrent struct {
 	SecondaryApproverPool  []string // who may complete a two-party approval
 	Parameters             json.RawMessage
 	Targets                []TargetSpec
-	ExpiresAt              time.Time // approval deadline frozen at request time; zero = none
-	LastEventSequence      int64
+	// EvidenceRefs are the STIX/OCSF refs that grounded the request (08 §2),
+	// surfaced from the ActionRequested event so the actions API (and the eval
+	// harness's G1 grader) can read grounding without walking the event log.
+	EvidenceRefs      []string
+	ExpiresAt         time.Time // approval deadline frozen at request time; zero = none
+	LastEventSequence int64
 }
 
 // ActionCurrentProjector populates the action_current table — one row per
@@ -74,17 +78,23 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		if len(p.Parameters) > 0 {
 			params = p.Parameters
 		}
+		var evidence []byte
+		if len(p.EvidenceRefs) > 0 {
+			if evidence, err = json.Marshal(p.EvidenceRefs); err != nil {
+				return fmt.Errorf("marshal evidence_refs: %w", err)
+			}
+		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO action_current (
 				action_id, aggregate_id, tenant_id, action_type, tier, status,
 				is_reversal, reversal_of_ref, reversibility, required_mode,
-				secondary_approver_pool, parameters, targets, expires_at,
+				secondary_approver_pool, parameters, targets, evidence_refs, expires_at,
 				created_at, updated_at, last_event_sequence
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17)
 			ON CONFLICT (action_id) DO NOTHING
 		`, p.ActionID, evt.AggregateID, evt.TenantID, p.ActionType, p.Tier, ActionStatusRequested,
 			p.IsReversal, nullUUID(p.ReversalOfRef), nullString(p.Reversibility), nullString(p.RequiredMode),
-			pool, params, targets, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
+			pool, params, targets, evidence, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
 		if err != nil {
 			return fmt.Errorf("insert action_current: %w", err)
 		}
@@ -222,8 +232,8 @@ func (ActionCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) error {
 const actionCurrentColumns = `action_id, aggregate_id, action_type, tier, status, mode,
 	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref,
 	       reversibility, reversed_by_ref, reversal_attempted_by_ref,
-	       required_mode, secondary_approver_pool, parameters, targets, expires_at,
-	       last_event_sequence`
+	       required_mode, secondary_approver_pool, parameters, targets, evidence_refs,
+	       expires_at, last_event_sequence`
 
 // scanActionCurrent decodes one actionCurrentColumns row (sql.Row or sql.Rows).
 func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
@@ -231,11 +241,11 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	var mode, approver, requiredMode, reversibility sql.NullString
 	var primaryAt, expiresAt sql.NullTime
 	var reversalOf, reversedBy, attemptedBy uuid.NullUUID
-	var targets, pool, params []byte
+	var targets, pool, params, evidence []byte
 	err := scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
 		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf,
 		&reversibility, &reversedBy, &attemptedBy,
-		&requiredMode, &pool, &params, &targets, &expiresAt,
+		&requiredMode, &pool, &params, &targets, &evidence, &expiresAt,
 		&a.LastEventSequence)
 	if err != nil {
 		return ActionCurrent{}, err
@@ -263,6 +273,9 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	}
 	if len(targets) > 0 {
 		_ = json.Unmarshal(targets, &a.Targets)
+	}
+	if len(evidence) > 0 {
+		_ = json.Unmarshal(evidence, &a.EvidenceRefs)
 	}
 	return a, nil
 }
