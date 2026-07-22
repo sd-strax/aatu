@@ -13,14 +13,21 @@ import * as vscode from "vscode";
 import { BackendClient } from "./backend";
 
 export function activate(context: vscode.ExtensionContext): void {
+  // A named output channel, so "did it activate?" has a positive answer rather
+  // than silence — the dev host is a noisy place.
+  const log = vscode.window.createOutputChannel("reckon", { log: true });
+  log.info(`workbench activated (backend ${backendUrl()})`);
+
   const client = new BackendClient(() => backendUrl());
 
   const investigations = new InvestigationsProvider(client);
   context.subscriptions.push(
+    log,
     vscode.window.registerTreeDataProvider("reckon.investigations", investigations),
 
     vscode.commands.registerCommand("reckon.checkBackend", async () => {
       const status = await client.status();
+      log.info(`status ${backendUrl()}: ${status.overall}`);
       if (status.reachable) {
         const detail = Object.entries(status.components)
           .map(([name, c]) => `${name}: ${c.ready ? "ready" : "NOT READY"} (${c.message})`)

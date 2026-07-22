@@ -18,10 +18,18 @@ npm run compile     # tsc → out/
 npm run watch
 ```
 
-Open this folder in VS Code and press F5 (Extension Development Host). The extension expects a
-locally running backend (`reckon start` from a built repo, or the release bundle); without one,
-every surface degrades to "not connected" with a pointer — never a crash (fail closed with a
-diagnostic, the house posture).
+Open **this folder** (not the repo root) in VS Code and press F5 → *Run Workbench Extension*. The
+default config launches the Extension Development Host with `--disable-extensions`, so only reckon
+loads: what you see is what an analyst gets, and your own extensions don't react to this folder
+(a C# extension hunting for a project in `workbench/` is the classic false alarm). The second
+config keeps your extensions if you need them.
+
+In the dev host: the reckon icon in the activity bar → **Investigations**. Activation is logged
+to the **reckon** output channel; `reckon: Check Backend Connection` is in the command palette.
+
+The extension expects a locally running backend (`reckon start` from a built repo, or the release
+bundle); without one, every surface degrades to "not connected" with a pointer — never a crash
+(fail closed with a diagnostic, the house posture).
 
 ## Rules that bind this package
 
