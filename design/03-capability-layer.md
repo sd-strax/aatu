@@ -918,7 +918,10 @@ reflection — Go has no `ServiceLoader`/JAR equivalent. In-tree adapters
 self-register from their package `init`; out-of-process adapters (the
 transport-neutral path, see §5.4) are declared in tenant config and reached over
 their protocol. Either way an extension is a new package or a config entry, not
-a change to the core dispatch.
+a change to the core dispatch. The out-of-process packaging, discovery, and
+enablement model — process-per-adapter over JSON-RPC/stdio, manifest +
+`describe` handshake, explicit per-op enablement — is specified in
+`11-adapter-plugins.md`; the semantic contract above is unchanged by it.
 
 ### 5.4 Adapter classes
 
