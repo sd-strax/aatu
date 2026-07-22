@@ -100,6 +100,7 @@ OSS runs anywhere: laptop is the default first-run experience (an afternoon sing
 | 10 | [eval harness](10-eval-harness.md) | Grading the agent's behavior — assertion catalogue, scoring model, baselines. Engineering infrastructure, not a product surface |
 | 11 | [adapter plugins](11-adapter-plugins.md) | Adapters as out-of-process plugins — JSON-RPC/stdio, manifest + `describe` handshake, instance config, explicit per-op enablement |
 | 12 | [adapter distribution](12-adapter-distribution.md) | How adapters travel — packaging, git-repo indexes, signing/digests, install verification, revocation. Upstream half of 11 |
+| 13 | [analyst workbench](13-workbench.md) | The analyst-facing surface — CLI/extension plane split, workbench discipline, surface inventory, profile trim, fork-as-packaging |
 
 One thread explicitly deferred:
 - **Detection authoring tooling** — v2+; data model accommodates it, no new domain primitive needed.
