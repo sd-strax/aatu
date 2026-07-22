@@ -84,7 +84,7 @@ OSS runs anywhere: laptop is the default first-run experience (an afternoon sing
 
 ---
 
-## The eight specs
+## The specs
 
 | # | Spec | Owns |
 |---|---|---|
@@ -96,6 +96,10 @@ OSS runs anywhere: laptop is the default first-run experience (an afternoon sing
 | 06 | [knowledge service](06-knowledge-service.md) | SOP corpus, concluded-investigation summary corpus, retrieval API, audit linkage, embedding model |
 | 07 | [post-conclusion outputs](07-post-conclusion-outputs.md) | Export bundle, IOC extraction, candidate-SOP generation, cross-investigation linkage, ticketing handoff, industry sharing |
 | 08 | [write-side actions](08-write-side-actions.md) | LLM↔tool **write** surface — `request_action`, action descriptors/bindings, the write adapter contract, idempotency, action fixtures. Symmetric twin of 03 |
+| 09 | [agent behavior](09-agent-behavior.md) | Where agent misbehavior gets fixed — engine vs. prompt — and the prompt as a managed artifact. A design discipline, not a hard contract |
+| 10 | [eval harness](10-eval-harness.md) | Grading the agent's behavior — assertion catalogue, scoring model, baselines. Engineering infrastructure, not a product surface |
+| 11 | [adapter plugins](11-adapter-plugins.md) | Adapters as out-of-process plugins — JSON-RPC/stdio, manifest + `describe` handshake, instance config, explicit per-op enablement |
+| 12 | [adapter distribution](12-adapter-distribution.md) | How adapters travel — packaging, git-repo indexes, signing/digests, install verification, revocation. Upstream half of 11 |
 
 One thread explicitly deferred:
 - **Detection authoring tooling** — v2+; data model accommodates it, no new domain primitive needed.

@@ -360,11 +360,9 @@ The write-side adapter contract (operation declaration, idempotency key, `adapte
 
 ### 6.3 Adapter discovery
 
-Adapters are discovered through signed manifests distributed via reckon's CDN (the adapter registry; §11). Each manifest declares: adapter name, version, `AdapterClass` (MCP / NATIVE_API / CUSTOM / SOAR_PLAYBOOK / FIXTURE; 03 §5.4), supported operations, parameter schemas, supported action types (for write-side adapters), and a verification signature.
+Adapters are distributed as content-addressed, signed artifacts listed in adapter indexes — git repos, not a registry service — and verified client-side (digest + publisher signature) at install; tenants pin versions per-tenant by digest. The full distribution model — packaging, the index format and multi-index resolution, sigstore signing, the install/upgrade/revocation flows — is specified in 12-adapter-distribution.md, which absorbs the earlier sketch of this section. The canonical index's static hosting rides the reckon-operated surface (§11.1).
 
-Tenants pin specific adapter versions in their config. Pinning is per-tenant; there is no global version. Adapter binaries are downloaded on demand and cached locally; manifests verify against the reckon CDN's signing key before any binary is invoked.
-
-This section owns *distribution* (how a verified adapter reaches the local install). The local side — install layout, the manifest-for-enumeration / handshake-for-truth split, the plugin process model, and the explicit per-op enablement gates that decide what an installed adapter contributes to the catalogs — is specified in 11-adapter-plugins.md.
+The local side — install layout, the manifest-for-enumeration / handshake-for-truth split, the plugin process model, instance configuration, and the explicit per-op enablement gates that decide what an installed adapter contributes to the catalogs — is specified in 11-adapter-plugins.md.
 
 ### 6.4 Verb and action-type registration
 

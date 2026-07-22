@@ -17,9 +17,10 @@ config names it.**
 | Owned here (`11`) | Owned elsewhere (authoritative) |
 |---|---|
 | The plugin process model and JSON-RPC/stdio transport (elevates `03 §5.4`'s deferral) | The `Adapter` / `WriteAdapter` semantic contracts (`03 §5.3`, `08 §5`) |
-| The local install layout and manifest format | Distribution and signing: the adapter registry on the CDN (`05 §6.3`, `05 §11`) |
-| The `initialize`/`describe` handshake and protocol versioning | Descriptor semantics: `CapabilityDescriptor` (`03 §5.1`), `ActionDescriptor` (`08 §3`) |
-| The enablement model (adapter gate, per-op allowlist, read/write asymmetry) | Binding resolution and health (`03 §3`, `08 §4`), Gate 2 and tiers (`04`) |
+| The local install layout and manifest format | Distribution: packaging, indexes, signing, install verification (`12-adapter-distribution.md`) |
+| The `initialize`/`describe`/`configure` handshake and protocol versioning | Descriptor semantics: `CapabilityDescriptor` (`03 §5.1`), `ActionDescriptor` (`08 §3`) |
+| Adapter instance configuration: the config schema, the `x-secret` rule, delivery (`§4.3`) | Credential storage and resolution (`05 §10.2`) |
+| The enablement model (adapter gate, per-op allowlist, read/write asymmetry, named instances) | Binding resolution and health (`03 §3`, `08 §4`), Gate 2 and tiers (`04`) |
 | Fail-closed rules on install, upgrade, and drift | Verb/action-type registration flow (`05 §6.4`) |
 
 ### Out of scope
@@ -31,10 +32,10 @@ config names it.**
   catalogs. Whether a given request may proceed is Gate 2, trust tiers, and the blast-radius
   escalator (`04`), evaluated per request. Nothing here is a substitute for that, and nothing here
   duplicates it.
-- **Distribution and trust of adapter binaries.** Signed manifests, the CDN registry, version
-  pinning, and signature verification are `05 §6.3`/`§11`. This spec consumes an installed,
-  verified adapter directory and is agnostic about how it got there (registry download, package
-  manager, `git clone && make`).
+- **Distribution and trust of adapter binaries.** Packaging, the index model, signing, digest
+  verification, upgrade, and revocation are `12-adapter-distribution.md`. This spec consumes an
+  installed, verified adapter directory and is agnostic about how it got there (index install,
+  mirror, `git clone && make`).
 - **Credential resolution.** Adapters receive a `credentials_ref`; resolution is the uniform
   scheme in `05 §10.2`.
 
@@ -88,9 +89,11 @@ Lifecycle:
 
 1. **Spawn** — the backend launches the executable named by the manifest (`§3`), with no
    credentials in the environment (`05 §10.2`: credentials resolve per-invocation, not per-process).
-2. **Handshake** — `initialize` (`§4`) negotiates protocol version and returns the adapter's
-   self-description. A failed or timed-out handshake marks the adapter `UNHEALTHY`; its
-   contributions surface as unavailable in the catalogs (`03 §6.3`) and nothing else happens.
+2. **Handshake** — `initialize` (`§4.1`) negotiates protocol version, `describe` (`§4.2`) returns
+   the adapter's self-description, and `configure` (`§4.3`) delivers the instance's validated
+   config as the final step. A failed or timed-out handshake — including a rejected `configure` —
+   marks the adapter `UNHEALTHY`; its contributions surface as unavailable in the catalogs
+   (`03 §6.3`) and nothing else happens.
 3. **Serve** — `invoke` / `dispatch` / `health` calls per the `03`/`08` contracts, mapped 1:1 onto
    JSON-RPC methods. Concurrency is per-adapter declared in the handshake (default: serial), so a
    single-threaded script is a valid adapter.
@@ -125,9 +128,14 @@ version: 0.3.1                 # adapter's own semver
 protocol_versions: [1]         # plugin protocol versions supported (§4.1)
 class: NATIVE_API              # 03 §5.4; one class per adapter process
 exec: ["./reckon-adapter-okta"]
+requires: []                   # ambient runtime prerequisites an author cannot bundle
+                               # (e.g. "python3 >= 3.11"); checked by `reckon check` (12 §2)
 summary:                       # CLAIMED capabilities — enumeration only, never authority
   verbs: [enumerate_logons, get_entity_context]
   action_types: [account.disable, account.enable]
+config_schema: {...}           # CLAIMED copy of §4.3's schema, same status as summary:
+                               # lets `reckon check` and an enablement UI render the config
+                               # form without spawning a disabled adapter
 ```
 
 The manifest answers exactly one question: **"what is installed here?"** — cheaply, statically,
@@ -174,6 +182,7 @@ describe()
       action_types: [ActionDescriptor…],       # 08 §3
       operations:   [op name + param schema…], # what invoke/dispatch will accept
       default_bindings: [Binding…],            # 03 §3.2 / 08 §4 stanzas, ready to adopt
+      config_schema: {…},                      # instance configuration schema (§4.3)
     }
 ```
 
@@ -211,6 +220,51 @@ Two hard rules on what `describe` output may do:
   still only raise it. This is the same posture as freezing reversibility onto the x-action at
   request time: adapter claims and catalog edits never out-vote the recorded decision.
 
+### 4.3 `configure` — instance configuration
+
+Adapters need per-tenant, non-secret configuration that is neither a credential nor a binding
+parameter: a tenant-specific base URL, an org identifier, a timeout. The adapter declares what it
+needs; the tenant supplies values; the engine validates and delivers. The author never decides
+where values are stored, and the operator never learns an adapter's internals.
+
+**Declaration.** `describe` returns `config_schema` — plain JSON Schema (no new invention:
+required/optional, defaults, `description` strings that become prompt text and error messages)
+plus one reckon extension:
+
+```json
+"config_schema": {
+  "type": "object",
+  "required": ["org_url"],
+  "properties": {
+    "org_url":       {"type": "string", "format": "uri",
+                      "description": "Okta org base URL, e.g. https://acme.okta.com"},
+    "api_timeout_s": {"type": "integer", "default": 30},
+    "client_secret": {"type": "string", "x-secret": true}
+  }
+}
+```
+
+**The `x-secret` rule.** A field marked `x-secret` is the seam between config and credentials:
+the engine *requires* its value in tenant config to be a vault reference and refuses a literal at
+config load. Secret-marked values are resolved per-invocation alongside `credentials_ref`
+(`05 §10.2`) and are passed to `configure` as unresolved refs — plaintext secrets never appear in
+the tenant file, in the adapter's environment, or in the handshake. The author marks *which*
+fields are secret; the engine's credential posture applies mechanically.
+
+**Supply.** Values live in the instance's enablement stanza (`§5`), under `config:`. Two
+validation passes, in the manifest-for-enumeration / handshake-for-truth pattern:
+
+1. **Config load** — validated against the manifest's claimed `config_schema`, without spawning
+   anything (the same posture as param templates validating at config load, `03 §3.3`). A missing
+   required field fails `reckon check` with the schema's own `description` as the message.
+2. **Handshake** — re-validated against the *described* schema (the authority), then delivered as
+   the final handshake step: `configure(config)`. The adapter may reject with a diagnostic →
+   `UNHEALTHY`, surfaced like any health failure.
+
+**Drift** rides `§6.3`: an upgrade that adds a required config field the tenant hasn't set marks
+the instance unavailable with a diagnostic naming the field — config is never guessed. A new
+optional field with a default changes nothing.
+
 ---
 
 ## 5. Enablement: explicit at two levels
@@ -222,6 +276,10 @@ is tenant config (the same file as `03 §3.2`), and it is two gates deep:
 adapters:
   okta:
     enabled: true                # gate 0 — without this, the adapter is never even spawned
+    config:                      # instance configuration, validated per §4.3
+      org_url: https://acme.okta.com
+      client_secret: vault://okta/client-secret   # x-secret field: a literal here is a
+                                                  # config-load error
     reads:
       - enumerate_logons         # per-op, explicit…
       - get_entity_context
@@ -231,6 +289,21 @@ adapters:
       account.enable:
         priority: 10             # overrides only where the tenant diverges (03 §3.2 fields)
 ```
+
+**Named instances.** The key under `adapters:` is an *instance* name; an optional `adapter:`
+field names the installed adapter it runs, defaulting to the key — so the single-instance config
+above is the degenerate case and pays nothing. Two Okta orgs are two instances of one install:
+
+```yaml
+adapters:
+  okta-acme:   {adapter: okta, config: {org_url: "https://acme.okta.com"},       reads: [...]}
+  okta-subsid: {adapter: okta, config: {org_url: "https://subsidiary.okta.com"}, reads: [...]}
+```
+
+Each instance is its own process, own `configure`, own enablement lists, own bindings, own
+health; binding references (`03 §3.2`) name instances, not installs. Instance identity is settled
+now, in v0, because retrofitting it later would churn every binding reference; the feature costs
+one optional field.
 
 The read/write asymmetry is the load-bearing decision:
 
@@ -254,6 +327,17 @@ Enablement is config-plane, not investigation-plane: editing it is an operator/t
 In v0 solo-localhost those are the same person editing the same YAML; the seam matters when a UI
 fronts this config (the checklist renders in the extension, the authority stays in tenant config)
 and when tenancy separates the roles (`05 §4`).
+
+Hand-editing is the escape hatch, not the intended experience. Because every question a setup
+flow must ask is *derived* — config prompts from the `§4.3` schema (descriptions and defaults
+included), op checklists from `describe` filtered through the catalog, tier annotations from
+`§4.2` — an interactive `reckon adapter enable <instance>` and a schema-generated form in the
+extension both come nearly for free, and both write the same YAML an operator could write by
+hand. Secrets are the flow's one materially better path: the operator pastes a value once, the
+engine stores it in the vault and writes the `vault://` ref into the config itself. The design
+rule: **the tenant config file stays the single source of truth; every tool is sugar that edits
+it** — so the file remains diffable, reviewable, portable to an airgapped box, and `reckon check`
+validates it identically no matter who or what wrote it.
 
 ---
 
@@ -283,6 +367,9 @@ the enablement list at handshake time:
 - Changed default binding for an adopted op → the new default applies only where the tenant hadn't
   overridden; a changed *param schema* that invalidates the tenant's overrides marks the binding
   unavailable with a diagnostic rather than dispatching on a guess.
+- Changed `config_schema` → the instance's `config:` block is re-validated (`§4.3`); a new
+  required field the tenant hasn't set marks the *instance* unavailable with a diagnostic naming
+  the field. A new optional field with a default changes nothing.
 
 The same rule at first enablement: `enabled: true` with empty `reads`/`actions` enables nothing.
 
@@ -309,11 +396,12 @@ The intended authoring loop — scaffold, implement, `reckon adapter test`, inst
 
 ## 8. Open questions / deferred to v1+
 
-- **Local trust for non-registry installs.** Registry installs verify signatures (`05 §6.3`).
-  Whether a manually installed adapter requires an operator-recorded checksum or allowlist entry
-  before first spawn, or whether presence in `<data>/adapters/` plus explicit enablement is
-  sufficient, is deferred. The enablement gate means the exposure is an operator who both installed
-  and enabled a malicious adapter — real, but not v0's threat model on a solo localhost.
+- **Local trust for non-index installs** — *settled by `12 §5.3`*: verification gates are
+  independent, so a manual install skips digest and signature verification but keeps conformance,
+  enablement, and Gate 2 unconditionally; `reckon check` labels it `unverified-origin` so the
+  narrowing is visible. No operator-recorded checksum is required — the residual exposure is an
+  operator who both installed and enabled a malicious adapter, which no local checksum ceremony
+  would change.
 - **Socket/remote transport.** stdio assumes parent-child on one host. The cloud-side worker
   fleet (`05 §6.1`) and long-lived adapters (connection-pooling daemons) want a socket or HTTP
   carrier for the same RPC surface. Deferred; the protocol is transport-agnostic by construction.
@@ -333,5 +421,5 @@ The intended authoring loop — scaffold, implement, `reckon adapter test`, inst
 ---
 
 *End of spec. The semantic contracts this protocol carries are `03 §5` (read) and `08 §5` (write);
-distribution and signing are `05 §6.3`/`§11`; the authorization layer that enablement must never
-be confused with is `04`.*
+how an adapter directory arrives verified is `12-adapter-distribution.md`; the authorization layer
+that enablement must never be confused with is `04`.*
