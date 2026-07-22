@@ -1,4 +1,4 @@
-.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval eval-accept eval-regrade
+.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval eval-accept eval-regrade workbench-ci
 .DEFAULT_GOAL := help
 
 help: ## List available targets
@@ -52,3 +52,6 @@ eval-accept: ## Accept the latest eval run as the committed per-model baseline (
 
 eval-regrade: ## Re-grade the latest run's committed trials with the current grader catalogue (token-free); rewrites its report.json. Refuses if the driver script changed since the run.
 	RECKON_EVAL_REGRADE=1 go test -count=1 -run '^TestRegradeRun$$' -v ./eval/
+
+workbench-ci: ## Install + compile the VS Code extension (workbench/). Requires Node; never part of `ci` — engine work stays Go-only.
+	cd workbench && npm ci && npm run compile

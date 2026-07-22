@@ -93,6 +93,16 @@ chrome, not missing features); the extension's surfaces are stable enough that u
 cost is amortizable; and distribution logistics (signing, updates) have an owner. Absent those,
 the profile posture stands.
 
+**Residence and packaging.** The extension lives in the engine repo as `workbench/`
+(`implementation/module-layout.md` has the full rationale): its contract is the backend HTTP API,
+which churns with every `§7` step, so one repo keeps server and surface in atomic commits. It
+ships as its own artifact — a `.vsix` with its own version — on three channels: the VS Code
+Marketplace, OpenVSX from day one (the trimmed distribution above can only consume OpenVSX;
+early dual-publishing is what keeps "fork = packaging" true), and release-attached for airgapped
+sideload. The extension never bundles the engine — it talks to a locally running backend and
+asserts a compatible version at the `/status` handshake, failing closed with a diagnostic on
+mismatch.
+
 ---
 
 ## 3. The workbench discipline

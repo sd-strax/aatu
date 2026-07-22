@@ -233,7 +233,34 @@ Examples:
 
 - `reckon/aggregate/` — yes, public OSS commitment for the event-sourcing layer.
 - `reckon/internal/pgutil/` — Postgres helpers; not part of the public API.
+- `reckon/workbench/` — the VS Code extension; OSS, in-tree, separately shipped (see below).
 - `reckon-enterprise/tenancy/` — paid tenancy module implementation.
+
+## The workbench (VS Code extension)
+
+The analyst surface (`design/13-workbench.md`) lives in this repo as `workbench/` — a TypeScript
+VS Code extension developed in the engine's tree and shipped as its own artifact.
+
+**Residence.** In-tree because the extension's contract is the backend HTTP API, and that contract
+churns with every step of the v0 slice (`design/13 §7`): one repo keeps `server/` and the surface
+in atomic commits and one review scope, with the specs that bind both. Toolchains stay isolated —
+`make ci` remains pure Go and never requires Node; `make workbench-ci` runs the Node side. The
+split-out trigger mirrors the fork criteria in `design/13 §2`: a stable API contract plus genuinely
+divergent release cadences. Extraction later is cheap; cross-repo coordination through the churn
+phase is the expensive direction.
+
+**Packaging.** The extension ships as a `.vsix` with its own version, on three channels: the
+VS Code Marketplace, OpenVSX **from day one** (the trimmed-distribution option in `design/13 §2`
+can only consume OpenVSX — early dual-publishing is what keeps "fork = packaging" true), and
+release-attached for airgapped sideload. It never bundles the engine: the backend, supervisor, and
+adapters arrive via the engine bundle (`make bundle`), and the extension talks to a locally
+running backend, asserting a compatible version at the `/status` handshake — fail closed with a
+diagnostic on mismatch, lockstep versioning at v0.
+
+**Open-core posture.** The extension is wholly OSS with zero paid awareness — the same posture as
+the engine. Paid capability lights up server-side behind the `module/` interfaces; the extension
+renders whatever the backend serves. There is no paid extension, and the repo boundary story is
+unchanged by the workbench.
 
 ## What the seam's initial commits look like
 

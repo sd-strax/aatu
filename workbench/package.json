@@ -1,0 +1,77 @@
+{
+  "name": "reckon-workbench",
+  "displayName": "reckon",
+  "description": "AI-native investigation workbench for threat hunters and IR responders",
+  "version": "0.0.1",
+  "publisher": "reckon",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "reckon",
+          "title": "reckon",
+          "icon": "media/reckon.svg"
+        }
+      ]
+    },
+    "views": {
+      "reckon": [
+        {
+          "id": "reckon.investigations",
+          "name": "Investigations"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "reckon.checkBackend",
+        "category": "reckon",
+        "title": "Check Backend Connection"
+      },
+      {
+        "command": "reckon.refreshInvestigations",
+        "category": "reckon",
+        "title": "Refresh Investigations",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "reckon.refreshInvestigations",
+          "when": "view == reckon.investigations",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "reckon",
+      "properties": {
+        "reckon.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "Base URL of the locally running reckon backend."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0"
+  }
+}
