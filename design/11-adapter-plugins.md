@@ -245,11 +245,23 @@ plus one reckon extension:
 ```
 
 **The `x-secret` rule.** A field marked `x-secret` is the seam between config and credentials:
-the engine *requires* its value in tenant config to be a vault reference and refuses a literal at
-config load. Secret-marked values are resolved per-invocation alongside `credentials_ref`
-(`05 §10.2`) and are passed to `configure` as unresolved refs — plaintext secrets never appear in
-the tenant file, in the adapter's environment, or in the handshake. The author marks *which*
-fields are secret; the engine's credential posture applies mechanically.
+the engine *requires* its value in tenant config to be a **secret reference, never a literal** —
+a literal is refused at config load. Three reference schemes, all resolved per-invocation
+alongside `credentials_ref` and passed to `configure` as unresolved refs:
+
+- `keychain://…` — the OS credential store (macOS Keychain, Linux secret-service, Windows
+  Credential Manager). The v0 solo-laptop default: OS access control, encrypted at rest.
+- `env://NAME` — resolved from the *backend's* environment at invocation time (adapters still
+  spawn with a clean environment, `§2`). The CI/server pattern, where a secrets manager injects
+  env. Honest caveat, stated rather than papered over: weakest at rest — readable by anything
+  that can read the backend's process environment.
+- `vault://…` — the uniform scheme of `05 §10.2`; the team/SaaS answer.
+
+Plaintext secrets never appear in the tenant file, the adapter's environment, the handshake — or
+**the conversation**: chat content reaches the LLM provider and persists in the transcript
+side-store (`02`), so secret *capture* is always out-of-band — a native secure-input dialog, an
+env var set outside reckon — never a chat message (`§5.1`). The author marks *which* fields are
+secret; the engine's posture applies mechanically.
 
 **Supply.** Values live in the instance's enablement stanza (`§5`), under `config:`. Two
 validation passes, in the manifest-for-enumeration / handshake-for-truth pattern:
@@ -278,8 +290,9 @@ adapters:
     enabled: true                # gate 0 — without this, the adapter is never even spawned
     config:                      # instance configuration, validated per §4.3
       org_url: https://acme.okta.com
-      client_secret: vault://okta/client-secret   # x-secret field: a literal here is a
-                                                  # config-load error
+      client_secret: keychain://reckon/okta-client-secret   # x-secret field: any secret-ref
+                                                            # scheme (§4.3); a literal here is
+                                                            # a config-load error
     reads:
       - enumerate_logons         # per-op, explicit…
       - get_entity_context
@@ -333,11 +346,43 @@ flow must ask is *derived* — config prompts from the `§4.3` schema (descripti
 included), op checklists from `describe` filtered through the catalog, tier annotations from
 `§4.2` — an interactive `reckon adapter enable <instance>` and a schema-generated form in the
 extension both come nearly for free, and both write the same YAML an operator could write by
-hand. Secrets are the flow's one materially better path: the operator pastes a value once, the
-engine stores it in the vault and writes the `vault://` ref into the config itself. The design
-rule: **the tenant config file stays the single source of truth; every tool is sugar that edits
-it** — so the file remains diffable, reviewable, portable to an airgapped box, and `reckon check`
-validates it identically no matter who or what wrote it.
+hand. Secrets are the flow's one materially better path: the operator supplies a value once
+through a secure input, the engine stores it in the chosen backend and writes the secret
+*reference* into the config itself. The design rule: **the tenant config file stays the single
+source of truth; every tool is sugar that edits it** — so the file remains diffable, reviewable,
+portable to an airgapped box, and `reckon check` validates it identically no matter who or what
+wrote it.
+
+### 5.1 The conversational surface
+
+The highest-value moment to enable capability is mid-investigation: a verb comes back
+`coverage: GAP`, and the adapter that would close the gap is sitting installed-not-enabled.
+Making the analyst leave the conversation to edit YAML is the wrong answer; letting the *model*
+edit config is a worse one. Enablement and configuration may happen in the chat, under three
+rules that keep the file-is-authority and AI-is-a-delegate invariants intact:
+
+- **Chat is the place, never the author.** The extension renders the `§4.3` schema as a native
+  form widget inline in the conversation. The model never generates the form, and free-text
+  model output is never parsed into config. The model *may* prefill a field from conversation
+  context — visibly, into an editable field the human reads before confirming — but a prefill is
+  a suggestion, not a value. A plausible hallucinated `org_url` silently applied is exactly the
+  failure mode this rule exists to prevent.
+- **The agent proposes; only the human applies.** No tool available to the model changes
+  enablement or config — an agent that could enable ops would have a side door around the entire
+  authorization design (self-authorization with extra steps, the same reason `Actor.Kind ==
+  AI_DELEGATED` can never approve an action). The confirm is a native affordance bound to the
+  human's identity (JWT, config-plane role check), and the write lands in the tenant config file
+  like every other tool's — the chat widget is one more consumer of "sugar that edits the file."
+- **Every change is recorded.** An enablement or config change is a recorded, attributed
+  config-plane event: `actor.principal` is the confirming human; `actor.delegate` notes the AI
+  where it assembled the proposal. Conversational ergonomics make config changes casual, and
+  casual changes are the ones that need an audit trail (`§8`, provenance — settled).
+
+Secrets follow `§4.3`: the widget presents the *choice* of secret backend (keychain, env var,
+vault); the value itself is captured out-of-band through a native secure input and never enters
+the conversation. This subsection is also the first concrete surface handed to the extension
+design: the inline form, the confirm affordance, and the secure-input dialog are extension
+components, with the authority unchanged beneath them.
 
 ---
 
@@ -351,9 +396,18 @@ enabled" surface. No spawn, no catalog entry, no binding.
 ### 6.2 Visibility of the disabled
 
 The catalogs gain a third axis alongside health: a capability can be *installed but not enabled*.
-`list_capabilities` / `list_action_types` (`03 §2.8`, `§6.3`) do **not** show these to the agent —
-the LLM sees only what is usable. They surface to the *operator* (in `reckon check` and the future
-enablement UI), so newly installed or newly added capability is discoverable without being active.
+`list_capabilities` / `list_action_types` (`03 §2.8`, `§6.3`) do **not** show these to the agent
+as usable — the LLM's tool surface contains only what is enabled and healthy. They surface to the
+*operator* (in `reckon check` and the enablement UI), so newly installed or newly added
+capability is discoverable without being active.
+
+One deliberate amendment born of the conversational surface (`§5.1`): the agent *may* receive a
+**hint** that a gap is closable — a catalog note that installed-but-not-enabled capability exists
+relevant to a failed or missing verb — so it can say "the okta adapter could answer this; it's
+installed but not enabled — want to set it up?" instead of dead-ending. The hint is mentionable,
+never actionable: the safety property here never rested on the agent's ignorance, it rests on the
+agent having **no tool** that changes enablement (`§5.1`). Blindness was economy; the tool gap is
+the guarantee.
 
 ### 6.3 Drift
 
@@ -413,10 +467,12 @@ The intended authoring loop — scaffold, implement, `reckon adapter test`, inst
   wanting read verbs and write ops in one binary currently ships two adapters sharing a client
   library. If that proves heavy in practice, allowing one process to describe both surfaces is a
   protocol-compatible relaxation.
-- **Enablement provenance.** Whether flipping an op from disabled→enabled should itself be a
-  recorded, attributed event (config-plane audit) rather than a config-file diff. Leans yes once
-  tenancy separates operator from analyst; v0's config file under version control is an
-  acceptable interim answer.
+- **Enablement provenance** — *settled by `§5.1`*: enablement and config changes are recorded,
+  attributed config-plane events (human principal; AI delegate noted where it assembled the
+  proposal). The conversational surface makes config changes casual enough that a config-file
+  diff stopped being an acceptable audit answer. The event carrier (whether these live in the
+  main event table or a config-plane sibling) is an implementation-time decision; the requirement
+  — recorded, attributed, human-principal — is not.
 
 ---
 
