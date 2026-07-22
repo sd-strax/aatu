@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -16,25 +15,14 @@ func BaselinePath(baselineDir, scenario, model string) string {
 	return filepath.Join(baselineDir, scenario+"--"+model+".json")
 }
 
-// LatestReport returns the newest report.json under artifactDir. Runs are
-// written to timestamped directories (`<scenario>-<YYYYMMDD-HHMMSS>`), so
-// lexical order on the directory name is chronological.
+// LatestReport returns the newest report.json under artifactDir (see
+// LatestRunDir for the ordering contract).
 func LatestReport(artifactDir string) (string, error) {
-	entries, err := os.ReadDir(artifactDir)
+	dir, err := LatestRunDir(artifactDir)
 	if err != nil {
-		return "", fmt.Errorf("eval: read artifact dir %s: %w", artifactDir, err)
+		return "", err
 	}
-	var dirs []string
-	for _, e := range entries {
-		if e.IsDir() {
-			dirs = append(dirs, e.Name())
-		}
-	}
-	if len(dirs) == 0 {
-		return "", fmt.Errorf("eval: no runs under %s", artifactDir)
-	}
-	sort.Strings(dirs)
-	return filepath.Join(artifactDir, dirs[len(dirs)-1], "report.json"), nil
+	return filepath.Join(dir, "report.json"), nil
 }
 
 // AcceptBaseline reduces a run's report to its committable summary (scores, not

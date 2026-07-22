@@ -1,4 +1,4 @@
-.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval eval-accept
+.PHONY: help build test test-all test-race run vet tidy hooks clean ci ci-full bundle lint eval eval-accept eval-regrade
 .DEFAULT_GOAL := help
 
 help: ## List available targets
@@ -49,3 +49,6 @@ eval: ## Behavioral eval run (design/10): real model + running local stack; cost
 
 eval-accept: ## Accept the latest eval run as the committed per-model baseline (design/10 §4.4). Token-free; refuses a MUST-failing or truncated run (RECKON_EVAL_FORCE=1 to override).
 	RECKON_EVAL_ACCEPT=1 go test -count=1 -run '^TestAcceptBaseline$$' -v ./eval/
+
+eval-regrade: ## Re-grade the latest run's committed trials with the current grader catalogue (token-free); rewrites its report.json. Refuses if the driver script changed since the run.
+	RECKON_EVAL_REGRADE=1 go test -count=1 -run '^TestRegradeRun$$' -v ./eval/

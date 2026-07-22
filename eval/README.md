@@ -174,6 +174,28 @@ Baselines are **per-model**, and the supported-model set is baseline-defined:
 "reckon supports model X" is true exactly when X has a passing baseline for the
 current prompt + catalogue.
 
+### Grader fixes: regrade, don't re-run
+
+```bash
+make eval-regrade      # re-grades the latest run's trial records with the current catalogue
+```
+
+Graders are deterministic over the committed trial records (`trial-*.json` under
+the run's artifact dir), so a **grader** fix never requires re-spending a model
+run: `eval-regrade` reloads the trials, re-runs `Grade`, rewrites the run's
+`report.json`, and applies the same post-run checks as `make eval` (regression
+vs. baseline, MUST failures, truncation). Attribution is preserved — it
+describes the trials — except `catalogue_version`, restamped from the code doing
+the grading. It **refuses** a run whose recorded driver hash differs from the
+current scenario script (those trials answered a different script — re-run), and
+a run whose trial files don't round-trip completely (a partial regrade would
+silently change the SHOULD denominator).
+
+First live use: a marker-tripwire false positive (E1 grepped
+`"you're absolutely right"` out of a turn that *quoted the phrase in order to
+refuse it* — use vs. mention). Fix the grader, `make eval-regrade`,
+`make eval-accept` — $0 instead of a fresh N=3.
+
 ## The assertion catalogue
 
 Defined in [`graders.go`](graders.go) (`Catalogue`, version `CatalogueVersion`),

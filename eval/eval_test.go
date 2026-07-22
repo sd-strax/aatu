@@ -93,3 +93,49 @@ func TestAcceptBaseline(t *testing.T) {
 	}
 	fmt.Printf("accepted %s\n  as baseline %s\n  (commit it alongside the prompt change — 10 §4.4)\n", reportPath, path)
 }
+
+// TestRegradeRun re-grades the latest run's committed trial records with the
+// current grader catalogue and rewrites its report.json (Regrade). Token-free —
+// graders are deterministic over the recorded trials, so a grader fix never
+// requires re-spending a model run. Gated so it never runs in the normal
+// suite; invoke via `make eval-regrade`. Runs the same post-run checks as
+// TestEvalRun (regression vs baseline, MUST failures, truncation) so a
+// regraded run answers the same question a live run does.
+func TestRegradeRun(t *testing.T) {
+	if os.Getenv("RECKON_EVAL_REGRADE") != "1" {
+		t.Skip("regrade disabled; set RECKON_EVAL_REGRADE=1 (use `make eval-regrade`)")
+	}
+	runDir := os.Getenv("RECKON_EVAL_RUN")
+	if runDir == "" {
+		d, err := LatestRunDir("artifacts")
+		if err != nil {
+			t.Fatalf("find latest run: %v", err)
+		}
+		runDir = d
+	}
+	report, err := Regrade(runDir, filepath.Join("scenarios", "lateral-movement.yaml"))
+	if err != nil {
+		t.Fatalf("regrade: %v", err)
+	}
+	fmt.Printf("regraded %s with catalogue %s\n", runDir, report.Attribution.CatalogueVersion)
+	fmt.Println(report.Summary())
+
+	baselinePath := BaselinePath("baselines", report.Attribution.ScenarioID, report.Attribution.Model)
+	base, err := LoadBaseline(baselinePath)
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if base == nil {
+		t.Logf("no committed baseline at %s — first run for this scenario+model", baselinePath)
+	}
+	for _, reg := range report.Regressions(base) {
+		t.Errorf("regression vs baseline: %s", reg)
+	}
+	if n := report.MustFailures(); n > 0 {
+		t.Errorf("%d MUST assertion(s) failed — see the summary above and the artifact dir", n)
+	}
+	if n := len(report.TrialErrors); n > 0 {
+		t.Errorf("%d of %d trials did not complete — run is truncated, not acceptable",
+			n, report.Attribution.Trials)
+	}
+}
