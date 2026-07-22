@@ -23,6 +23,9 @@ coverage.html
 # IDE
 .idea/
 .vscode/
+# ...except the workbench's, which is shipped project config: launch/tasks are
+# how a contributor runs the extension, not personal editor state.
+!workbench/.vscode/
 *.swp
 *~
 
