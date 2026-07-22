@@ -2,24 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // One config on purpose: F5 should never be ambiguous about what it
+      // launched. --disable-extensions keeps the dev host clean, so Output and
+      // behavior are the extension as an analyst gets it, not your personal
+      // extension set reacting to this folder. Drop that arg temporarily if you
+      // need your own extensions loaded.
       "name": "Run Workbench Extension",
       "type": "extensionHost",
       "request": "launch",
-      "args": [
-        // --disable-extensions keeps the dev host clean: only reckon loads, so
-        // Output/behavior is the extension as an analyst gets it, not your
-        // personal extension set reacting to this folder.
-        "--disable-extensions",
-        "--extensionDevelopmentPath=${workspaceFolder}"
-      ],
-      "outFiles": ["${workspaceFolder}/out/**/*.js"],
-      "preLaunchTask": "npm: compile"
-    },
-    {
-      "name": "Run Workbench Extension (with your extensions)",
-      "type": "extensionHost",
-      "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "args": ["--disable-extensions", "--extensionDevelopmentPath=${workspaceFolder}"],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: compile"
     }
