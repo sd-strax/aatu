@@ -127,8 +127,13 @@ func TestInit_ProvisionsAdminSecret(t *testing.T) {
 	if supplied.KeycloakAdminPassword != "operator-chosen" {
 		t.Errorf("supplied password not honored: got %q", supplied.KeycloakAdminPassword)
 	}
-	if !supplied.KeycloakAdminGenerated {
-		t.Error("a supplied password on a fresh store should still report created=true")
+	// A supplied value is "set from input", NOT "generated" — so the CLI labels
+	// it correctly and never echoes a password the operator already chose.
+	if supplied.KeycloakAdminGenerated {
+		t.Error("a supplied password must not be reported as generated")
+	}
+	if !supplied.KeycloakAdminSetFromInput {
+		t.Error("a supplied password on a fresh store should report set-from-input")
 	}
 }
 

@@ -38,10 +38,14 @@ type InitResult struct {
 	FixtureRoot      string
 
 	// KeycloakAdminPassword is the effective master-admin password in the install
-	// secret store after init; KeycloakAdminGenerated is true when THIS run
-	// generated it (so the CLI prints it exactly once, on creation).
-	KeycloakAdminPassword  string
-	KeycloakAdminGenerated bool
+	// secret store after init. KeycloakAdminGenerated is true only when THIS run
+	// GENERATED a random one (the CLI echoes it once — the only way to learn it);
+	// KeycloakAdminSetFromInput is true when this run set it from an operator-
+	// supplied value (never echoed — the operator already has it). Both false
+	// means the secret already existed (idempotent no-op).
+	KeycloakAdminPassword     string
+	KeycloakAdminGenerated    bool
+	KeycloakAdminSetFromInput bool
 
 	// PostgresProvisioned is true when the Postgres role password now exists in
 	// the store (generated this run or already present). Its value is internal —
@@ -89,10 +93,11 @@ func Init(opts InitOptions) (InitResult, error) {
 			ConfigPath:             path,
 			TenantNamespace:        cfg.Capability.TenantNamespace,
 			DataDir:                cfg.Data.Dir,
-			AlreadyExisted:         true,
-			KeycloakAdminPassword:  p.kcAdmin,
-			KeycloakAdminGenerated: p.kcGenerated,
-			PostgresProvisioned:    p.pgProvisioned,
+			AlreadyExisted:            true,
+			KeycloakAdminPassword:     p.kcAdmin,
+			KeycloakAdminGenerated:    p.kcGenerated,
+			KeycloakAdminSetFromInput: p.kcSetFromInput,
+			PostgresProvisioned:       p.pgProvisioned,
 		}, nil
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("stat config %s: %w", path, err)
@@ -135,20 +140,22 @@ func Init(opts InitOptions) (InitResult, error) {
 		ConfigPath:             path,
 		TenantNamespace:        namespace,
 		DataDir:                cfg.Data.Dir,
-		SeededScenario:         seed.Scenario,
-		CapabilityConfig:       seed.CapabilityConfig,
-		FixtureRoot:            seed.FixtureRoot,
-		KeycloakAdminPassword:  p.kcAdmin,
-		KeycloakAdminGenerated: p.kcGenerated,
-		PostgresProvisioned:    p.pgProvisioned,
+		SeededScenario:            seed.Scenario,
+		CapabilityConfig:          seed.CapabilityConfig,
+		FixtureRoot:               seed.FixtureRoot,
+		KeycloakAdminPassword:     p.kcAdmin,
+		KeycloakAdminGenerated:    p.kcGenerated,
+		KeycloakAdminSetFromInput: p.kcSetFromInput,
+		PostgresProvisioned:       p.pgProvisioned,
 	}, nil
 }
 
 // provisioned reports the outcome of establishing the install's secrets.
 type provisioned struct {
-	kcAdmin       string
-	kcGenerated   bool
-	pgProvisioned bool
+	kcAdmin        string
+	kcGenerated    bool // a random KC admin password was generated this run
+	kcSetFromInput bool // the KC admin password was set from a supplied value this run
+	pgProvisioned  bool
 }
 
 // provisionSecrets establishes the install's secrets idempotently under
@@ -158,7 +165,7 @@ type provisioned struct {
 func provisionSecrets(installDir string, opts InitOptions) (provisioned, error) {
 	store := secrets.Open(installDir)
 
-	kcAdmin, kcGenerated, err := ensureSecret(store, secrets.NameKeycloakAdmin, opts.KeycloakAdminPassword)
+	kcAdmin, kcCreated, err := ensureSecret(store, secrets.NameKeycloakAdmin, opts.KeycloakAdminPassword)
 	if err != nil {
 		return provisioned{}, err
 	}
@@ -171,7 +178,12 @@ func provisionSecrets(installDir string, opts InitOptions) (provisioned, error) 
 		return provisioned{}, fmt.Errorf("postgres secret not provisioned")
 	}
 
-	return provisioned{kcAdmin: kcAdmin, kcGenerated: kcGenerated, pgProvisioned: true}, nil
+	return provisioned{
+		kcAdmin:        kcAdmin,
+		kcGenerated:    kcCreated && opts.KeycloakAdminPassword == "",
+		kcSetFromInput: kcCreated && opts.KeycloakAdminPassword != "",
+		pgProvisioned:  true,
+	}, nil
 }
 
 // ensureSecret provisions name with the supplied value if given (and absent),

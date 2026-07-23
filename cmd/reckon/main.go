@@ -119,13 +119,16 @@ func runInit(args []string) error {
 		return err
 	}
 
-	// Print a generated admin password exactly once — on the run that created it
-	// (never on re-init or when the operator supplied one). It also lives 0600 in
-	// <data>/secrets for `dev-auth`/`start` to read, so this is a convenience echo.
+	// Report the master-admin password: echo a GENERATED one exactly once (the
+	// only way to learn it), but never re-print a value the operator supplied
+	// (they already have it). Say nothing when it already existed.
 	printKCAdmin := func() {
-		if res.KeycloakAdminGenerated {
-			fmt.Printf("  keycloak admin: generated a master-admin password (saved to <data>/secrets, retrievable by `%s dev-auth`)\n", branding.CLI)
+		switch {
+		case res.KeycloakAdminGenerated:
+			fmt.Printf("  keycloak admin: generated a master-admin password (in secrets/, read by `%s dev-auth`)\n", branding.CLI)
 			fmt.Printf("                  admin / %s\n", res.KeycloakAdminPassword)
+		case res.KeycloakAdminSetFromInput:
+			fmt.Printf("  keycloak admin: set the master-admin password from your input (in secrets/)\n")
 		}
 	}
 
