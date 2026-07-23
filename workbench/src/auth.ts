@@ -210,9 +210,14 @@ export class Session {
 
       let redirectUri = "";
       server.on("error", reject);
+      // Bind the listener to the IPv4 loopback (deterministic), but advertise
+      // the redirect as `localhost` — Keycloak matches redirect URIs by exact
+      // host string, and the realm allows `http://localhost:*`, not 127.0.0.1
+      // (keycloak_realm.json). The browser resolves localhost → 127.0.0.1
+      // (directly, or via Happy-Eyeballs fallback), so it still hits this listener.
       server.listen(0, "127.0.0.1", () => {
         const port = (server.address() as AddressInfo).port;
-        redirectUri = `http://127.0.0.1:${port}/callback`;
+        redirectUri = `http://localhost:${port}/callback`;
         const authUrl = new URL(this.endpoints!.authorization);
         authUrl.searchParams.set("client_id", this.config!.clientId);
         authUrl.searchParams.set("response_type", "code");
