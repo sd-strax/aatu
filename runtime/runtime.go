@@ -250,8 +250,12 @@ func serve(cfg config.Config) error {
 		TemporalHostPort: fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
 		KeycloakIssuer: fmt.Sprintf("http://localhost:%d/realms/%s",
 			cfg.Keycloak.HTTPPort, cfg.Keycloak.Realm),
-		KeycloakClientID:   cfg.Keycloak.ClientID,
-		Handler:            handler,
+		KeycloakClientID: cfg.Keycloak.ClientID,
+		// The interactive human login client is the realm's public "reckon"
+		// client (keycloak_realm.json); branding.CLI is that literal, kept in
+		// one place so a rebrand doesn't drift the realm from the code.
+		KeycloakLoginClientID: branding.CLI,
+		Handler:               handler,
 		Middleware:         tel.HTTPMiddleware,
 		CapabilityResolver: capResolver,
 		CapabilityCatalog:  capCatalog,

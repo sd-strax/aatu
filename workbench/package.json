@@ -33,6 +33,21 @@
     },
     "commands": [
       {
+        "command": "reckon.signIn",
+        "category": "reckon",
+        "title": "Sign In"
+      },
+      {
+        "command": "reckon.signOut",
+        "category": "reckon",
+        "title": "Sign Out"
+      },
+      {
+        "command": "reckon.setAnthropicKey",
+        "category": "reckon",
+        "title": "Set Anthropic API Key (BYOK)"
+      },
+      {
         "command": "reckon.checkBackend",
         "category": "reckon",
         "title": "Check Backend Connection"
@@ -50,6 +65,16 @@
           "command": "reckon.refreshInvestigations",
           "when": "view == reckon.investigations",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "reckon.signIn",
+          "when": "!reckon.signedIn"
+        },
+        {
+          "command": "reckon.signOut",
+          "when": "reckon.signedIn"
         }
       ]
     },

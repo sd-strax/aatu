@@ -65,6 +65,14 @@ type BackendConfig struct {
 	// production paid deployments wire the real client_id).
 	KeycloakClientID string
 
+	// KeycloakLoginClientID is the public OIDC client the interactive human
+	// login flow uses (PKCE authorization-code). Advertised unauthenticated at
+	// /api/auth-config so the workbench discovers the issuer + client without
+	// hardcoding Keycloak's port/realm (design/13 §7 step 1). Empty leaves
+	// /api/auth-config a clean 503 — the extension then reports auth
+	// unconfigured rather than guessing.
+	KeycloakLoginClientID string
+
 	// Handler is the aggregate command dispatcher used by /api routes. Must
 	// be non-nil for any /api route to function (routes guard internally
 	// with a 503 if absent so the server still serves /healthz cleanly when
@@ -285,8 +293,13 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		mux.Handle("/metrics", b.cfg.MetricsHandler)
 	}
 
-	// API — auth required.
+	// API — auth required except where noted.
 	api := http.NewServeMux()
+
+	// GET /api/auth-config — PUBLIC (must be reachable before login): the OIDC
+	// issuer + public login client the workbench needs to run its PKCE flow
+	// (design/13 §7). Not auth-wrapped. Clean 503 when login isn't configured.
+	api.HandleFunc("/auth-config", b.handleAuthConfig)
 
 	// GET /api/me — who am I; any authenticated principal.
 	api.Handle("/me", authz.RequireAuth(verifier)(http.HandlerFunc(b.handleMe)))
@@ -415,6 +428,29 @@ func (b *Backend) handleStatus(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// AuthConfigResponse is the public shape of /api/auth-config: everything the
+// workbench needs to start an OIDC PKCE login, sourced from the backend so the
+// extension never hardcodes (or drifts from) Keycloak's port/realm/client.
+type AuthConfigResponse struct {
+	Issuer   string `json:"issuer"`
+	ClientID string `json:"client_id"`
+}
+
+// handleAuthConfig serves the login config unauthenticated (it is a
+// prerequisite of authenticating). A 503 when login isn't configured keeps the
+// contract honest: the extension reports "auth unconfigured" rather than
+// guessing an issuer.
+func (b *Backend) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
+	if b.cfg.KeycloakLoginClientID == "" || b.cfg.KeycloakIssuer == "" {
+		writeJSONError(w, http.StatusServiceUnavailable, "interactive login not configured")
+		return
+	}
+	writeJSON(w, http.StatusOK, AuthConfigResponse{
+		Issuer:   b.cfg.KeycloakIssuer,
+		ClientID: b.cfg.KeycloakLoginClientID,
+	})
 }
 
 // MeResponse is the public shape of /api/me.

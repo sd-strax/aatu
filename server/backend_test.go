@@ -88,6 +88,36 @@ func TestBackendHandleStatus_AllReady(t *testing.T) {
 	}
 }
 
+func TestBackendHandleAuthConfig(t *testing.T) {
+	// Configured: 200 with issuer + client id (the workbench PKCE prerequisites).
+	configured := &Backend{cfg: BackendConfig{
+		KeycloakIssuer:        "http://localhost:8081/realms/reckon",
+		KeycloakLoginClientID: "reckon",
+	}}
+	req := httptest.NewRequest("GET", "/api/auth-config", nil)
+	w := httptest.NewRecorder()
+	configured.handleAuthConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	var resp AuthConfigResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Issuer != "http://localhost:8081/realms/reckon" || resp.ClientID != "reckon" {
+		t.Errorf("auth-config = %+v; want issuer+client populated", resp)
+	}
+
+	// Unconfigured: 503, so the extension reports "auth unconfigured" rather
+	// than guessing an issuer.
+	unconfigured := &Backend{cfg: BackendConfig{}}
+	w = httptest.NewRecorder()
+	unconfigured.handleAuthConfig(w, httptest.NewRequest("GET", "/api/auth-config", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("unconfigured status = %d; want 503", w.Code)
+	}
+}
+
 func TestBackendHandleStatus_Degraded(t *testing.T) {
 	sup := makeSupWithStarted(t,
 		&fakeComponent{name: "postgres", healthy: true},

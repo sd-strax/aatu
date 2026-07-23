@@ -6,9 +6,19 @@ The analyst-facing VS Code extension — the primary product surface. The design
 
 ## Current state
 
-Scaffold: the reckon view container, an Investigations placeholder view, the
-`reckon.checkBackend` / `reckon.refreshInvestigations` commands, and a thin `/status` client.
-The v0 slice lands in the order of `design/13 §7` (session/auth next).
+v0 slice (`design/13 §7`) through step 1:
+
+- **Version handshake** (`§2`): fail closed on an incompatible/unreachable backend.
+- **Sign in** (`reckon.signIn`): OIDC authorization-code + PKCE against the bundled Keycloak —
+  the browser opens, a loopback listener catches the redirect, tokens land in
+  `vscode.SecretStorage`, and a background timer refreshes before expiry. `reckon.signOut` clears
+  them. Config (issuer + client) is discovered from `/api/auth-config`, not hardcoded.
+- **BYOK Anthropic key** (`reckon.setAnthropicKey`): stored in `SecretStorage`, never in settings.
+- **Investigations view**: the real list from `/api/investigations` when signed in; a sign-in
+  affordance when not; a diagnostic when the backend is incompatible.
+
+Next (`§7`): the investigation document — the conversation surface — as a custom editor, plus the
+capability-descriptor fetch feeding the agent's tool definitions.
 
 ## Development
 
@@ -52,6 +62,7 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
 
 ## Pending backend seams
 
-- **Session/auth** (v0 slice step 1): PKCE against the bundled Keycloak, BYOK Anthropic key into
-  `vscode.SecretStorage`, capability descriptors fetched from `/api/capabilities`. Until this
-  lands, the extension is read-only against `/status`.
+- **Capability descriptors → LLM tool definitions**: `capabilityCount()` proves the authenticated
+  fetch; the agent loop that turns descriptors into tools lands with the conversation surface.
+- **The interactive turn loop** (`05 §3.4`): BYOK LLM call → tool dispatch to the backend →
+  transcript commit to `/api/interpretations`.

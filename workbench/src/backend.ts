@@ -31,9 +31,44 @@ export interface BackendStatus {
   compatible: boolean;
 }
 
+/** Login config from GET /api/auth-config (mirrors server.AuthConfigResponse). */
+export interface AuthConfig {
+  issuer: string;
+  clientId: string;
+}
+
+/** Mirrors server.MeResponse (the fields the UI uses). */
+export interface Me {
+  subject: string;
+  username: string;
+  tenantId: string;
+  roles: string[];
+}
+
+/** One investigation summary row (subset of the /api/investigations item). */
+export interface InvestigationSummary {
+  id: string;
+  title: string;
+  state: string;
+}
+
+/** Raw server.InvestigationView row, as served under {investigations: [...]}. */
+interface RawInvestigation {
+  aggregate_id: string;
+  title: string;
+  status: string;
+}
+
 export class BackendClient {
-  /** baseUrl is read per-call so a settings change needs no reload. */
-  constructor(private readonly baseUrl: () => string) {}
+  /**
+   * @param baseUrl read per-call so a settings change needs no reload.
+   * @param token   supplies a bearer token for authenticated calls; omitted for
+   *                the public /status and /auth-config probes.
+   */
+  constructor(
+    private readonly baseUrl: () => string,
+    private readonly token?: () => Promise<string>,
+  ) {}
 
   async status(): Promise<BackendStatus> {
     try {
@@ -62,6 +97,71 @@ export class BackendClient {
         compatible: false,
       };
     }
+  }
+
+  /** GET /api/auth-config — public; the login prerequisites. Throws on 503/unreachable. */
+  async authConfig(): Promise<AuthConfig> {
+    const res = await fetch(`${this.baseUrl()}/api/auth-config`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) {
+      throw new Error(`auth-config ${res.status} (interactive login may be unconfigured)`);
+    }
+    const body = (await res.json()) as { issuer?: string; client_id?: string };
+    if (!body.issuer || !body.client_id) {
+      throw new Error("auth-config missing issuer/client_id");
+    }
+    return { issuer: body.issuer, clientId: body.client_id };
+  }
+
+  /** GET /api/me — the signed-in identity. Authenticated. */
+  async me(): Promise<Me> {
+    const body = await this.authedGet<{
+      subject?: string;
+      preferred_username?: string;
+      tenant_id?: string;
+      roles?: string[];
+    }>("/api/me");
+    return {
+      subject: body.subject ?? "",
+      username: body.preferred_username ?? "",
+      tenantId: body.tenant_id ?? "",
+      roles: body.roles ?? [],
+    };
+  }
+
+  /** GET /api/capabilities — count of resolvable verbs. Authenticated. */
+  async capabilityCount(): Promise<number> {
+    const body = await this.authedGet<{ capabilities?: unknown[] } | unknown[]>("/api/capabilities");
+    if (Array.isArray(body)) {
+      return body.length;
+    }
+    return body.capabilities?.length ?? 0;
+  }
+
+  /** GET /api/investigations — the investigation list (server.InvestigationView). Authenticated. */
+  async investigations(): Promise<InvestigationSummary[]> {
+    const body = await this.authedGet<{ investigations?: RawInvestigation[] }>("/api/investigations");
+    return (body.investigations ?? []).map((r) => ({
+      id: r.aggregate_id,
+      title: r.title || "(untitled)",
+      state: r.status,
+    }));
+  }
+
+  private async authedGet<T>(path: string): Promise<T> {
+    if (!this.token) {
+      throw new Error("no token source configured");
+    }
+    const bearer = await this.token();
+    const res = await fetch(`${this.baseUrl()}${path}`, {
+      headers: { Authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      throw new Error(`GET ${path} → ${res.status}`);
+    }
+    return (await res.json()) as T;
   }
 
   /** A one-line diagnostic for an incompatible/unreachable backend, or null when compatible. */
