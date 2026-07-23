@@ -8,7 +8,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/config"
+	"github.com/sd-strax/reckon/internal/secrets"
 )
+
+// InitOptions parameterizes the deployer step.
+type InitOptions struct {
+	// KeycloakAdminPassword, when non-empty, is provisioned as the Keycloak
+	// master-admin password (operator/IaC supplied). Empty generates a strong
+	// random one. Applied only when the secret is absent — init never rotates.
+	KeycloakAdminPassword string
+}
 
 // InitResult reports what `reckon init` wrote, so the CLI can print a first-run
 // summary + next steps.
@@ -25,6 +34,12 @@ type InitResult struct {
 	SeededScenario   string
 	CapabilityConfig string
 	FixtureRoot      string
+
+	// KeycloakAdminPassword is the effective master-admin password in the install
+	// secret store after init; KeycloakAdminGenerated is true when THIS run
+	// generated it (so the CLI prints it exactly once, on creation).
+	KeycloakAdminPassword  string
+	KeycloakAdminGenerated bool
 }
 
 // Init performs first-run setup: it writes a default config to the resolved
@@ -43,24 +58,33 @@ type InitResult struct {
 //
 // Interactive Keycloak login is the surface's job; this owns the deterministic,
 // testable core (config + namespace + demo content) the login builds on.
-func Init() (InitResult, error) {
+func Init(opts InitOptions) (InitResult, error) {
 	path, err := config.DefaultPath()
 	if err != nil {
 		return InitResult{}, err
 	}
 
 	// Idempotent: an existing config is left untouched (never clobber a config a
-	// user may have hand-edited), reported back so the CLI can say so.
+	// user may have hand-edited), reported back so the CLI can say so. Secret
+	// provisioning still runs on this path — an install predating the secret
+	// store (or with a wiped secrets dir) gets its admin password established
+	// without re-initializing everything else.
 	if _, err := os.Stat(path); err == nil {
 		cfg, perr := config.Load()
 		if perr != nil {
 			return InitResult{}, fmt.Errorf("a config exists at %s but does not parse: %w", path, perr)
 		}
+		pw, generated, serr := provisionSecrets(filepath.Dir(path), opts)
+		if serr != nil {
+			return InitResult{}, serr
+		}
 		return InitResult{
-			ConfigPath:      path,
-			TenantNamespace: cfg.Capability.TenantNamespace,
-			DataDir:         cfg.Data.Dir,
-			AlreadyExisted:  true,
+			ConfigPath:             path,
+			TenantNamespace:        cfg.Capability.TenantNamespace,
+			DataDir:                cfg.Data.Dir,
+			AlreadyExisted:         true,
+			KeycloakAdminPassword:  pw,
+			KeycloakAdminGenerated: generated,
 		}, nil
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("stat config %s: %w", path, err)
@@ -87,12 +111,40 @@ func Init() (InitResult, error) {
 	if err := config.Save(cfg, path); err != nil {
 		return InitResult{}, fmt.Errorf("write config: %w", err)
 	}
+
+	// Establish this install's secrets (the deployer step's job): the Keycloak
+	// master-admin password lands beside the config in <install>/secrets, 0600 —
+	// never in the config file. The install dir is the config's directory (the
+	// same anchor the demo content uses), which equals Data.Dir in the default
+	// layout and stays isolated under an explicit config path.
+	pw, generated, err := provisionSecrets(filepath.Dir(path), opts)
+	if err != nil {
+		return InitResult{}, err
+	}
+
 	return InitResult{
-		ConfigPath:       path,
-		TenantNamespace:  namespace,
-		DataDir:          cfg.Data.Dir,
-		SeededScenario:   seed.Scenario,
-		CapabilityConfig: seed.CapabilityConfig,
-		FixtureRoot:      seed.FixtureRoot,
+		ConfigPath:             path,
+		TenantNamespace:        namespace,
+		DataDir:                cfg.Data.Dir,
+		SeededScenario:         seed.Scenario,
+		CapabilityConfig:       seed.CapabilityConfig,
+		FixtureRoot:            seed.FixtureRoot,
+		KeycloakAdminPassword:  pw,
+		KeycloakAdminGenerated: generated,
 	}, nil
+}
+
+// provisionSecrets establishes the install's secrets idempotently under
+// installDir. Supplied values win when the secret is absent; otherwise a strong
+// random one is generated. An already-provisioned secret is returned unchanged
+// (created=false) — re-running init never rotates.
+func provisionSecrets(installDir string, opts InitOptions) (kcAdmin string, generated bool, err error) {
+	store := secrets.Open(installDir)
+	if opts.KeycloakAdminPassword != "" {
+		pw, created, verr := store.EnsureValue(secrets.NameKeycloakAdmin, opts.KeycloakAdminPassword)
+		// A supplied value on an already-provisioned store is a no-op, not a
+		// generated secret — so created is false and the CLI won't echo it.
+		return pw, created, verr
+	}
+	return store.EnsureRandom(secrets.NameKeycloakAdmin)
 }

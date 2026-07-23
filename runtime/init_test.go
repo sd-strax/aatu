@@ -32,7 +32,7 @@ func withConfigEnv(t *testing.T) string {
 func TestInit_FreshWritesConfigAndNamespace(t *testing.T) {
 	path := withConfigEnv(t)
 
-	res, err := Init()
+	res, err := Init(InitOptions{})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -65,15 +65,16 @@ func TestInit_FreshWritesConfigAndNamespace(t *testing.T) {
 }
 
 // TestInit_Idempotent: re-running init against an existing config never
-// clobbers it — the namespace stays put and AlreadyExisted is reported.
+// clobbers it — the namespace stays put, the provisioned admin secret is
+// unchanged (never rotated), and AlreadyExisted is reported.
 func TestInit_Idempotent(t *testing.T) {
 	withConfigEnv(t)
 
-	first, err := Init()
+	first, err := Init(InitOptions{})
 	if err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
-	second, err := Init()
+	second, err := Init(InitOptions{})
 	if err != nil {
 		t.Fatalf("second Init: %v", err)
 	}
@@ -83,19 +84,55 @@ func TestInit_Idempotent(t *testing.T) {
 	if second.TenantNamespace != first.TenantNamespace {
 		t.Errorf("namespace changed on re-init: %q → %q (must be immutable)", first.TenantNamespace, second.TenantNamespace)
 	}
+	if second.KeycloakAdminGenerated {
+		t.Error("re-init reported the admin secret as generated; it must be reused, not rotated")
+	}
+	if second.KeycloakAdminPassword != first.KeycloakAdminPassword {
+		t.Error("admin secret changed on re-init (must be immutable once provisioned)")
+	}
+}
+
+// TestInit_ProvisionsAdminSecret: a fresh init generates and persists a strong
+// admin password (not a hardcoded default), and a supplied value is honored.
+func TestInit_ProvisionsAdminSecret(t *testing.T) {
+	withConfigEnv(t)
+	res, err := Init(InitOptions{})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if !res.KeycloakAdminGenerated {
+		t.Error("fresh init did not generate an admin secret")
+	}
+	if res.KeycloakAdminPassword == "" || res.KeycloakAdminPassword == "admin" {
+		t.Errorf("weak/empty admin password %q; want a generated strong secret", res.KeycloakAdminPassword)
+	}
+
+	// A supplied password is honored on a fresh install.
+	dir := t.TempDir()
+	t.Setenv("RECKON_CONFIG", filepath.Join(dir, "config.yaml"))
+	supplied, err := Init(InitOptions{KeycloakAdminPassword: "operator-chosen"})
+	if err != nil {
+		t.Fatalf("Init supplied: %v", err)
+	}
+	if supplied.KeycloakAdminPassword != "operator-chosen" {
+		t.Errorf("supplied password not honored: got %q", supplied.KeycloakAdminPassword)
+	}
+	if !supplied.KeycloakAdminGenerated {
+		t.Error("a supplied password on a fresh store should still report created=true")
+	}
 }
 
 // TestInit_UniquePerInstall: two independent installs mint distinct namespaces.
 func TestInit_UniquePerInstall(t *testing.T) {
 	withConfigEnv(t)
-	a, err := Init()
+	a, err := Init(InitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Point at a second, separate config location.
 	dir := t.TempDir()
 	t.Setenv("RECKON_CONFIG", filepath.Join(dir, "config.yaml"))
-	b, err := Init()
+	b, err := Init(InitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +148,7 @@ func TestInit_UniquePerInstall(t *testing.T) {
 // and BuildActionResolver produces write bindings, both against the seeded files.
 func TestInit_SeedsWiredDemo(t *testing.T) {
 	withConfigEnv(t)
-	res, err := Init()
+	res, err := Init(InitOptions{})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}

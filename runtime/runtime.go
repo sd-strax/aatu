@@ -23,6 +23,7 @@ import (
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/internal/secrets"
 	"github.com/sd-strax/reckon/knowledge"
 	"github.com/sd-strax/reckon/module"
 	"github.com/sd-strax/reckon/server"
@@ -161,11 +162,28 @@ func serve(cfg config.Config) error {
 		UIPort:       cfg.Temporal.UIPort,
 		Namespace:    cfg.Temporal.Namespace,
 	})
+	// The operator step only consumes secrets — it never mints them. The
+	// Keycloak master-admin password is provisioned by the deployer step
+	// (`reckon init`, runtime.provisionSecrets) into the install secret store
+	// beside the config; start reads it here and fails fast if the deploy step
+	// was skipped.
+	configPath, err := config.DefaultPath()
+	if err != nil {
+		return err
+	}
+	kcAdminPassword, ok, err := secrets.Open(filepath.Dir(configPath)).Get(secrets.NameKeycloakAdmin)
+	if err != nil {
+		return fmt.Errorf("read keycloak admin secret: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("keycloak admin secret not provisioned — run `%s init` first (the deployer step that establishes this install's secrets)", branding.CLI)
+	}
 	kc := supervisor.NewKeycloak(supervisor.KeycloakConfig{
 		DataDir:        filepath.Join(cfg.Data.Dir, "keycloak"),
 		HTTPPort:       cfg.Keycloak.HTTPPort,
 		ManagementPort: cfg.Keycloak.ManagementPort,
 		RealmName:      cfg.Keycloak.Realm,
+		AdminPassword:  kcAdminPassword,
 	})
 
 	// Open the aggregate's DB lazily — sql.Open doesn't actually connect until

@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/internal/secrets"
 	"github.com/sd-strax/reckon/supervisor"
 )
 
@@ -33,7 +35,7 @@ func runDevAuth(args []string) error {
 	username := fs.String("user", branding.CLI+"-admin", "principal username to provision")
 	password := fs.String("password", envOr("RECKON_PASSWORD", branding.CLI), "non-temporary password to set")
 	adminUser := fs.String("admin-user", envOr("KC_ADMIN_USER", "admin"), "master-realm bootstrap admin username")
-	adminPass := fs.String("admin-password", envOr("KC_ADMIN_PW", "admin"), "master-realm bootstrap admin password")
+	adminPass := fs.String("admin-password", "", "master-realm bootstrap admin password (default: the install secret store)")
 	noROPC := fs.Bool("no-direct-grants", false, "provision the user but do NOT enable the ROPC grant")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -45,11 +47,29 @@ func runDevAuth(args []string) error {
 	}
 	baseURL := fmt.Sprintf("http://localhost:%d", cfg.Keycloak.HTTPPort)
 
+	// The master-admin password is a provisioned install secret, not a default —
+	// read it from the store (beside the config) unless overridden on the flag.
+	kcAdmin := *adminPass
+	if kcAdmin == "" {
+		configPath, perr := config.DefaultPath()
+		if perr != nil {
+			return perr
+		}
+		v, ok, serr := secrets.Open(filepath.Dir(configPath)).Get(secrets.NameKeycloakAdmin)
+		if serr != nil {
+			return serr
+		}
+		if !ok {
+			return fmt.Errorf("no master-admin password: provision it with `%s init`, or pass --admin-password", branding.CLI)
+		}
+		kcAdmin = v
+	}
+
 	opts := supervisor.DevAuthOptions{
 		BaseURL:   baseURL,
 		Realm:     cfg.Keycloak.Realm,
 		AdminUser: *adminUser,
-		AdminPass: *adminPass,
+		AdminPass: kcAdmin,
 		Username:  *username,
 		Password:  *password,
 		Roles:     devAuthRoles,

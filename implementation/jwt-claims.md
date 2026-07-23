@@ -137,6 +137,30 @@ back in. The Admin-REST provisioning flow is covered against an httptest
 stand-in (`keycloak_admin_test.go`) so its request shapes are checked without a
 running Keycloak.
 
-The **master bootstrap admin remains `admin/admin`** by default
-(`ensureBootstrapAdmin`) — a separate, pre-existing weak-dev-default that
-hardened deployments rotate; `dev-auth` uses it but does not worsen it.
+### The master bootstrap admin is a provisioned install secret
+
+The Keycloak master-realm admin (console + Admin REST) is no longer a hardcoded
+`admin/admin`. It is an **install secret established by the deployer step** — the
+three-role split (`internal/secrets`, `implementation/agent-sidecar.md` §1 has
+the same taxonomy):
+
+- **Deployer** (`reckon init`) generates a strong random password by default, or
+  accepts one via `--kc-admin-password` / `KC_ADMIN_PW` for IaC/vault-driven
+  deploys, and writes it `0600` to `<install>/secrets/keycloak-admin-password`
+  (beside the config — never *in* it). Idempotent: re-running `init` never
+  rotates an existing secret. A generated password is echoed to the console
+  exactly once, on the run that creates it.
+- **Operator** (`reckon start`) only *consumes*: runtime reads the secret and
+  injects it into `KeycloakConfig.AdminPassword`; the Keycloak component
+  bootstraps the admin with it and never generates anything. If the secret is
+  absent (deploy step skipped), `start` **fails fast** pointing at `init`.
+- **Dev/CI** (`reckon dev-auth`) reads the same store as its admin credential —
+  so `admin/admin` is gone from that path too.
+
+The username stays `admin`; only the password is provisioned. The store
+(`internal/secrets`) is the extensible home for future install secrets — config
+holds non-sensitive settings, the secret store holds provisioned secrets, and
+the deployer step is the one place secrets are born in every topology (bundled
+`init` here; the analogous IaC/install step for a shared/SaaS backend). Covered
+by `internal/secrets` unit tests + `runtime` init tests (generation,
+persistence, `0600`, supplied-value, idempotence) — no Keycloak boot required.

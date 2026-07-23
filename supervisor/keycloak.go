@@ -47,6 +47,11 @@ type KeycloakConfig struct {
 
 	// RealmName is the bootstrap realm imported on first start. Default branding.CLI.
 	RealmName string
+
+	// AdminPassword is the master-realm bootstrap admin's password, provisioned
+	// by the deployer step (`reckon init`) and injected by runtime — the
+	// component consumes it, never generates it. Required; Start fails without it.
+	AdminPassword string
 }
 
 // Keycloak is a Component wrapping the Keycloak Quarkus distribution.
@@ -249,18 +254,21 @@ func relativeJavaBin() string {
 	return filepath.Join("bin", "java")
 }
 
-// ensureBootstrapAdmin creates a master-realm admin user (admin/admin) so the
-// Keycloak admin console at /admin/ is usable. Idempotent via a marker file
-// next to Keycloak's H2 database — if H2 is wiped, the marker goes with it
-// and bootstrap re-runs.
+// ensureBootstrapAdmin creates the master-realm admin user (username `admin`)
+// so the Keycloak admin console and the Admin REST API are usable. Idempotent
+// via a marker file next to Keycloak's H2 database — if H2 is wiped, the marker
+// goes with it and bootstrap re-runs (with the same store-provisioned password,
+// so the account stays consistent).
 //
-// The app-side `<cli>-admin` user in keycloak_realm.json lives in the
-// branding.CLI realm and is for OIDC token issuance against the application,
-// not for the admin console — two distinct Keycloak authentication contexts.
-//
-// "admin/admin" is a deliberate weak default for dev/OSS-solo. Production
-// deployments either re-bootstrap with stronger creds or rotate post-install.
+// The password is NOT a hardcoded default: it comes from cfg.AdminPassword,
+// provisioned by the deployer step (`reckon init`) into the install secret store
+// and injected by runtime. The component only consumes it. The app-side login
+// principal is separate again (`reckon dev-auth`, keycloak_realm.json ships no
+// user) — three distinct Keycloak authentication contexts.
 func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
+	if k.cfg.AdminPassword == "" {
+		return fmt.Errorf("keycloak: no admin password provisioned (run `%s init`)", branding.CLI)
+	}
 	markerFile := filepath.Join(k.serverDir(), "data", "h2", "."+branding.CLI+"-admin-bootstrapped")
 	if _, err := os.Stat(markerFile); err == nil {
 		return nil
@@ -274,7 +282,7 @@ func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
 	)
 	cmd.Env = append(os.Environ(),
 		"JAVA_HOME="+k.javaHome(),
-		"KC_ADMIN_PW=admin",
+		"KC_ADMIN_PW="+k.cfg.AdminPassword,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// bootstrap-admin may legitimately fail if an admin already exists
@@ -282,11 +290,11 @@ func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
 		// subsequent start-dev will surface any real auth issue.
 		log.Printf("keycloak bootstrap-admin returned non-zero: %v\n%s", err, out)
 	} else {
-		log.Printf("keycloak: master-realm admin bootstrapped (admin/admin)")
+		log.Printf("keycloak: master-realm admin bootstrapped (user admin; password from the install secret store)")
 	}
 
 	_ = os.MkdirAll(filepath.Dir(markerFile), 0o755)
-	_ = os.WriteFile(markerFile, []byte("admin"), 0o644)
+	_ = os.WriteFile(markerFile, []byte("bootstrapped"), 0o644)
 	return nil
 }
 
