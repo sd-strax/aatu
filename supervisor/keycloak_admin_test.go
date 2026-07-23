@@ -19,6 +19,7 @@ type fakeKeycloak struct {
 	passwordSet   string
 	rolesAssigned []string
 	createdUser   bool
+	userProfile   map[string]any // last user representation POSTed/PUT
 }
 
 func (f *fakeKeycloak) handler() http.Handler {
@@ -48,6 +49,7 @@ func (f *fakeKeycloak) handler() http.Handler {
 
 	mux.HandleFunc("/admin/realms/reckon/users", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&f.userProfile)
 			f.userExists = true
 			f.createdUser = true
 			w.Header().Set("Location", "/admin/realms/reckon/users/"+userID)
@@ -59,6 +61,11 @@ func (f *fakeKeycloak) handler() http.Handler {
 		} else {
 			_ = json.NewEncoder(w).Encode([]map[string]any{})
 		}
+	})
+	// PUT /users/{id} — the profile-heal path for an existing user.
+	mux.HandleFunc("/admin/realms/reckon/users/"+userID, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&f.userProfile)
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/admin/realms/reckon/users/"+userID+"/reset-password", func(w http.ResponseWriter, r *http.Request) {
 		var cred map[string]any
@@ -114,6 +121,26 @@ func TestProvisionDevAuth_CreatesUserEnablesROPCAndAssignsRoles(t *testing.T) {
 	if got := strings.Join(fake.rolesAssigned, ","); got != "tenant_admin,analyst" {
 		t.Errorf("roles assigned = %q; want tenant_admin,analyst", got)
 	}
+	// Regression guard for the "Account is not fully set up" bug the road test
+	// caught: Keycloak 26 refuses the direct grant unless the profile is complete.
+	assertLoginReadyProfile(t, fake.userProfile)
+}
+
+// assertLoginReadyProfile checks the user representation carries the attributes
+// Keycloak 26 requires for a direct-grant-ready account.
+func assertLoginReadyProfile(t *testing.T, p map[string]any) {
+	t.Helper()
+	if p == nil {
+		t.Fatal("no user representation was sent")
+	}
+	for _, field := range []string{"firstName", "lastName", "email"} {
+		if s, _ := p[field].(string); s == "" {
+			t.Errorf("user profile missing %q — Keycloak 26 refuses the grant with \"Account is not fully set up\"", field)
+		}
+	}
+	if v, _ := p["emailVerified"].(bool); !v {
+		t.Error("user profile emailVerified=false — triggers the VERIFY_EMAIL required action, blocking the grant")
+	}
 }
 
 func TestProvisionDevAuth_ExistingUserIsUpdatedNotCreated(t *testing.T) {
@@ -138,6 +165,9 @@ func TestProvisionDevAuth_ExistingUserIsUpdatedNotCreated(t *testing.T) {
 	if fake.createdUser {
 		t.Error("must not POST a new user when one already exists")
 	}
+	// The existing-user path must still heal the profile (PUT), so an account
+	// left incomplete by an older dev-auth becomes login-ready.
+	assertLoginReadyProfile(t, fake.userProfile)
 }
 
 func TestKeycloakAdmin_LoginSurfacesError(t *testing.T) {

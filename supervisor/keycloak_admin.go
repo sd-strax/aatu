@@ -107,18 +107,25 @@ func (a *KeycloakAdmin) SetDirectAccessGrants(ctx context.Context, clientID stri
 // and assigns the given realm roles. Idempotent. Returns whether it created the
 // user (vs updated an existing one).
 func (a *KeycloakAdmin) EnsureUser(ctx context.Context, username string, roles []string, password string) (created bool, err error) {
+	// A COMPLETE profile is required, or Keycloak 26 refuses the direct grant
+	// with "Account is not fully set up": firstName/lastName are required
+	// user-profile attributes, and a verified email avoids the VERIFY_EMAIL
+	// required action. Set on create AND healed on an existing user (a partial
+	// user from an older dev-auth would otherwise stay un-loginable).
+	profile := map[string]any{
+		"username":      username,
+		"enabled":       true,
+		"emailVerified": true,
+		"email":         username + "@localhost",
+		"firstName":     username,
+		"lastName":      "dev",
+	}
 	id, err := a.findUser(ctx, username)
 	if err != nil {
 		return false, err
 	}
 	if id == "" {
-		user := map[string]any{
-			"username":      username,
-			"enabled":       true,
-			"emailVerified": true,
-			"email":         username + "@localhost",
-		}
-		if err := a.do(ctx, http.MethodPost, "/users", user, nil); err != nil {
+		if err := a.do(ctx, http.MethodPost, "/users", profile, nil); err != nil {
 			return false, fmt.Errorf("create user %q: %w", username, err)
 		}
 		if id, err = a.findUser(ctx, username); err != nil {
@@ -128,6 +135,8 @@ func (a *KeycloakAdmin) EnsureUser(ctx context.Context, username string, roles [
 			return false, fmt.Errorf("user %q not found after create", username)
 		}
 		created = true
+	} else if err := a.do(ctx, http.MethodPut, "/users/"+id, profile, nil); err != nil {
+		return false, fmt.Errorf("update user %q profile: %w", username, err)
 	}
 
 	cred := map[string]any{"type": "password", "value": password, "temporary": false}
