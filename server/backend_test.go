@@ -82,6 +82,10 @@ func TestBackendHandleStatus_AllReady(t *testing.T) {
 	if !resp.Components["postgres"].Ready {
 		t.Errorf("postgres not ready in response: %+v", resp.Components["postgres"])
 	}
+	// The workbench version handshake (design/13 §2) pins on this.
+	if resp.APIVersion != APIVersion {
+		t.Errorf("api_version = %d; want %d", resp.APIVersion, APIVersion)
+	}
 }
 
 func TestBackendHandleStatus_Degraded(t *testing.T) {

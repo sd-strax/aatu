@@ -43,7 +43,15 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
   `design/13 §2` on why OpenVSX is non-optional), plus release-attached `.vsix` for airgapped
   sideload. Publisher id `reckon` is a placeholder until the marketplace account exists.
 
+## Backend contract
+
+- **Version handshake** (`design/13 §2`): `/status` carries `api_version` (`server.APIVersion`);
+  the extension pins `SUPPORTED_API_VERSIONS` (`src/backend.ts`) and fails closed with a
+  diagnostic on mismatch, absence, or unreachability — it never dispatches against an
+  incompatible surface.
+
 ## Pending backend seams
 
-- `/status` has no version field yet; the `design/13 §2` version handshake (assert compatible
-  backend version, fail closed on mismatch) lands with the session/auth step.
+- **Session/auth** (v0 slice step 1): PKCE against the bundled Keycloak, BYOK Anthropic key into
+  `vscode.SecretStorage`, capability descriptors fetched from `/api/capabilities`. Until this
+  lands, the extension is read-only against `/status`.

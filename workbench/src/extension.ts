@@ -27,18 +27,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand("reckon.checkBackend", async () => {
       const status = await client.status();
-      log.info(`status ${backendUrl()}: ${status.overall}`);
-      if (status.reachable) {
+      const reason = client.incompatibilityReason(status);
+      log.info(`status ${backendUrl()}: ${status.overall} (api v${status.apiVersion ?? "?"}, ${reason ?? "compatible"})`);
+      if (reason) {
+        // Fail closed with a diagnostic — never dispatch against an
+        // incompatible or absent backend (design/13 §2).
+        void vscode.window.showWarningMessage(`reckon: ${reason}`);
+      } else {
         const detail = Object.entries(status.components)
           .map(([name, c]) => `${name}: ${c.ready ? "ready" : "NOT READY"} (${c.message})`)
           .join("\n");
         void vscode.window.showInformationMessage(
-          `reckon backend ${status.overall} at ${backendUrl()}`,
+          `reckon backend ${status.overall} at ${backendUrl()} (API v${status.apiVersion})`,
           { modal: false, detail },
-        );
-      } else {
-        void vscode.window.showWarningMessage(
-          `reckon backend not reachable at ${backendUrl()} — is the stack running? (\`reckon start\`)`,
         );
       }
       investigations.refresh();
@@ -82,10 +83,12 @@ class InvestigationsProvider implements vscode.TreeDataProvider<vscode.TreeItem>
       return [];
     }
     const status = await this.client.status();
-    if (!status.reachable) {
-      const item = new vscode.TreeItem("Backend not connected");
-      item.description = "run `reckon start`, then Refresh";
-      item.iconPath = new vscode.ThemeIcon("debug-disconnect");
+    const reason = this.client.incompatibilityReason(status);
+    if (reason) {
+      const item = new vscode.TreeItem(status.reachable ? "Backend incompatible" : "Backend not connected");
+      item.description = reason;
+      item.tooltip = reason;
+      item.iconPath = new vscode.ThemeIcon(status.reachable ? "warning" : "debug-disconnect");
       item.command = { command: "reckon.checkBackend", title: "Check Backend Connection" };
       return [item];
     }

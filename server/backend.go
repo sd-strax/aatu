@@ -371,11 +371,24 @@ func (b *Backend) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintln(w, "ok")
 }
 
+// APIVersion is the backend's HTTP API contract version — a single integer
+// bumped only on a breaking change to the /api surface the workbench consumes
+// (route removal, response-shape change, auth-flow change). It is NOT the
+// product/marketing version; it is the compatibility signal the workbench pins
+// against, the same philosophy as the adapter plugin protocol version
+// (11 §4.1). A client that supports version N keeps working against every
+// backend that serves N.
+const APIVersion = 1
+
 // StatusResponse is the JSON shape served by /status and consumed by
-// `reckon status`.
+// `reckon status` and the workbench version handshake (design/13 §2).
 type StatusResponse struct {
 	Overall    string                     `json:"overall"`
 	Components map[string]ComponentStatus `json:"components"`
+	// APIVersion is the contract version (see APIVersion). The workbench
+	// asserts it is in its supported set and fails closed with a diagnostic on
+	// mismatch rather than dispatching against an incompatible surface.
+	APIVersion int `json:"api_version"`
 }
 
 // ComponentStatus is the per-component slice of StatusResponse.
@@ -389,6 +402,7 @@ func (b *Backend) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := StatusResponse{
 		Overall:    "ok",
 		Components: make(map[string]ComponentStatus, len(rollup)),
+		APIVersion: APIVersion,
 	}
 	for name, h := range rollup {
 		resp.Components[name] = ComponentStatus{Ready: h.Ready, Message: h.Message}
