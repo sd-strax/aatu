@@ -75,6 +75,14 @@ func main() {
 		if err := runDevAuth(os.Args[2:]); err != nil {
 			log.Fatalf("%s dev-auth: %v", branding.CLI, err)
 		}
+	case "set-anthropic-key":
+		if err := runSetAnthropicKey(); err != nil {
+			log.Fatalf("%s set-anthropic-key: %v", branding.CLI, err)
+		}
+	case "unset-anthropic-key":
+		if err := runUnsetAnthropicKey(); err != nil {
+			log.Fatalf("%s unset-anthropic-key: %v", branding.CLI, err)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
@@ -91,8 +99,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  check      validate config + module activation without starting services")
 	fmt.Fprintf(os.Stderr, "  stop       signal a running %s supervisor to shut down\n", branding.CLI)
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
-	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (needs ANTHROPIC_API_KEY)")
+	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (BYOK Anthropic key)")
 	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
+	fmt.Fprintln(os.Stderr, "  set-anthropic-key    store your BYOK Anthropic key in the OS keychain (client-side)")
+	fmt.Fprintln(os.Stderr, "  unset-anthropic-key  remove the stored Anthropic key from the keychain")
 }
 
 // runInit performs first-run setup (the deployer step): writes a default config

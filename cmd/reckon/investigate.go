@@ -52,9 +52,9 @@ func runInvestigate(invID string) error {
 	if invID == "" {
 		return fmt.Errorf("usage: %s investigate <investigation-id>", branding.CLI)
 	}
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY is not set (the loop is BYOK — the key never reaches the backend)")
+	apiKey, err := resolveAnthropicKey()
+	if err != nil {
+		return err
 	}
 
 	cfg, err := config.Load()
