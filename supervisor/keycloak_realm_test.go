@@ -36,10 +36,11 @@ type realmUser struct {
 }
 
 type realmClient struct {
-	ClientID        string `json:"clientId"`
-	Description     string `json:"description"`
-	PublicClient    bool   `json:"publicClient"`
-	ProtocolMappers []struct {
+	ClientID                  string `json:"clientId"`
+	Description               string `json:"description"`
+	PublicClient              bool   `json:"publicClient"`
+	DirectAccessGrantsEnabled bool   `json:"directAccessGrantsEnabled"`
+	ProtocolMappers           []struct {
 		Name           string            `json:"name"`
 		ProtocolMapper string            `json:"protocolMapper"`
 		Config         map[string]string `json:"config"`
@@ -92,40 +93,33 @@ func TestRealm_ClientDescriptionsFitKeycloakColumn(t *testing.T) {
 	}
 }
 
-// TestRealm_BundledUserIsLoginReady: the seeded reckon-admin user must be able
-// to authenticate via the direct-access grant out of the box (the CLI login
-// path). Keycloak 26 refuses the grant with "Account is not fully set up" if a
-// required profile attribute (email) is missing, the password is temporary
-// (forces UPDATE_PASSWORD), or a required action is pending. The first real
-// `reckon start` hit exactly this; guard all three so a fresh install can log in
-// without an admin-console detour.
-func TestRealm_BundledUserIsLoginReady(t *testing.T) {
+// TestRealm_ShipsNoCredentialedUser: the distributed artifact carries NO user
+// account. A hardcoded-password (let alone privileged) account in a public-bound
+// realm is a default-credentials liability; local/CI logins are provisioned
+// out-of-band by `reckon dev-auth` against a running instance
+// (implementation/jwt-claims.md). Guarding it here keeps a convenience user from
+// silently creeping back into the import.
+func TestRealm_ShipsNoCredentialedUser(t *testing.T) {
 	doc := parseRealm(t)
-	if len(doc.Users) == 0 {
-		t.Fatal("realm defines no bundled user; the first-run login has no account")
-	}
 	for _, u := range doc.Users {
-		if !u.Enabled {
-			t.Errorf("user %q is disabled", u.Username)
-		}
-		if u.Email == "" {
-			t.Errorf("user %q has no email; Keycloak's user profile requires it or the grant fails", u.Username)
-		}
-		if len(u.RequiredActions) != 0 {
-			t.Errorf("user %q has pending required actions %v; the direct grant would fail", u.Username, u.RequiredActions)
-		}
-		var hasPassword bool
 		for _, c := range u.Credentials {
-			if c.Type != "password" {
-				continue
-			}
-			hasPassword = true
-			if c.Temporary {
-				t.Errorf("user %q ships a temporary password; it forces UPDATE_PASSWORD and blocks the direct grant", u.Username)
+			if c.Type == "password" {
+				t.Errorf("realm ships user %q with a password credential; the artifact must carry no credentials (use `%s dev-auth`)", u.Username, branding.CLI)
 			}
 		}
-		if !hasPassword {
-			t.Errorf("user %q has no password credential", u.Username)
+	}
+}
+
+// TestRealm_DirectAccessGrantsDisabled: the shipped clients must NOT advertise
+// the direct-access (ROPC) grant — it is the one grant where the password
+// crosses the client instead of staying at the IdP, and nothing in the shipping
+// analyst path (PKCE) needs it. `reckon dev-auth` enables it at runtime for
+// eval / the CLI loop; the artifact ships it off.
+func TestRealm_DirectAccessGrantsDisabled(t *testing.T) {
+	doc := parseRealm(t)
+	for _, c := range doc.Clients {
+		if c.DirectAccessGrantsEnabled {
+			t.Errorf("client %q ships directAccessGrantsEnabled=true; the artifact must ship ROPC off (enable via `%s dev-auth`)", c.ClientID, branding.CLI)
 		}
 	}
 }

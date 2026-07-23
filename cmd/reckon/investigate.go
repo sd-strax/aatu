@@ -41,11 +41,13 @@ type repl struct {
 // every agent-driven backend call carries the delegate token, so the engine's
 // AI write protections hold no matter what the model asks for.
 //
-// v0 auth is the direct-access grant against the bundled realm's two clients
-// (RECKON_USER / RECKON_PASSWORD, defaulting to the bundled first-run admin):
-// the same credentials mint the human token (reckon client) and the delegate
-// token (reckon-agent client). Token refresh is not handled — a session outlives
-// its 1h token only by restarting; fine for v0.
+// v0 auth is the direct-access (ROPC) grant against the two realm clients
+// (RECKON_USER / RECKON_PASSWORD, defaulting to the dev-auth principal): the
+// same credentials mint the human token (reckon client) and the delegate token
+// (reckon-agent client). The shipped realm carries neither the grant nor the
+// user — run `reckon dev-auth` once to provision both (implementation/jwt-claims.md).
+// Token refresh is not handled — a session outlives its 1h token only by
+// restarting; fine for this deferred dev surface.
 func runInvestigate(invID string) error {
 	if invID == "" {
 		return fmt.Errorf("usage: %s investigate <investigation-id>", branding.CLI)
@@ -68,7 +70,7 @@ func runInvestigate(invID string) error {
 	ctx := context.Background()
 	humanCred, err := agent.NewCredential(ctx, issuer, branding.CLI, user, pass)
 	if err != nil {
-		return fmt.Errorf("login (human client): %w", err)
+		return fmt.Errorf("login (human client): %w\n  hint: the shipped realm has no login user and ROPC is off — run `%s dev-auth` first", err, branding.CLI)
 	}
 	agentCred, err := agent.NewCredential(ctx, issuer, branding.CLI+"-agent", user, pass)
 	if err != nil {

@@ -70,6 +70,10 @@ func main() {
 		if err := runInvestigate(id); err != nil {
 			log.Fatalf("%s investigate: %v", branding.CLI, err)
 		}
+	case "dev-auth":
+		if err := runDevAuth(os.Args[2:]); err != nil {
+			log.Fatalf("%s dev-auth: %v", branding.CLI, err)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
@@ -87,6 +91,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  stop       signal a running %s supervisor to shut down\n", branding.CLI)
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (needs ANTHROPIC_API_KEY)")
+	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
 }
 
 // runInit performs first-run setup: writes a default config with a freshly
@@ -113,9 +118,9 @@ func runInit() error {
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Printf("  1. %s start                 — bring up the bundled stack (first run downloads Pg/Temporal/Keycloak)\n", branding.CLI)
-	fmt.Printf("  2. sign in to the bundled realm (default user reckon-admin / reckon; change on first login)\n")
-	fmt.Printf("  3. GET /api/capabilities    — the seeded %s scenario's verbs are live; edit %s to point at real adapters\n",
-		res.SeededScenario, res.CapabilityConfig)
+	fmt.Printf("  2. %s dev-auth              — provision a local dev login (the shipped realm carries no credentials)\n", branding.CLI)
+	fmt.Printf("  3. sign in with the principal dev-auth prints, then GET /api/capabilities — the seeded %s scenario's verbs are live\n",
+		res.SeededScenario)
 	return nil
 }
 

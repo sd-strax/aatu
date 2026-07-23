@@ -66,7 +66,7 @@ func Run(ctx context.Context, rc RunConfig) (*Report, error) {
 	pass := envOr("RECKON_PASSWORD", branding.CLI)
 	humanCred, err := agent.NewCredential(ctx, issuer, branding.CLI, user, pass)
 	if err != nil {
-		return nil, fmt.Errorf("eval: login (human client): %w", err)
+		return nil, fmt.Errorf("eval: login (human client): %w\n  hint: the shipped realm has no login user and ROPC is off — run `%s dev-auth` first", err, branding.CLI)
 	}
 	agentCred, err := agent.NewCredential(ctx, issuer, branding.CLI+"-agent", user, pass)
 	if err != nil {

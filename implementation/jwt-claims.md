@@ -94,3 +94,49 @@ Tests bypass both with a mock OIDC issuer. The v1 refinement, when multiple
 delegate vendors matter, is to make the mapper read a user attribute (or add a
 per-vendor client) instead of the v0 hardcoded value — the engine side does not
 change, it already reads whatever `delegate_kind` the realm mints.
+
+### The artifact ships no credentials and no password grant
+
+Two things that are pure dev/CI scaffolding are deliberately kept OUT of the
+distributed realm import (`supervisor/keycloak_realm.json`), because this repo is
+public-bound and both are default-credential liabilities:
+
+- **No user account.** The realm ships zero users. A hardcoded-password (and
+  formerly `tenant_admin`) account in a public realm is exactly the
+  default-credentials footgun a first security review flags.
+- **The direct-access (ROPC) grant is OFF** on both clients
+  (`directAccessGrantsEnabled: false`). ROPC is the one grant where the password
+  transits the *client* instead of staying at the IdP, and nothing in the
+  shipping analyst path needs it — the workbench signs in with PKCE. It is also
+  structurally impossible against an SSO/MFA-fronted corporate IdP, so it only
+  ever worked in the bundled-local topology anyway.
+
+Both are provisioned OUT OF BAND against a running instance by
+**`reckon dev-auth`** (`cmd/reckon/dev_auth.go` → `supervisor.ProvisionDevAuth`),
+which authenticates with the master bootstrap admin and, via the Admin REST API,
+(1) enables ROPC on the `reckon`/`reckon-agent` clients and (2) ensures a login
+principal with a chosen password + the engine roles. It is loud that it weakens
+the instance's posture and must never run against a shared/hardened deployment.
+
+Consumers by auth path:
+
+- **Workbench (shipping analyst surface)** — PKCE; needs only the *user* to
+  exist, so `dev-auth` (or a real admin creating users / a federated IdP) is the
+  onboarding step. Does not need ROPC.
+- **`reckon investigate` (deferred dev CLI) and `eval` (CI)** — still ROPC via
+  `agent.NewCredential`; both require `dev-auth` to have run, and say so on login
+  failure.
+- **Engine/integration tests** — untouched: they mint their own JWTs against a
+  mock issuer (`server.mintToken`), never ROPC against the real realm, so the
+  artifact change breaks no test.
+
+The realm-import contract is guarded structurally by
+`supervisor/keycloak_realm_test.go`: `TestRealm_ShipsNoCredentialedUser` and
+`TestRealm_DirectAccessGrantsDisabled` fail `go test` if either liability creeps
+back in. The Admin-REST provisioning flow is covered against an httptest
+stand-in (`keycloak_admin_test.go`) so its request shapes are checked without a
+running Keycloak.
+
+The **master bootstrap admin remains `admin/admin`** by default
+(`ensureBootstrapAdmin`) — a separate, pre-existing weak-dev-default that
+hardened deployments rotate; `dev-auth` uses it but does not worsen it.
