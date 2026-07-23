@@ -113,6 +113,19 @@ func activate(build ModuleBuilder) (config.Config, module.Registry, error) {
 // and the in-process Backend, then runs the supervisor until shutdown. The PID
 // file is written on entry and removed on exit so `reckon stop` can find the
 // process.
+// requireSecret reads a provisioned install secret, failing fast with a pointer
+// to the deployer step when it is absent (the operator path never mints).
+func requireSecret(store *secrets.Store, name, label string) (string, error) {
+	v, ok, err := store.Get(name)
+	if err != nil {
+		return "", fmt.Errorf("read %s secret: %w", label, err)
+	}
+	if !ok {
+		return "", fmt.Errorf("%s secret not provisioned — run `%s init` first (the deployer step that establishes this install's secrets)", label, branding.CLI)
+	}
+	return v, nil
+}
+
 func serve(cfg config.Config) error {
 	// Bring observability up first so everything below logs through the
 	// configured structured logger and can emit spans (A.8).
@@ -145,9 +158,30 @@ func serve(cfg config.Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// The operator step only consumes secrets — it never mints them. The
+	// Postgres role password and the Keycloak master-admin password are
+	// provisioned by the deployer step (`reckon init`, runtime.provisionSecrets)
+	// into the install secret store beside the config; start reads them here and
+	// fails fast if the deploy step was skipped.
+	configPath, err := config.DefaultPath()
+	if err != nil {
+		return err
+	}
+	store := secrets.Open(filepath.Dir(configPath))
+	pgPassword, err := requireSecret(store, secrets.NamePostgres, "postgres role")
+	if err != nil {
+		return err
+	}
+	kcAdminPassword, err := requireSecret(store, secrets.NameKeycloakAdmin, "keycloak admin")
+	if err != nil {
+		return err
+	}
+
 	pg := supervisor.NewPostgres(supervisor.PostgresConfig{
-		DataDir: filepath.Join(cfg.Data.Dir, "pg"),
-		Port:    cfg.Postgres.Port,
+		DataDir:  filepath.Join(cfg.Data.Dir, "pg"),
+		Port:     cfg.Postgres.Port,
+		Password: pgPassword,
+		SSLMode:  cfg.Postgres.SSLMode,
 		// Temporal manages its own SQLite store (see D15) so there's no
 		// reckon_temporal database here today.
 		Databases: []supervisor.DatabaseSpec{
@@ -162,22 +196,6 @@ func serve(cfg config.Config) error {
 		UIPort:       cfg.Temporal.UIPort,
 		Namespace:    cfg.Temporal.Namespace,
 	})
-	// The operator step only consumes secrets — it never mints them. The
-	// Keycloak master-admin password is provisioned by the deployer step
-	// (`reckon init`, runtime.provisionSecrets) into the install secret store
-	// beside the config; start reads it here and fails fast if the deploy step
-	// was skipped.
-	configPath, err := config.DefaultPath()
-	if err != nil {
-		return err
-	}
-	kcAdminPassword, ok, err := secrets.Open(filepath.Dir(configPath)).Get(secrets.NameKeycloakAdmin)
-	if err != nil {
-		return fmt.Errorf("read keycloak admin secret: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("keycloak admin secret not provisioned — run `%s init` first (the deployer step that establishes this install's secrets)", branding.CLI)
-	}
 	kc := supervisor.NewKeycloak(supervisor.KeycloakConfig{
 		DataDir:        filepath.Join(cfg.Data.Dir, "keycloak"),
 		HTTPPort:       cfg.Keycloak.HTTPPort,

@@ -61,6 +61,12 @@ type Postgres struct {
 	// Port defaults to 5435 (non-standard to avoid colliding with a system
 	// Postgres on 5432 during dev).
 	Port uint32 `yaml:"port"`
+
+	// SSLMode is the libpq sslmode for connections. Default "disable" — the
+	// bundled instance is loopback-only. A networked/managed Postgres should set
+	// "require" (or stricter). The role password is a provisioned install secret
+	// (internal/secrets), never a config field.
+	SSLMode string `yaml:"ssl_mode"`
 }
 
 // Temporal configures the bundled Temporal dev server.
@@ -171,7 +177,7 @@ func Default() Config {
 	return Config{
 		Deployment: Deployment{Mode: "oss"},
 		Data:       Data{Dir: dataDir},
-		Postgres:   Postgres{Port: 5435},
+		Postgres:   Postgres{Port: 5435, SSLMode: "disable"},
 		Temporal: Temporal{
 			FrontendPort: 7233,
 			UIEnabled:    true,

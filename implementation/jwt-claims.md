@@ -158,9 +158,28 @@ the same taxonomy):
   so `admin/admin` is gone from that path too.
 
 The username stays `admin`; only the password is provisioned. The store
-(`internal/secrets`) is the extensible home for future install secrets — config
-holds non-sensitive settings, the secret store holds provisioned secrets, and
-the deployer step is the one place secrets are born in every topology (bundled
-`init` here; the analogous IaC/install step for a shared/SaaS backend). Covered
-by `internal/secrets` unit tests + `runtime` init tests (generation,
-persistence, `0600`, supplied-value, idempotence) — no Keycloak boot required.
+(`internal/secrets`) is the home for every provisioned install secret — config
+holds non-sensitive settings, the secret store holds secrets, and the deployer
+step is the one place secrets are born in every topology (bundled `init` here;
+the analogous IaC/install step for a shared/SaaS backend). Covered by
+`internal/secrets` unit tests + `runtime` init tests (generation, persistence,
+`0600`, supplied-value, idempotence) — no Keycloak boot required.
+
+**Its tenants today.** Same deployer-provisions / operator-consumes rule for each:
+
+- **`keycloak-admin-password`** — above. Operator-facing (console + `dev-auth`);
+  echoed once on generation. `--kc-admin-password` / `KC_ADMIN_PW` to supply.
+- **`postgres-password`** — the bundled Postgres role (`reckon`) password,
+  replacing the old hardcoded `reckon/reckon` in the DSN and embedded config.
+  Purely internal (only the stack connects), so it is NOT echoed — it lives
+  `0600` in the store, retrievable there if an operator needs `psql`. Runtime
+  injects it into `PostgresConfig.Password`; the component's `Start` fails fast
+  if it is absent. `--postgres-password` / `RECKON_PG_PASSWORD` to supply.
+  `postgres.ssl_mode` (config, non-secret; default `disable` for loopback) is the
+  seam for requiring TLS against a networked DB.
+
+Temporal remains an unauthenticated loopback dev server — nothing to provision
+until it is networked. Pointing at EXTERNAL/managed Postgres, Keycloak, or
+Temporal (operator supplies host + connection secret, supervisor skips the
+embedded component) is the matched "managed deps" phase for all three — not a
+per-dep bolt-on, and deferred as one coherent piece.

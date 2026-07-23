@@ -28,6 +28,14 @@ type PostgresConfig struct {
 	// with a system Pg on the default 5432.
 	Port uint32
 
+	// Password is the `reckon` role's password — a provisioned install secret
+	// (internal/secrets), injected by runtime. Required; Start fails without it.
+	// The component consumes it, never hardcodes it.
+	Password string
+
+	// SSLMode is the libpq sslmode used in DSNs. Default "disable" (loopback).
+	SSLMode string
+
 	// Databases to create + migrate on first start. Each spec names a
 	// database and (optionally) an embedded fs.FS of SQL migrations.
 	// Database creation is idempotent; migrations run on every start
@@ -70,6 +78,9 @@ func NewPostgres(cfg PostgresConfig) *Postgres {
 		home, _ := os.UserHomeDir()
 		cfg.DataDir = filepath.Join(home, branding.DataDir, "pg")
 	}
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = "disable"
+	}
 	return &Postgres{cfg: cfg}
 }
 
@@ -79,6 +90,9 @@ func (p *Postgres) Name() string { return "postgres" }
 // Start downloads (first run) and starts the embedded Pg process, then
 // ensures every requested database exists.
 func (p *Postgres) Start(ctx context.Context) error {
+	if p.cfg.Password == "" {
+		return fmt.Errorf("postgres: no role password provisioned (run `%s init`)", branding.CLI)
+	}
 	if err := os.MkdirAll(p.cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
@@ -92,7 +106,7 @@ func (p *Postgres) Start(ctx context.Context) error {
 		DataPath(dataPath).
 		Database("postgres").
 		Username("reckon").
-		Password("reckon") // local-only credentials; for laptop / single-node use
+		Password(p.cfg.Password) // provisioned install secret (internal/secrets)
 
 	// Build + start on a local before publishing, so Health never observes a
 	// half-started instance and a failed Start leaves the component cleanly
@@ -150,8 +164,8 @@ func (p *Postgres) Health(ctx context.Context) HealthStatus {
 // DSN returns a libpq connection string for a given database on this instance.
 // Downstream components (Temporal, knowledge service, etc.) consume this.
 func (p *Postgres) DSN(dbname string) string {
-	return fmt.Sprintf("host=localhost port=%d user=reckon password=reckon dbname=%s sslmode=disable",
-		p.cfg.Port, dbname)
+	return fmt.Sprintf("host=localhost port=%d user=reckon password=%s dbname=%s sslmode=%s",
+		p.cfg.Port, p.cfg.Password, dbname, p.cfg.SSLMode)
 }
 
 func (p *Postgres) ensureDatabases(ctx context.Context) error {

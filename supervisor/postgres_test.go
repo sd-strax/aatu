@@ -39,8 +39,9 @@ func TestPostgresLifecycle(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "pg")
 	pg := NewPostgres(PostgresConfig{
-		DataDir: dir,
-		Port:    0, // use default 5435
+		DataDir:  dir,
+		Password: "test-pw",
+		Port:     0, // use default 5435
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main"},
 			{Name: "reckon_knowledge"},
@@ -102,7 +103,8 @@ func TestPostgresLifecycle(t *testing.T) {
 
 	// Restart against the same data directory; existing data should be visible
 	pg2 := NewPostgres(PostgresConfig{
-		DataDir: dir,
+		DataDir:  dir,
+		Password: "test-pw",
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main"},
 			{Name: "reckon_knowledge"},
@@ -144,8 +146,9 @@ func TestPostgresMigrations(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "pg")
 	pg := NewPostgres(PostgresConfig{
-		DataDir: dir,
-		Port:    0,
+		DataDir:  dir,
+		Password: "test-pw",
+		Port:     0,
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
 			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
@@ -235,7 +238,8 @@ func TestPostgresMigrations(t *testing.T) {
 	}
 
 	pg2 := NewPostgres(PostgresConfig{
-		DataDir: dir,
+		DataDir:  dir,
+		Password: "test-pw",
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
 			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},

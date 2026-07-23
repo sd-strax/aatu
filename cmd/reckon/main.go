@@ -105,11 +105,16 @@ func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	kcAdminPassword := fs.String("kc-admin-password", os.Getenv("KC_ADMIN_PW"),
 		"master-realm admin password to provision (default: generate a strong random one)")
+	pgPassword := fs.String("postgres-password", os.Getenv("RECKON_PG_PASSWORD"),
+		"Postgres role password to provision (default: generate a strong random one)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	res, err := runtime.Init(runtime.InitOptions{KeycloakAdminPassword: *kcAdminPassword})
+	res, err := runtime.Init(runtime.InitOptions{
+		KeycloakAdminPassword: *kcAdminPassword,
+		PostgresPassword:      *pgPassword,
+	})
 	if err != nil {
 		return err
 	}
@@ -137,6 +142,7 @@ func runInit(args []string) error {
 	fmt.Printf("  data dir:  %s\n", res.DataDir)
 	fmt.Printf("  namespace: %s  (this install's immutable identity namespace)\n", res.TenantNamespace)
 	fmt.Printf("  demo:      %s  (fixture scenario, wired live via %s)\n", res.SeededScenario, res.CapabilityConfig)
+	fmt.Printf("  secrets:   provisioned in <install>/secrets (0600) — postgres role + keycloak admin\n")
 	printKCAdmin()
 	fmt.Println()
 	fmt.Println("Next steps:")

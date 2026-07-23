@@ -10,6 +10,7 @@ import (
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/config"
+	"github.com/sd-strax/reckon/internal/secrets"
 )
 
 // withConfigEnv points config resolution at a temp file for the duration of the
@@ -105,6 +106,15 @@ func TestInit_ProvisionsAdminSecret(t *testing.T) {
 	}
 	if res.KeycloakAdminPassword == "" || res.KeycloakAdminPassword == "admin" {
 		t.Errorf("weak/empty admin password %q; want a generated strong secret", res.KeycloakAdminPassword)
+	}
+	if !res.PostgresProvisioned {
+		t.Error("fresh init did not provision the postgres role password")
+	}
+	// The postgres secret is a real strong value in the store, not a hardcoded default.
+	if pg, ok, err := secrets.Open(filepath.Dir(res.ConfigPath)).Get(secrets.NamePostgres); err != nil || !ok {
+		t.Fatalf("postgres secret not in store: ok=%v err=%v", ok, err)
+	} else if pg == "" || pg == "reckon" {
+		t.Errorf("weak/empty postgres password %q; want a generated strong secret", pg)
 	}
 
 	// A supplied password is honored on a fresh install.

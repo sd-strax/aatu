@@ -19,6 +19,8 @@ import (
 const (
 	// NameKeycloakAdmin is the Keycloak master-realm bootstrap admin password.
 	NameKeycloakAdmin = "keycloak-admin-password"
+	// NamePostgres is the bundled Postgres role password (user `reckon`).
+	NamePostgres = "postgres-password"
 )
 
 // Store is one installation's secret store, rooted at a directory. Nothing is
