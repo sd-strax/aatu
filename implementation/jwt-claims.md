@@ -144,12 +144,16 @@ The Keycloak master-realm admin (console + Admin REST) is no longer a hardcoded
 three-role split (`internal/secrets`, `implementation/agent-sidecar.md` §1 has
 the same taxonomy):
 
-- **Deployer** (`reckon init`) generates a strong random password by default, or
-  accepts one via `--kc-admin-password` / `KC_ADMIN_PW` for IaC/vault-driven
-  deploys, and writes it `0600` to `<install>/secrets/keycloak-admin-password`
-  (beside the config — never *in* it). Idempotent: re-running `init` never
-  rotates an existing secret. A generated password is echoed to the console
-  exactly once, on the run that creates it.
+- **Deployer** (`reckon init`) establishes the password by an **explicit act —
+  never auto-generation**: an operator-supplied `--kc-admin-password` /
+  `RECKON_KC_PASSWORD` (for IaC/vault-driven deploys), or, on a terminal, an
+  interactive no-echo prompt (confirmed by retype). A supplied/prompted value is
+  written `0600` to `<install>/secrets/keycloak-admin-password` (beside the
+  config — never *in* it); an env-injected one is referenced, not persisted (see
+  the consume-precedence note). A non-interactive `init` with no source **fails
+  fast** naming the flag and env var. Idempotent: re-running `init` never rotates
+  or re-prompts an existing secret. Because the operator always chose the value,
+  it is **never echoed back**.
 - **Operator** (`reckon start`) only *consumes*: runtime reads the secret and
   injects it into `KeycloakConfig.AdminPassword`; the Keycloak component
   bootstraps the admin with it and never generates anything. If the secret is
@@ -161,33 +165,38 @@ The username stays `admin`; only the password is provisioned. The store
 (`internal/secrets`) is the home for every provisioned install secret — config
 holds non-sensitive settings, the secret store holds secrets, and the deployer
 step is the one place secrets are born in every topology (bundled `init` here;
-the analogous IaC/install step for a shared/SaaS backend). Covered by
-`internal/secrets` unit tests + `runtime` init tests (generation, persistence,
-`0600`, supplied-value, idempotence) — no Keycloak boot required.
+the analogous IaC/install step for a shared/SaaS backend). **No credential is
+ever auto-generated** — the store exposes no random generator; every secret
+enters by flag, env, or interactive prompt, so a credential only exists because
+someone deliberately set it. Covered by `internal/secrets` unit tests + `runtime`
+init tests (persistence, `0600`, supplied-value, prompt source, no-source
+fail-fast, idempotence) — no Keycloak boot required.
 
 **Its tenants today.** Same deployer-provisions / operator-consumes rule for each:
 
 - **`keycloak-admin-password`** — above. Operator-facing (console + `dev-auth`);
-  echoed once on generation. `--kc-admin-password` / `KC_ADMIN_PW` to supply.
+  set explicitly, never echoed. `--kc-admin-password` / `RECKON_KC_PASSWORD` / prompt to
+  supply.
 - **`postgres-password`** — the bundled Postgres role (`reckon`) password,
   replacing the old hardcoded `reckon/reckon` in the DSN and embedded config.
   Purely internal (only the stack connects), so it is NOT echoed — it lives
   `0600` in the store, retrievable there if an operator needs `psql`. Runtime
   injects it into `PostgresConfig.Password`; the component's `Start` fails fast
-  if it is absent. `--postgres-password` / `RECKON_PG_PASSWORD` to supply.
+  if it is absent. `--postgres-password` / `RECKON_PG_PASSWORD` / prompt to supply
+  — like the admin secret, it is set explicitly, never auto-generated.
   `postgres.ssl_mode` (config, non-secret; default `disable` for loopback) is the
   seam for requiring TLS against a networked DB.
 
 **Consume precedence — env over store.** `start` and `dev-auth` resolve each
 engine secret as **env override → store** (`secrets.Resolve`, `EnvKeycloakAdmin`
-= `KC_ADMIN_PW`, `EnvPostgres` = `RECKON_PG_PASSWORD`). This is the operator/vault
+= `RECKON_KC_PASSWORD`, `EnvPostgres` = `RECKON_PG_PASSWORD`). This is the operator/vault
 path: a hardened deployment injects the secret from its secret manager (systemd
 `EnvironmentFile`, k8s Secret, Vault) and **nothing rests in a reckon file** —
 the keychain is deliberately NOT used for these, because the engine runs headless
 (no desktop session / Secret Service) and as a service account. For that to be
 truly file-free, `init` also **skips persisting** a secret when its env override
 is set with no `--*-password` flag (`InitOptions.*External`): a bare
-`--kc-admin-password X` flag persists X; a bare `KC_ADMIN_PW` env injects at
+`--kc-admin-password X` flag persists X; a bare `RECKON_KC_PASSWORD` env injects at
 runtime and writes nothing. Consistency is the operator's job — the same value
 must reach `start` (for `initdb` / `bootstrap-admin`) and later `dev-auth`.
 

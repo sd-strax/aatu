@@ -28,12 +28,21 @@ func withConfigEnv(t *testing.T) string {
 	return path
 }
 
+// promptStub returns InitOptions whose PromptForSecret answers with a strong
+// per-secret value, standing in for the CLI's interactive no-echo prompt so
+// tests can exercise the (never-auto-generated) prompt source without a TTY.
+func promptStub() InitOptions {
+	return InitOptions{PromptForSecret: func(name, _ string) (string, error) {
+		return "prompted-" + name + "-pw", nil
+	}}
+}
+
 // TestInit_FreshWritesConfigAndNamespace: a first init writes a parseable config
 // at the resolved path, with a freshly minted (non-default) identity namespace.
 func TestInit_FreshWritesConfigAndNamespace(t *testing.T) {
 	path := withConfigEnv(t)
 
-	res, err := Init(InitOptions{})
+	res, err := Init(promptStub())
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -67,15 +76,28 @@ func TestInit_FreshWritesConfigAndNamespace(t *testing.T) {
 
 // TestInit_Idempotent: re-running init against an existing config never
 // clobbers it — the namespace stays put, the provisioned admin secret is
-// unchanged (never rotated), and AlreadyExisted is reported.
+// unchanged (never rotated OR re-prompted), and AlreadyExisted is reported.
 func TestInit_Idempotent(t *testing.T) {
 	withConfigEnv(t)
 
-	first, err := Init(InitOptions{})
+	// A prompter that fails the test if called a second time — proves re-init
+	// reuses the stored secret rather than re-prompting.
+	calls := 0
+	opts := InitOptions{PromptForSecret: func(name, _ string) (string, error) {
+		calls++
+		return "prompted-" + name + "-pw", nil
+	}}
+
+	first, err := Init(opts)
 	if err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
-	second, err := Init(InitOptions{})
+	if !first.KeycloakAdminSetFromInput {
+		t.Error("fresh init did not report the admin secret set from input")
+	}
+	callsAfterFirst := calls
+
+	second, err := Init(opts)
 	if err != nil {
 		t.Fatalf("second Init: %v", err)
 	}
@@ -85,55 +107,67 @@ func TestInit_Idempotent(t *testing.T) {
 	if second.TenantNamespace != first.TenantNamespace {
 		t.Errorf("namespace changed on re-init: %q → %q (must be immutable)", first.TenantNamespace, second.TenantNamespace)
 	}
-	if second.KeycloakAdminGenerated {
-		t.Error("re-init reported the admin secret as generated; it must be reused, not rotated")
+	if second.KeycloakAdminSetFromInput {
+		t.Error("re-init re-set the admin secret; it must be reused, not re-prompted or rotated")
+	}
+	if calls != callsAfterFirst {
+		t.Errorf("re-init prompted again (%d → %d calls); a provisioned secret must not re-prompt", callsAfterFirst, calls)
 	}
 	if second.KeycloakAdminPassword != first.KeycloakAdminPassword {
 		t.Error("admin secret changed on re-init (must be immutable once provisioned)")
 	}
 }
 
-// TestInit_ProvisionsAdminSecret: a fresh init generates and persists a strong
-// admin password (not a hardcoded default), and a supplied value is honored.
+// TestInit_ProvisionsAdminSecret: a fresh init persists the operator's chosen
+// admin + postgres passwords (never a hardcoded default, never auto-generated),
+// via either the interactive prompt or an explicit flag value.
 func TestInit_ProvisionsAdminSecret(t *testing.T) {
 	withConfigEnv(t)
-	res, err := Init(InitOptions{})
+	res, err := Init(promptStub())
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if !res.KeycloakAdminGenerated {
-		t.Error("fresh init did not generate an admin secret")
+	if !res.KeycloakAdminSetFromInput {
+		t.Error("fresh init did not set the admin secret from input")
 	}
 	if res.KeycloakAdminPassword == "" || res.KeycloakAdminPassword == "admin" {
-		t.Errorf("weak/empty admin password %q; want a generated strong secret", res.KeycloakAdminPassword)
+		t.Errorf("weak/empty admin password %q; want the operator-provided secret", res.KeycloakAdminPassword)
 	}
 	if !res.PostgresProvisioned {
 		t.Error("fresh init did not provision the postgres role password")
 	}
-	// The postgres secret is a real strong value in the store, not a hardcoded default.
+	// The postgres secret is the operator-provided value in the store, not a hardcoded default.
 	if pg, ok, err := secrets.Open(filepath.Dir(res.ConfigPath)).Get(secrets.NamePostgres); err != nil || !ok {
 		t.Fatalf("postgres secret not in store: ok=%v err=%v", ok, err)
 	} else if pg == "" || pg == "reckon" {
-		t.Errorf("weak/empty postgres password %q; want a generated strong secret", pg)
+		t.Errorf("weak/empty postgres password %q; want the operator-provided secret", pg)
 	}
 
-	// A supplied password is honored on a fresh install.
+	// Explicit flag values are honored on a fresh install (no prompt needed).
 	dir := t.TempDir()
 	t.Setenv("RECKON_CONFIG", filepath.Join(dir, "config.yaml"))
-	supplied, err := Init(InitOptions{KeycloakAdminPassword: "operator-chosen"})
+	supplied, err := Init(InitOptions{KeycloakAdminPassword: "operator-chosen", PostgresPassword: "pg-chosen"})
 	if err != nil {
 		t.Fatalf("Init supplied: %v", err)
 	}
 	if supplied.KeycloakAdminPassword != "operator-chosen" {
 		t.Errorf("supplied password not honored: got %q", supplied.KeycloakAdminPassword)
 	}
-	// A supplied value is "set from input", NOT "generated" — so the CLI labels
-	// it correctly and never echoes a password the operator already chose.
-	if supplied.KeycloakAdminGenerated {
-		t.Error("a supplied password must not be reported as generated")
-	}
 	if !supplied.KeycloakAdminSetFromInput {
 		t.Error("a supplied password on a fresh store should report set-from-input")
+	}
+}
+
+// TestInit_NoSourceFailsFast: with no flag, no env, and no prompter (the
+// non-interactive path), init must FAIL rather than auto-generate a credential —
+// and must not leave a config behind, so the install stays cleanly re-runnable.
+func TestInit_NoSourceFailsFast(t *testing.T) {
+	path := withConfigEnv(t)
+	if _, err := Init(InitOptions{}); err == nil {
+		t.Fatal("init with no secret source and no prompter must fail fast, not auto-generate")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a failed no-source init left a config at %s (stat err=%v); secrets are provisioned first so nothing should be written", path, err)
 	}
 }
 
@@ -151,8 +185,8 @@ func TestInit_ExternalSecretNotPersisted(t *testing.T) {
 	if !res.KeycloakAdminExternal || !res.PostgresExternal {
 		t.Error("external flags not reported back")
 	}
-	if res.KeycloakAdminGenerated {
-		t.Error("an external KC admin secret must not be reported as generated")
+	if res.KeycloakAdminSetFromInput {
+		t.Error("an external KC admin secret must not be reported as set-from-input")
 	}
 	if res.PostgresProvisioned {
 		t.Error("an external Postgres secret must not be reported as provisioned")
@@ -169,14 +203,14 @@ func TestInit_ExternalSecretNotPersisted(t *testing.T) {
 // TestInit_UniquePerInstall: two independent installs mint distinct namespaces.
 func TestInit_UniquePerInstall(t *testing.T) {
 	withConfigEnv(t)
-	a, err := Init(InitOptions{})
+	a, err := Init(promptStub())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Point at a second, separate config location.
 	dir := t.TempDir()
 	t.Setenv("RECKON_CONFIG", filepath.Join(dir, "config.yaml"))
-	b, err := Init(InitOptions{})
+	b, err := Init(promptStub())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +226,7 @@ func TestInit_UniquePerInstall(t *testing.T) {
 // and BuildActionResolver produces write bindings, both against the seeded files.
 func TestInit_SeedsWiredDemo(t *testing.T) {
 	withConfigEnv(t)
-	res, err := Init(InitOptions{})
+	res, err := Init(promptStub())
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}

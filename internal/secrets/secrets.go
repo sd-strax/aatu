@@ -7,8 +7,6 @@
 package secrets
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,8 +26,10 @@ const (
 // of the on-disk store — the operator/hardened-deploy path, where nothing rests
 // in a reckon file. Consumers resolve with env taking precedence over the store.
 const (
-	// EnvKeycloakAdmin overrides NameKeycloakAdmin.
-	EnvKeycloakAdmin = "KC_ADMIN_PW"
+	// EnvKeycloakAdmin overrides NameKeycloakAdmin. (Distinct from the KC_ADMIN_PW
+	// var the supervisor sets in Keycloak's OWN child-process env — this is the
+	// reckon-facing operator var, RECKON_-prefixed for consistency with EnvPostgres.)
+	EnvKeycloakAdmin = "RECKON_KC_PASSWORD"
 	// EnvPostgres overrides NamePostgres.
 	EnvPostgres = "RECKON_PG_PASSWORD"
 )
@@ -85,23 +85,8 @@ func (s *Store) EnsureValue(name, value string) (string, bool, error) {
 	return value, true, nil
 }
 
-// EnsureRandom provisions name with a fresh strong random value if absent,
-// otherwise returns the existing one (created=false).
-func (s *Store) EnsureRandom(name string) (string, bool, error) {
-	if existing, ok, err := s.Get(name); err != nil {
-		return "", false, err
-	} else if ok {
-		return existing, false, nil
-	}
-	v, err := randomToken(24)
-	if err != nil {
-		return "", false, err
-	}
-	return s.EnsureValue(name, v)
-}
-
 // write persists value 0600 (dir 0700), overwriting. Callers gate on existence
-// via Ensure*; this is the raw writer.
+// via EnsureValue; this is the raw writer.
 func (s *Store) write(name, value string) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("create secret store dir: %w", err)
@@ -110,13 +95,4 @@ func (s *Store) write(name, value string) error {
 		return fmt.Errorf("write secret %q: %w", name, err)
 	}
 	return nil
-}
-
-// randomToken returns a URL-safe base64 string of n random bytes.
-func randomToken(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate secret: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
 }

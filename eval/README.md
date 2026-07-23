@@ -16,7 +16,10 @@ tokens on a BYOK key and are explicitly invoked (`make eval`) — never part of
 ## TL;DR
 
 ```bash
-./bin/reckon init                 # once: seeds + wires the lateral-movement demo
+./bin/reckon init                 # once: seeds the demo + provisions install secrets
+                                  #   (prompts, no-echo, for the Keycloak-admin & Postgres
+                                  #    passwords — nothing is auto-generated; set RECKON_KC_PASSWORD
+                                  #    and RECKON_PG_PASSWORD to run it non-interactively)
 ./bin/reckon start                # boots Postgres/Temporal/Keycloak/backend
 export ANTHROPIC_API_KEY=...      # BYOK — the key never reaches the backend
 make eval                         # drives the scenario, grades, prints the matrix
@@ -50,7 +53,8 @@ dev box:
 ```bash
 ./bin/reckon stop
 rm -rf ~/.reckon      # wipes Pg data too — dev boxes only
-./bin/reckon init && ./bin/reckon start
+./bin/reckon init && ./bin/reckon start   # init re-prompts for the two install secrets
+                                          # (or export RECKON_KC_PASSWORD / RECKON_PG_PASSWORD first)
 ```
 
 …or wire it manually — concatenate the two example configs and point at the

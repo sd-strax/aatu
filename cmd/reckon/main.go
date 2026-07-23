@@ -108,17 +108,19 @@ func usage() {
 
 // runInit performs first-run setup (the deployer step): writes a default config
 // with a freshly minted per-install identity namespace and establishes the
-// install's secrets. Each of the Keycloak master-admin and Postgres passwords is
-// PERSISTED to the secret store when given via a --*-password flag (or generated
-// random by default); a bare env override (KC_ADMIN_PW / RECKON_PG_PASSWORD) with
-// no flag means "inject at runtime, do not persist" — the vault path. Idempotent:
-// re-running reports the existing config and never rotates a persisted secret.
+// install's secrets. No credential is ever auto-generated — each of the Keycloak
+// master-admin and Postgres passwords enters by an explicit act: a --*-password
+// flag (persisted to the store), a bare env override (RECKON_KC_PASSWORD /
+// RECKON_PG_PASSWORD with no flag → injected at runtime, NOT persisted — the
+// vault path), or, on a terminal, an interactive no-echo prompt (persisted).
+// A no-source secret on a non-interactive run fails fast. Idempotent: re-running
+// reports the existing config and never rotates or re-prompts a set secret.
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	kcAdminPassword := fs.String("kc-admin-password", "",
-		"persist this master-admin password to the store (default: generate one, or inject "+secrets.EnvKeycloakAdmin+" at runtime)")
+		"persist this master-admin password to the store (else inject "+secrets.EnvKeycloakAdmin+" at runtime, or be prompted)")
 	pgPassword := fs.String("postgres-password", "",
-		"persist this Postgres role password to the store (default: generate one, or inject "+secrets.EnvPostgres+" at runtime)")
+		"persist this Postgres role password to the store (else inject "+secrets.EnvPostgres+" at runtime, or be prompted)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -128,28 +130,37 @@ func runInit(args []string) error {
 	kcExternal := *kcAdminPassword == "" && os.Getenv(secrets.EnvKeycloakAdmin) != ""
 	pgExternal := *pgPassword == "" && os.Getenv(secrets.EnvPostgres) != ""
 
+	// On a terminal, a secret with no flag/env source is prompted (no echo)
+	// rather than generated. Off a terminal we pass no prompter, so init fails
+	// fast pointing at the flag/env — never conjuring a credential.
+	var prompt func(name, label string) (string, error)
+	if stdinIsTerminal() {
+		prompt = func(_ /*name*/, label string) (string, error) { return promptNewPassword(label) }
+	}
+
 	res, err := runtime.Init(runtime.InitOptions{
 		KeycloakAdminPassword: *kcAdminPassword,
 		KeycloakAdminExternal: kcExternal,
 		PostgresPassword:      *pgPassword,
 		PostgresExternal:      pgExternal,
+		PromptForSecret:       prompt,
 	})
 	if err != nil {
 		return err
 	}
 
-	// Report each secret: echo a GENERATED master-admin password exactly once
-	// (the only way to learn it), never re-print a supplied one, and name the
-	// env-injected (unpersisted) case. Say nothing when it already existed.
+	// Report each secret's source. Nothing is ever generated, so a password is
+	// never echoed — the operator supplied or typed it and already has it. We
+	// only name WHERE it now lives: env-injected (unpersisted) vs the store, and
+	// distinguish "set this run" from an idempotent no-op on re-init.
 	printKCAdmin := func() {
 		switch {
 		case res.KeycloakAdminExternal:
 			fmt.Printf("  keycloak admin: injected via %s at runtime (not persisted)\n", secrets.EnvKeycloakAdmin)
-		case res.KeycloakAdminGenerated:
-			fmt.Printf("  keycloak admin: generated a master-admin password (in secrets/, read by `%s dev-auth`)\n", branding.CLI)
-			fmt.Printf("                  admin / %s\n", res.KeycloakAdminPassword)
 		case res.KeycloakAdminSetFromInput:
-			fmt.Printf("  keycloak admin: set the master-admin password from your input (in secrets/)\n")
+			fmt.Printf("  keycloak admin: master-admin password set (in secrets/, read by `%s dev-auth`)\n", branding.CLI)
+		default:
+			fmt.Printf("  keycloak admin: master-admin password already provisioned (in secrets/)\n")
 		}
 	}
 	printPostgres := func() {

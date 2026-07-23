@@ -6,34 +6,6 @@ import (
 	"testing"
 )
 
-// TestEnsureRandom_GeneratesThenReuses: the first call generates and persists a
-// strong secret; the second returns it unchanged (idempotent, never rotates).
-func TestEnsureRandom_GeneratesThenReuses(t *testing.T) {
-	store := Open(t.TempDir())
-
-	v1, created1, err := store.EnsureRandom(NameKeycloakAdmin)
-	if err != nil {
-		t.Fatalf("EnsureRandom: %v", err)
-	}
-	if !created1 {
-		t.Error("first EnsureRandom did not report created")
-	}
-	if len(v1) < 24 {
-		t.Errorf("secret %q looks too short to be a strong random value", v1)
-	}
-
-	v2, created2, err := store.EnsureRandom(NameKeycloakAdmin)
-	if err != nil {
-		t.Fatalf("EnsureRandom again: %v", err)
-	}
-	if created2 {
-		t.Error("second EnsureRandom rotated the secret; it must reuse")
-	}
-	if v2 != v1 {
-		t.Errorf("secret changed on reuse: %q → %q", v1, v2)
-	}
-}
-
 // TestEnsureValue_HonorsSuppliedThenImmutable: a supplied value is stored, and a
 // later different supplied value is ignored (provisioning never rotates).
 func TestEnsureValue_HonorsSuppliedThenImmutable(t *testing.T) {

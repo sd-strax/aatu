@@ -48,8 +48,8 @@ func runDevAuth(args []string) error {
 	baseURL := fmt.Sprintf("http://localhost:%d", cfg.Keycloak.HTTPPort)
 
 	// The master-admin password resolves flag → env → store, matching what
-	// `start` used to bootstrap the admin (an operator injecting KC_ADMIN_PW at
-	// start must reach the same value here, or dev-auth couldn't authenticate).
+	// `start` used to bootstrap the admin (an operator injecting RECKON_KC_PASSWORD
+	// at start must reach the same value here, or dev-auth couldn't authenticate).
 	kcAdmin := *adminPass
 	if kcAdmin == "" {
 		configPath, perr := config.DefaultPath()

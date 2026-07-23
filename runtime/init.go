@@ -11,11 +11,15 @@ import (
 	"github.com/sd-strax/reckon/internal/secrets"
 )
 
-// InitOptions parameterizes the deployer step. For each secret: an explicit
-// value is persisted to the store; empty generates a strong random one; the
+// InitOptions parameterizes the deployer step. A credential is NEVER
+// auto-generated — it enters only by an explicit act. For each secret, in
+// precedence order: an explicit value (flag) is persisted to the store; the
 // External flag means "injected at runtime via env — do NOT persist" (the
-// vault/operator path, so nothing rests on disk). Supplied values are applied
-// only when the secret is absent — init never rotates.
+// vault/operator path, so nothing rests on disk); otherwise, if the secret is
+// absent and PromptForSecret is set, the operator is prompted and that value is
+// persisted. A secret with none of these (and not already provisioned) is a
+// fail-fast error. Supplied/prompted values are applied only when the secret is
+// absent — init never rotates.
 type InitOptions struct {
 	// KeycloakAdminPassword is an explicit master-admin password to persist.
 	KeycloakAdminPassword string
@@ -25,6 +29,14 @@ type InitOptions struct {
 	PostgresPassword string
 	// PostgresExternal skips persisting the Postgres password (env-injected).
 	PostgresExternal bool
+
+	// PromptForSecret, when non-nil, supplies a password for a secret that is
+	// absent and has no other source (no flag, no env). The CLI wires this to a
+	// no-echo TTY prompt; it is the ONLY interactive path and the reason init
+	// never needs to auto-generate. Nil (tests, non-interactive `init`) turns a
+	// no-source secret into a fail-fast error instead. name is the well-known
+	// secrets.Name*; label is a human phrase for the prompt.
+	PromptForSecret func(name, label string) (string, error)
 }
 
 // InitResult reports what `reckon init` wrote, so the CLI can print a first-run
@@ -44,13 +56,11 @@ type InitResult struct {
 	FixtureRoot      string
 
 	// KeycloakAdminPassword is the effective master-admin password in the install
-	// secret store after init. KeycloakAdminGenerated is true only when THIS run
-	// GENERATED a random one (the CLI echoes it once — the only way to learn it);
-	// KeycloakAdminSetFromInput is true when this run set it from an operator-
-	// supplied value (never echoed — the operator already has it). Both false
-	// means the secret already existed (idempotent no-op).
+	// secret store after init. KeycloakAdminSetFromInput is true when THIS run set
+	// it from operator input (a --kc-admin-password flag or the interactive
+	// prompt) — never echoed, the operator already has it. False means the secret
+	// already existed (idempotent no-op) or is External. Nothing is ever generated.
 	KeycloakAdminPassword     string
-	KeycloakAdminGenerated    bool
 	KeycloakAdminSetFromInput bool
 
 	// PostgresProvisioned is true when the Postgres role password now exists in
@@ -102,12 +112,11 @@ func Init(opts InitOptions) (InitResult, error) {
 			return InitResult{}, serr
 		}
 		return InitResult{
-			ConfigPath:             path,
-			TenantNamespace:        cfg.Capability.TenantNamespace,
-			DataDir:                cfg.Data.Dir,
+			ConfigPath:                path,
+			TenantNamespace:           cfg.Capability.TenantNamespace,
+			DataDir:                   cfg.Data.Dir,
 			AlreadyExisted:            true,
 			KeycloakAdminPassword:     p.kcAdmin,
-			KeycloakAdminGenerated:    p.kcGenerated,
 			KeycloakAdminSetFromInput: p.kcSetFromInput,
 			KeycloakAdminExternal:     opts.KeycloakAdminExternal,
 			PostgresProvisioned:       p.pgProvisioned,
@@ -124,6 +133,19 @@ func Init(opts InitOptions) (InitResult, error) {
 	namespace := uuid.New().String()
 	cfg.Capability.TenantNamespace = namespace
 
+	// Establish this install's secrets FIRST (the deployer step's job): the
+	// Keycloak master-admin and Postgres role passwords land beside the config in
+	// <install>/secrets, 0600 — never in the config file. The install dir is the
+	// config's directory (the same anchor the demo content uses), which equals
+	// Data.Dir in the default layout and stays isolated under an explicit config
+	// path. Doing it before the config/demo writes means a cancelled interactive
+	// prompt (the no-auto-generate path) commits NOTHING — the install stays fresh
+	// and re-runnable rather than half-written.
+	p, err := provisionSecrets(filepath.Dir(path), opts)
+	if err != nil {
+		return InitResult{}, err
+	}
+
 	// Seed the demo content beside the config (filepath.Dir(path) is the install's
 	// config directory, ~/<data>/ in production) and wire the config at it, so the
 	// bundled scenario runs out of the box. Isolated per-install because it lands
@@ -139,26 +161,14 @@ func Init(opts InitOptions) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("write config: %w", err)
 	}
 
-	// Establish this install's secrets (the deployer step's job): the Keycloak
-	// master-admin and Postgres role passwords land beside the config in
-	// <install>/secrets, 0600 — never in the config file. The install dir is the
-	// config's directory (the same anchor the demo content uses), which equals
-	// Data.Dir in the default layout and stays isolated under an explicit config
-	// path.
-	p, err := provisionSecrets(filepath.Dir(path), opts)
-	if err != nil {
-		return InitResult{}, err
-	}
-
 	return InitResult{
-		ConfigPath:             path,
-		TenantNamespace:        namespace,
-		DataDir:                cfg.Data.Dir,
+		ConfigPath:                path,
+		TenantNamespace:           namespace,
+		DataDir:                   cfg.Data.Dir,
 		SeededScenario:            seed.Scenario,
 		CapabilityConfig:          seed.CapabilityConfig,
 		FixtureRoot:               seed.FixtureRoot,
 		KeycloakAdminPassword:     p.kcAdmin,
-		KeycloakAdminGenerated:    p.kcGenerated,
 		KeycloakAdminSetFromInput: p.kcSetFromInput,
 		KeycloakAdminExternal:     opts.KeycloakAdminExternal,
 		PostgresProvisioned:       p.pgProvisioned,
@@ -169,45 +179,92 @@ func Init(opts InitOptions) (InitResult, error) {
 // provisioned reports the outcome of establishing the install's secrets.
 type provisioned struct {
 	kcAdmin        string
-	kcGenerated    bool // a random KC admin password was generated this run
-	kcSetFromInput bool // the KC admin password was set from a supplied value this run
+	kcSetFromInput bool // the KC admin password was set from operator input this run (flag or prompt)
 	pgProvisioned  bool // the Postgres password now lives in the store
 }
 
 // provisionSecrets establishes the install's secrets idempotently under
-// installDir. An External secret is left unpersisted (env-injected at runtime).
-// Otherwise a supplied value wins when the secret is absent, else a strong
-// random one is generated. An already-provisioned secret is returned unchanged —
-// re-running init never rotates.
+// installDir. Nothing is auto-generated: for each secret, an External one is
+// left unpersisted (env-injected at runtime); otherwise a supplied value, else
+// an interactive prompt (opts.PromptForSecret), establishes it — and with none
+// of these it is a fail-fast error. An already-provisioned secret is returned
+// unchanged — re-running init never rotates.
 func provisionSecrets(installDir string, opts InitOptions) (provisioned, error) {
 	store := secrets.Open(installDir)
 
-	kcAdmin, kcCreated, err := ensureSecret(store, secrets.NameKeycloakAdmin, opts.KeycloakAdminPassword, opts.KeycloakAdminExternal)
+	kcAdmin, kcCreated, err := ensureSecret(store, secretSpec{
+		name:     secrets.NameKeycloakAdmin,
+		envVar:   secrets.EnvKeycloakAdmin,
+		flag:     "--kc-admin-password",
+		label:    "Keycloak master-admin password",
+		supplied: opts.KeycloakAdminPassword,
+		external: opts.KeycloakAdminExternal,
+	}, opts.PromptForSecret)
 	if err != nil {
 		return provisioned{}, err
 	}
-	if _, _, err := ensureSecret(store, secrets.NamePostgres, opts.PostgresPassword, opts.PostgresExternal); err != nil {
+	if _, _, err := ensureSecret(store, secretSpec{
+		name:     secrets.NamePostgres,
+		envVar:   secrets.EnvPostgres,
+		flag:     "--postgres-password",
+		label:    "Postgres role password",
+		supplied: opts.PostgresPassword,
+		external: opts.PostgresExternal,
+	}, opts.PromptForSecret); err != nil {
 		return provisioned{}, err
 	}
 
 	return provisioned{
 		kcAdmin:        kcAdmin,
-		kcGenerated:    kcCreated && opts.KeycloakAdminPassword == "" && !opts.KeycloakAdminExternal,
-		kcSetFromInput: kcCreated && opts.KeycloakAdminPassword != "",
+		kcSetFromInput: kcCreated,
 		pgProvisioned:  !opts.PostgresExternal,
 	}, nil
 }
 
-// ensureSecret provisions name unless it is external (env-injected — left
-// unpersisted). Otherwise a supplied value is written when absent, else a strong
-// random one is generated. Returns the effective value and whether THIS call
-// created it (both zero for an external secret).
-func ensureSecret(store *secrets.Store, name, supplied string, external bool) (value string, created bool, err error) {
-	if external {
+// secretSpec names one install secret and every way it may be sourced, so
+// ensureSecret can both establish it and emit a precise fail-fast message.
+type secretSpec struct {
+	name     string // secrets.Name* (store basename)
+	envVar   string // secrets.Env* (runtime injection var)
+	flag     string // the `reckon init` flag that persists an explicit value
+	label    string // human phrase for the interactive prompt
+	supplied string // explicit value from the flag ("" if not given)
+	external bool    // env-injected: do not persist
+}
+
+// ensureSecret establishes one secret, NEVER auto-generating it. Precedence:
+// external (env-injected → left unpersisted); a supplied flag value (persisted
+// when absent); already provisioned (returned unchanged — idempotent); an
+// interactive prompt when one is available; otherwise a fail-fast error naming
+// every source. Returns the effective value and whether THIS call set it from
+// operator input (flag or prompt). Both zero for external or already-present.
+func ensureSecret(store *secrets.Store, spec secretSpec, prompt func(name, label string) (string, error)) (value string, setFromInput bool, err error) {
+	if spec.external {
 		return "", false, nil
 	}
-	if supplied != "" {
-		return store.EnsureValue(name, supplied)
+	if spec.supplied != "" {
+		v, created, err := store.EnsureValue(spec.name, spec.supplied)
+		return v, created, err
 	}
-	return store.EnsureRandom(name)
+	// Already provisioned? Reuse it — init never rotates and never re-prompts.
+	if existing, ok, err := store.Get(spec.name); err != nil {
+		return "", false, err
+	} else if ok {
+		return existing, false, nil
+	}
+	// Absent with no flag/env source. Prompt if we can; never generate.
+	if prompt == nil {
+		return "", false, fmt.Errorf(
+			"no password for %q and none can be prompted (non-interactive): set %s, pass %s, or run `reckon init` from a terminal — no credential is ever auto-generated",
+			spec.name, spec.envVar, spec.flag)
+	}
+	v, err := prompt(spec.name, spec.label)
+	if err != nil {
+		return "", false, fmt.Errorf("prompt for %q: %w", spec.name, err)
+	}
+	if v == "" {
+		return "", false, fmt.Errorf("empty password entered for %q", spec.name)
+	}
+	stored, created, err := store.EnsureValue(spec.name, v)
+	return stored, created, err
 }
