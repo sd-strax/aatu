@@ -79,6 +79,43 @@ export interface Hypothesis {
   predictions: Prediction[];
 }
 
+/** One typed input of a capability verb (mirrors capability.InputParam). */
+export interface CapabilityInput {
+  name: string;
+  type: string; // "entity" | "time_window" | "string" | "int" | "enum" | ...
+  required: boolean;
+  desc?: string;
+}
+
+/** A capability verb + its current tenant availability (mirrors capability.CapabilitySummary). */
+export interface Capability {
+  verb: string;
+  intent: string;
+  inputs: CapabilityInput[];
+  output: string;
+  /** "available" | "degraded" | "unavailable". */
+  status: string;
+}
+
+/** The envelope a verb invocation returns (subset of server.CapabilityInvokeResponse). */
+export interface CapabilityResult {
+  verb: string;
+  coverage: string;
+  ocsfEventRefs: string[];
+  observedDataRefs: string[];
+  entityRefs: string[];
+  degradationNotes: string[];
+  events: unknown[];
+  normalized: unknown[];
+}
+
+/** One tool call to record in an interpretation's side store. */
+export interface ToolCallRecord {
+  callId: string;
+  toolName: string;
+  args: unknown;
+}
+
 /** Raw server.InvestigationView row, as served under {investigations: [...]}. */
 interface RawInvestigation {
   aggregate_id: string;
@@ -184,6 +221,88 @@ export class BackendClient {
       return body.length;
     }
     return body.capabilities?.length ?? 0;
+  }
+
+  /**
+   * GET /api/capabilities — the verb catalog with per-tenant availability
+   * (03 §2.8). The agent loop trims this to `available` verbs before turning
+   * them into LLM tool definitions (03 §6.3). Authenticated.
+   */
+  async capabilities(): Promise<Capability[]> {
+    interface Raw {
+      descriptor?: { verb?: string; intent?: string; inputs?: CapabilityInput[]; output?: string };
+      status?: string;
+    }
+    const body = await this.authedGet<{ capabilities?: Raw[] }>("/api/capabilities");
+    return (body.capabilities ?? []).map((c) => ({
+      verb: c.descriptor?.verb ?? "",
+      intent: c.descriptor?.intent ?? "",
+      inputs: c.descriptor?.inputs ?? [],
+      output: c.descriptor?.output ?? "",
+      status: c.status ?? "unavailable",
+    }));
+  }
+
+  /**
+   * POST /api/capability/{verb} — the agent loop's read-tool dispatch target
+   * (03 §3.4). The body carries the entity to resolve templates against, an
+   * optional window, and extra template roots. Analyst role.
+   */
+  async invokeCapability(
+    verb: string,
+    body: { entity?: unknown; window?: { from: string; to: string }; extra?: Record<string, unknown> },
+  ): Promise<CapabilityResult> {
+    interface Raw {
+      verb?: string;
+      coverage?: string;
+      ocsf_event_refs?: string[];
+      observed_data_refs?: string[];
+      entity_refs?: string[];
+      degradation_notes?: string[];
+      events?: unknown[];
+      normalized?: unknown[];
+    }
+    const r = await this.authedPost<Raw>(`/api/capability/${encodeURIComponent(verb)}`, body);
+    return {
+      verb: r.verb ?? verb,
+      coverage: r.coverage ?? "UNKNOWN",
+      ocsfEventRefs: r.ocsf_event_refs ?? [],
+      observedDataRefs: r.observed_data_refs ?? [],
+      entityRefs: r.entity_refs ?? [],
+      degradationNotes: r.degradation_notes ?? [],
+      events: r.events ?? [],
+      normalized: r.normalized ?? [],
+    };
+  }
+
+  /**
+   * POST /api/interpretations — commit one reasoning act plus the turn's
+   * transcript and tool-call side store (05 §3.4). The AI authors as the
+   * analyst's delegate; the backend stamps Actor.Kind from the JWT. Returns the
+   * minted interpretation id. Analyst role.
+   */
+  async recordInterpretation(rec: {
+    investigationRef: string;
+    interpretationType: string;
+    rationale: string;
+    inputRefs?: string[];
+    outputRefs?: string[];
+    transcript?: { transcriptId?: string; turnId?: string; body: string };
+    toolCalls?: ToolCallRecord[];
+  }): Promise<{ interpretationId: string }> {
+    const body = {
+      investigation_ref: rec.investigationRef,
+      interpretation_type: rec.interpretationType,
+      rationale: rec.rationale,
+      input_refs: rec.inputRefs,
+      output_refs: rec.outputRefs,
+      transcript: rec.transcript
+        ? { transcript_id: rec.transcript.transcriptId, turn_id: rec.transcript.turnId, body: rec.transcript.body }
+        : undefined,
+      tool_calls: rec.toolCalls?.map((t) => ({ call_id: t.callId, tool_name: t.toolName, args: t.args })),
+    };
+    const r = await this.authedPost<{ interpretation_id?: string }>("/api/interpretations", body);
+    return { interpretationId: r.interpretation_id ?? "" };
   }
 
   /** GET /api/investigations — the investigation list (server.InvestigationView). Authenticated. */

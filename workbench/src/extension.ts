@@ -30,7 +30,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const client = new BackendClient(() => backendUrl(), () => session.token());
 
   const investigations = new InvestigationsProvider(client, session);
-  const documents = new InvestigationDocuments(client, log);
+  const documents = new InvestigationDocuments(client, log, {
+    apiKey: () => context.secrets.get(ANTHROPIC_KEY_SECRET),
+    model: () => vscode.workspace.getConfiguration("reckon").get<string>("model", "claude-opus-4-8"),
+  });
   context.subscriptions.push(
     log,
     session,

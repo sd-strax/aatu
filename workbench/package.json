@@ -109,6 +109,11 @@
           "type": "string",
           "default": "http://localhost:8080",
           "description": "Base URL of the locally running reckon backend."
+        },
+        "reckon.model": {
+          "type": "string",
+          "default": "claude-opus-4-8",
+          "description": "Anthropic model the investigation agent uses (BYOK). Runs against your own API key."
         }
       }
     }
@@ -122,5 +127,8 @@
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.113.0"
   }
 }

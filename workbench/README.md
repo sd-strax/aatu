@@ -19,13 +19,19 @@ v0 slice (`design/13 §7`) through step 2:
 - **Seed entry** (`reckon.newInvestigation`, the `+` in the view title): titles a new
   investigation via `POST /api/investigations`, refreshes the list, and opens the new document.
 - **Investigation document** (`src/investigationDocument.ts`): clicking a row opens a
-  reckon-owned webview panel (deduped by investigation id) that renders the read side of the
-  reasoning thread — header + hypotheses with nested predictions and status
-  (`GET /api/investigations/{id}` + `/hypotheses`). The extension host holds the token and does
-  every fetch; the webview is a pure renderer under a strict CSP (no network, nonce'd script).
+  reckon-owned webview panel (deduped by investigation id) that renders the reasoning thread
+  (header + hypotheses/predictions) and hosts the conversation. The extension host holds the
+  token and does every fetch; the webview is a pure renderer under a strict CSP (no network,
+  nonce'd script).
+- **The interactive turn loop** (`src/agent.ts`, `§7 step 3`, `05 §3.4`): the analyst types, the
+  BYOK Anthropic call streams (adaptive thinking, model from \`reckon.model\`, default
+  \`claude-opus-4-8\`), read tools are built from the tenant's *available* capability descriptors
+  (`GET /api/capabilities`) and dispatched to `POST /api/capability/{verb}`, and the turn's
+  transcript + tool calls are committed to `POST /api/interpretations` — the same committed turn
+  record the eval harness grades (`10 §3`). Read-only: state-changing actions are step 4.
 
-Next (`§7 step 3`): the interactive turn loop into that same panel — BYOK LLM call, tool dispatch
-against the fetched capability descriptors, and transcript commit to `/api/interpretations`.
+Next (`§7 step 4`): inline T2/T3 action approvals — `request_action` → Gate 2 → approve — against
+the real write path (`server/actions.go`).
 
 ## Development
 
@@ -68,9 +74,15 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
   diagnostic on mismatch, absence, or unreachability — it never dispatches against an
   incompatible surface.
 
-## Pending backend seams
+## Pending seams
 
-- **Capability descriptors → LLM tool definitions**: `capabilityCount()` proves the authenticated
-  fetch; the agent loop that turns descriptors into tools lands with the conversation surface.
-- **The interactive turn loop** (`05 §3.4`): BYOK LLM call → tool dispatch to the backend →
-  transcript commit to `/api/interpretations`.
+- **The TS agent loop is transitional.** `src/agent.ts` is a stopgap: the canonical loop is the
+  Go `agent` package, and this extension will drive it as a local sidecar
+  (`reckon investigate --stdio`, JSON-RPC over stdio) per the committed decision in
+  [`implementation/agent-sidecar.md`](../implementation/agent-sidecar.md). That lands the
+  provider seam (multi-LLM), delegate attribution (second PKCE flow against `reckon-agent` on
+  the SSO session — see `implementation/jwt-claims.md`), and eval-graded loop behavior; then
+  `agent.ts` is deleted. Until then, interpretations post under the analyst's human token and
+  are recorded as human-authored.
+- **Write actions inline** (`§7 step 4`): `request_action` → Gate 2 → T2/T3 approval, wired to
+  `POST /api/actions` + `/api/actions/{id}/approve`.
