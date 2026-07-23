@@ -52,11 +52,58 @@ export interface InvestigationSummary {
   state: string;
 }
 
+/** A single investigation's detail (mirrors server.InvestigationView). */
+export interface InvestigationDetail {
+  id: string;
+  title: string;
+  state: string;
+  lastEventSequence: number;
+}
+
+/** One prediction under a hypothesis (mirrors server.PredictionView). */
+export interface Prediction {
+  id: string;
+  statement: string;
+  status: string;
+  testResultRefs: string[];
+}
+
+/** One reasoning node with its predictions nested (mirrors server.HypothesisView). */
+export interface Hypothesis {
+  id: string;
+  statement: string;
+  status: string;
+  parentRef?: string;
+  rootedAtRef?: string;
+  labels: string[];
+  predictions: Prediction[];
+}
+
 /** Raw server.InvestigationView row, as served under {investigations: [...]}. */
 interface RawInvestigation {
   aggregate_id: string;
   title: string;
   status: string;
+  last_event_sequence?: number;
+}
+
+/** Raw server.HypothesisView, as served under {hypotheses: [...]}. */
+interface RawHypothesis {
+  id: string;
+  statement: string;
+  status: string;
+  parent_ref?: string;
+  rooted_at_ref?: string;
+  labels?: string[];
+  predictions?: RawPrediction[];
+}
+
+/** Raw server.PredictionView. */
+interface RawPrediction {
+  id: string;
+  statement: string;
+  status: string;
+  test_result_refs?: string[];
 }
 
 export class BackendClient {
@@ -149,17 +196,76 @@ export class BackendClient {
     }));
   }
 
+  /** GET /api/investigations/{id} — one investigation's detail. Authenticated. */
+  async getInvestigation(id: string): Promise<InvestigationDetail> {
+    const r = await this.authedGet<RawInvestigation>(`/api/investigations/${encodeURIComponent(id)}`);
+    return {
+      id: r.aggregate_id,
+      title: r.title || "(untitled)",
+      state: r.status,
+      lastEventSequence: r.last_event_sequence ?? 0,
+    };
+  }
+
+  /**
+   * GET /api/investigations/{id}/hypotheses — the reasoning nodes, predictions
+   * nested under the hypothesis they test (D.2). Authenticated.
+   */
+  async hypotheses(id: string): Promise<Hypothesis[]> {
+    const body = await this.authedGet<{ hypotheses?: RawHypothesis[] }>(
+      `/api/investigations/${encodeURIComponent(id)}/hypotheses`,
+    );
+    return (body.hypotheses ?? []).map((h) => ({
+      id: h.id,
+      statement: h.statement,
+      status: h.status,
+      parentRef: h.parent_ref,
+      rootedAtRef: h.rooted_at_ref,
+      labels: h.labels ?? [],
+      predictions: (h.predictions ?? []).map((p) => ({
+        id: p.id,
+        statement: p.statement,
+        status: p.status,
+        testResultRefs: p.test_result_refs ?? [],
+      })),
+    }));
+  }
+
+  /** POST /api/investigations — seed a new investigation. Analyst role. */
+  async createInvestigation(title: string): Promise<InvestigationDetail> {
+    const r = await this.authedPost<RawInvestigation>("/api/investigations", { title });
+    return {
+      id: r.aggregate_id,
+      title: r.title || "(untitled)",
+      state: r.status,
+      lastEventSequence: r.last_event_sequence ?? 0,
+    };
+  }
+
   private async authedGet<T>(path: string): Promise<T> {
+    return this.authed<T>("GET", path);
+  }
+
+  private async authedPost<T>(path: string, body: unknown): Promise<T> {
+    return this.authed<T>("POST", path, body);
+  }
+
+  private async authed<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
     if (!this.token) {
       throw new Error("no token source configured");
     }
     const bearer = await this.token();
     const res = await fetch(`${this.baseUrl()}${path}`, {
-      headers: { Authorization: `Bearer ${bearer}` },
+      method,
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
-      throw new Error(`GET ${path} → ${res.status}`);
+      throw new Error(`${method} ${path} → ${res.status}`);
     }
     return (await res.json()) as T;
   }

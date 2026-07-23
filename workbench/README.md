@@ -6,7 +6,7 @@ The analyst-facing VS Code extension — the primary product surface. The design
 
 ## Current state
 
-v0 slice (`design/13 §7`) through step 1:
+v0 slice (`design/13 §7`) through step 2:
 
 - **Version handshake** (`§2`): fail closed on an incompatible/unreachable backend.
 - **Sign in** (`reckon.signIn`): OIDC authorization-code + PKCE against the bundled Keycloak —
@@ -16,9 +16,16 @@ v0 slice (`design/13 §7`) through step 1:
 - **BYOK Anthropic key** (`reckon.setAnthropicKey`): stored in `SecretStorage`, never in settings.
 - **Investigations view**: the real list from `/api/investigations` when signed in; a sign-in
   affordance when not; a diagnostic when the backend is incompatible.
+- **Seed entry** (`reckon.newInvestigation`, the `+` in the view title): titles a new
+  investigation via `POST /api/investigations`, refreshes the list, and opens the new document.
+- **Investigation document** (`src/investigationDocument.ts`): clicking a row opens a
+  reckon-owned webview panel (deduped by investigation id) that renders the read side of the
+  reasoning thread — header + hypotheses with nested predictions and status
+  (`GET /api/investigations/{id}` + `/hypotheses`). The extension host holds the token and does
+  every fetch; the webview is a pure renderer under a strict CSP (no network, nonce'd script).
 
-Next (`§7`): the investigation document — the conversation surface — as a custom editor, plus the
-capability-descriptor fetch feeding the agent's tool definitions.
+Next (`§7 step 3`): the interactive turn loop into that same panel — BYOK LLM call, tool dispatch
+against the fetched capability descriptors, and transcript commit to `/api/interpretations`.
 
 ## Development
 
@@ -34,8 +41,9 @@ loads: what you see is what an analyst gets, and your own extensions don't react
 (a C# extension hunting for a project in `workbench/` is the classic false alarm). The second
 config keeps your extensions if you need them.
 
-In the dev host: the reckon icon in the activity bar → **Investigations**. Activation is logged
-to the **reckon** output channel; `reckon: Check Backend Connection` is in the command palette.
+In the dev host: the reckon icon in the activity bar → **Investigations**. Sign in, then `+`
+seeds an investigation and a row-click opens its document. Activation is logged to the **reckon**
+output channel; `reckon: Check Backend Connection` is in the command palette.
 
 The extension expects a locally running backend (`reckon start` from a built repo, or the release
 bundle); without one, every surface degrades to "not connected" with a pointer — never a crash

@@ -57,17 +57,41 @@
         "category": "reckon",
         "title": "Refresh Investigations",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "reckon.newInvestigation",
+        "category": "reckon",
+        "title": "New Investigation",
+        "icon": "$(add)"
+      },
+      {
+        "command": "reckon.openInvestigation",
+        "category": "reckon",
+        "title": "Open Investigation"
       }
     ],
     "menus": {
       "view/title": [
         {
+          "command": "reckon.newInvestigation",
+          "when": "view == reckon.investigations && reckon.signedIn",
+          "group": "navigation@1"
+        },
+        {
           "command": "reckon.refreshInvestigations",
           "when": "view == reckon.investigations",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
+        {
+          "command": "reckon.openInvestigation",
+          "when": "false"
+        },
+        {
+          "command": "reckon.newInvestigation",
+          "when": "reckon.signedIn"
+        },
         {
           "command": "reckon.signIn",
           "when": "!reckon.signedIn"

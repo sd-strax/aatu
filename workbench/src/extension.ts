@@ -12,6 +12,7 @@
 import * as vscode from "vscode";
 import { BackendClient } from "./backend";
 import { Session } from "./auth";
+import { InvestigationDocuments } from "./investigationDocument";
 
 /** Where the BYOK Anthropic key lives — never in settings, never on disk in the clear. */
 const ANTHROPIC_KEY_SECRET = "reckon.anthropicApiKey";
@@ -29,14 +30,47 @@ export function activate(context: vscode.ExtensionContext): void {
   const client = new BackendClient(() => backendUrl(), () => session.token());
 
   const investigations = new InvestigationsProvider(client, session);
+  const documents = new InvestigationDocuments(client, log);
   context.subscriptions.push(
     log,
     session,
     session.onDidChange(() => {
       void vscode.commands.executeCommand("setContext", "reckon.signedIn", session.signedIn);
       investigations.refresh();
+      documents.refreshAll();
     }),
     vscode.window.registerTreeDataProvider("reckon.investigations", investigations),
+
+    vscode.commands.registerCommand("reckon.openInvestigation", (id?: string, title?: string) => {
+      if (!id) {
+        return; // invoked without a target (e.g. from the palette) — nothing to open
+      }
+      documents.show(id, title);
+    }),
+
+    vscode.commands.registerCommand("reckon.newInvestigation", async () => {
+      if (!session.signedIn) {
+        void vscode.window.showWarningMessage("reckon: sign in before seeding an investigation");
+        return;
+      }
+      const title = await vscode.window.showInputBox({
+        title: "reckon — new investigation",
+        prompt: "A short title for the investigation (entity or hypothesis rooted).",
+        ignoreFocusOut: true,
+        placeHolder: "Lateral movement via RDP — host-7",
+        validateInput: (v) => (v.trim() === "" ? "a title is required" : undefined),
+      });
+      if (title === undefined || title.trim() === "") {
+        return; // cancelled
+      }
+      try {
+        const created = await client.createInvestigation(title.trim());
+        investigations.refresh();
+        documents.show(created.id, created.title);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`reckon: could not seed investigation: ${errText(err)}`);
+      }
+    }),
 
     vscode.commands.registerCommand("reckon.signIn", async () => {
       try {
@@ -171,6 +205,11 @@ class InvestigationsProvider implements vscode.TreeDataProvider<vscode.TreeItem>
         item.description = r.state;
         item.tooltip = `${r.id}\n${r.state}`;
         item.iconPath = new vscode.ThemeIcon("law");
+        item.command = {
+          command: "reckon.openInvestigation",
+          title: "Open Investigation",
+          arguments: [r.id, r.title],
+        };
         return item;
       });
     } catch (err) {
