@@ -47,20 +47,21 @@ func runDevAuth(args []string) error {
 	}
 	baseURL := fmt.Sprintf("http://localhost:%d", cfg.Keycloak.HTTPPort)
 
-	// The master-admin password is a provisioned install secret, not a default —
-	// read it from the store (beside the config) unless overridden on the flag.
+	// The master-admin password resolves flag → env → store, matching what
+	// `start` used to bootstrap the admin (an operator injecting KC_ADMIN_PW at
+	// start must reach the same value here, or dev-auth couldn't authenticate).
 	kcAdmin := *adminPass
 	if kcAdmin == "" {
 		configPath, perr := config.DefaultPath()
 		if perr != nil {
 			return perr
 		}
-		v, ok, serr := secrets.Open(filepath.Dir(configPath)).Get(secrets.NameKeycloakAdmin)
+		v, ok, serr := secrets.Open(filepath.Dir(configPath)).Resolve(secrets.EnvKeycloakAdmin, secrets.NameKeycloakAdmin)
 		if serr != nil {
 			return serr
 		}
 		if !ok {
-			return fmt.Errorf("no master-admin password: provision it with `%s init`, or pass --admin-password", branding.CLI)
+			return fmt.Errorf("no master-admin password: provision it with `%s init`, inject %s, or pass --admin-password", branding.CLI, secrets.EnvKeycloakAdmin)
 		}
 		kcAdmin = v
 	}

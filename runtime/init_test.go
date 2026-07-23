@@ -137,6 +137,35 @@ func TestInit_ProvisionsAdminSecret(t *testing.T) {
 	}
 }
 
+// TestInit_ExternalSecretNotPersisted: an env-injected (External) secret must
+// NOT be written to the store — the vault/operator path leaves nothing on disk.
+func TestInit_ExternalSecretNotPersisted(t *testing.T) {
+	withConfigEnv(t)
+	res, err := Init(InitOptions{
+		KeycloakAdminExternal: true,
+		PostgresExternal:      true,
+	})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if !res.KeycloakAdminExternal || !res.PostgresExternal {
+		t.Error("external flags not reported back")
+	}
+	if res.KeycloakAdminGenerated {
+		t.Error("an external KC admin secret must not be reported as generated")
+	}
+	if res.PostgresProvisioned {
+		t.Error("an external Postgres secret must not be reported as provisioned")
+	}
+	// Nothing written to the store for either secret.
+	store := secrets.Open(filepath.Dir(res.ConfigPath))
+	for _, name := range []string{secrets.NameKeycloakAdmin, secrets.NamePostgres} {
+		if _, ok, err := store.Get(name); err != nil || ok {
+			t.Errorf("external secret %q was persisted (ok=%v err=%v); it must stay off disk", name, ok, err)
+		}
+	}
+}
+
 // TestInit_UniquePerInstall: two independent installs mint distinct namespaces.
 func TestInit_UniquePerInstall(t *testing.T) {
 	withConfigEnv(t)

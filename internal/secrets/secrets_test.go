@@ -69,6 +69,31 @@ func TestStore_FilePermsAre0600(t *testing.T) {
 	}
 }
 
+// TestResolve_EnvOverridesStore: the env override wins over the stored value,
+// and Resolve falls through to the store (then to not-found) when env is unset.
+func TestResolve_EnvOverridesStore(t *testing.T) {
+	store := Open(t.TempDir())
+	if _, _, err := store.EnsureValue(NameKeycloakAdmin, "from-store"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(EnvKeycloakAdmin, "from-env")
+	if v, ok, err := store.Resolve(EnvKeycloakAdmin, NameKeycloakAdmin); err != nil || !ok || v != "from-env" {
+		t.Fatalf("with env set, Resolve = %q,%v,%v; want from-env,true,nil", v, ok, err)
+	}
+
+	t.Setenv(EnvKeycloakAdmin, "")
+	if v, ok, err := store.Resolve(EnvKeycloakAdmin, NameKeycloakAdmin); err != nil || !ok || v != "from-store" {
+		t.Fatalf("with env empty, Resolve = %q,%v,%v; want from-store,true,nil", v, ok, err)
+	}
+
+	// Neither env nor store → not found (fail-fast territory for consumers).
+	empty := Open(t.TempDir())
+	if v, ok, err := empty.Resolve(EnvKeycloakAdmin, NameKeycloakAdmin); err != nil || ok || v != "" {
+		t.Fatalf("with neither, Resolve = %q,%v,%v; want \"\",false,nil", v, ok, err)
+	}
+}
+
 // TestGet_AbsentIsNotAnError: a not-yet-provisioned secret reads as (‚"",false)
 // without error, so callers can distinguish "unset" from "broken".
 func TestGet_AbsentIsNotAnError(t *testing.T) {

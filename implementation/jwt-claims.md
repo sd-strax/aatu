@@ -178,8 +178,25 @@ the analogous IaC/install step for a shared/SaaS backend). Covered by
   `postgres.ssl_mode` (config, non-secret; default `disable` for loopback) is the
   seam for requiring TLS against a networked DB.
 
+**Consume precedence — env over store.** `start` and `dev-auth` resolve each
+engine secret as **env override → store** (`secrets.Resolve`, `EnvKeycloakAdmin`
+= `KC_ADMIN_PW`, `EnvPostgres` = `RECKON_PG_PASSWORD`). This is the operator/vault
+path: a hardened deployment injects the secret from its secret manager (systemd
+`EnvironmentFile`, k8s Secret, Vault) and **nothing rests in a reckon file** —
+the keychain is deliberately NOT used for these, because the engine runs headless
+(no desktop session / Secret Service) and as a service account. For that to be
+truly file-free, `init` also **skips persisting** a secret when its env override
+is set with no `--*-password` flag (`InitOptions.*External`): a bare
+`--kc-admin-password X` flag persists X; a bare `KC_ADMIN_PW` env injects at
+runtime and writes nothing. Consistency is the operator's job — the same value
+must reach `start` (for `initdb` / `bootstrap-admin`) and later `dev-auth`.
+
 Temporal remains an unauthenticated loopback dev server — nothing to provision
 until it is networked. Pointing at EXTERNAL/managed Postgres, Keycloak, or
 Temporal (operator supplies host + connection secret, supervisor skips the
 embedded component) is the matched "managed deps" phase for all three — not a
 per-dep bolt-on, and deferred as one coherent piece.
+
+The client-plane BYOK Anthropic key is a separate store entirely
+(`internal/clientcreds`, OS keychain) — per-user, never engine-read; see
+`design/05 §2.7` and the workbench's SecretStorage.

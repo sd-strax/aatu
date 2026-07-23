@@ -23,6 +23,28 @@ const (
 	NamePostgres = "postgres-password"
 )
 
+// Env-override variable names. Set these to inject a secret at runtime from an
+// external secret manager (systemd EnvironmentFile, k8s Secret, Vault) instead
+// of the on-disk store — the operator/hardened-deploy path, where nothing rests
+// in a reckon file. Consumers resolve with env taking precedence over the store.
+const (
+	// EnvKeycloakAdmin overrides NameKeycloakAdmin.
+	EnvKeycloakAdmin = "KC_ADMIN_PW"
+	// EnvPostgres overrides NamePostgres.
+	EnvPostgres = "RECKON_PG_PASSWORD"
+)
+
+// Resolve returns a secret with precedence: the env override (if set) then the
+// store. found=false when neither provides it. This is the operator-consume
+// path — an injected env value wins so a hardened deployment need never write
+// the secret to disk.
+func (s *Store) Resolve(envVar, name string) (value string, found bool, err error) {
+	if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
+		return v, true, nil
+	}
+	return s.Get(name)
+}
+
 // Store is one installation's secret store, rooted at a directory. Nothing is
 // created until a secret is written.
 type Store struct{ dir string }

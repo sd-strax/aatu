@@ -11,14 +11,20 @@ import (
 	"github.com/sd-strax/reckon/internal/secrets"
 )
 
-// InitOptions parameterizes the deployer step. Empty fields generate strong
-// random secrets; supplied values (operator/IaC) are applied only when the
-// secret is absent — init never rotates.
+// InitOptions parameterizes the deployer step. For each secret: an explicit
+// value is persisted to the store; empty generates a strong random one; the
+// External flag means "injected at runtime via env — do NOT persist" (the
+// vault/operator path, so nothing rests on disk). Supplied values are applied
+// only when the secret is absent — init never rotates.
 type InitOptions struct {
-	// KeycloakAdminPassword is the Keycloak master-realm bootstrap admin password.
+	// KeycloakAdminPassword is an explicit master-admin password to persist.
 	KeycloakAdminPassword string
-	// PostgresPassword is the bundled Postgres role password (user `reckon`).
+	// KeycloakAdminExternal skips persisting the master-admin password (env-injected).
+	KeycloakAdminExternal bool
+	// PostgresPassword is an explicit Postgres role password to persist.
 	PostgresPassword string
+	// PostgresExternal skips persisting the Postgres password (env-injected).
+	PostgresExternal bool
 }
 
 // InitResult reports what `reckon init` wrote, so the CLI can print a first-run
@@ -51,6 +57,12 @@ type InitResult struct {
 	// the store (generated this run or already present). Its value is internal —
 	// only the stack consumes it — so it is not surfaced for printing.
 	PostgresProvisioned bool
+
+	// KeycloakAdminExternal / PostgresExternal are true when that secret is
+	// env-injected at runtime and deliberately NOT persisted to the store, so
+	// the CLI reports it as such rather than as provisioned.
+	KeycloakAdminExternal bool
+	PostgresExternal      bool
 }
 
 // Init performs first-run setup: it writes a default config to the resolved
@@ -97,7 +109,9 @@ func Init(opts InitOptions) (InitResult, error) {
 			KeycloakAdminPassword:     p.kcAdmin,
 			KeycloakAdminGenerated:    p.kcGenerated,
 			KeycloakAdminSetFromInput: p.kcSetFromInput,
+			KeycloakAdminExternal:     opts.KeycloakAdminExternal,
 			PostgresProvisioned:       p.pgProvisioned,
+			PostgresExternal:          opts.PostgresExternal,
 		}, nil
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("stat config %s: %w", path, err)
@@ -146,7 +160,9 @@ func Init(opts InitOptions) (InitResult, error) {
 		KeycloakAdminPassword:     p.kcAdmin,
 		KeycloakAdminGenerated:    p.kcGenerated,
 		KeycloakAdminSetFromInput: p.kcSetFromInput,
+		KeycloakAdminExternal:     opts.KeycloakAdminExternal,
 		PostgresProvisioned:       p.pgProvisioned,
+		PostgresExternal:          opts.PostgresExternal,
 	}, nil
 }
 
@@ -155,41 +171,41 @@ type provisioned struct {
 	kcAdmin        string
 	kcGenerated    bool // a random KC admin password was generated this run
 	kcSetFromInput bool // the KC admin password was set from a supplied value this run
-	pgProvisioned  bool
+	pgProvisioned  bool // the Postgres password now lives in the store
 }
 
 // provisionSecrets establishes the install's secrets idempotently under
-// installDir. Supplied values win when a secret is absent; otherwise a strong
-// random one is generated. An already-provisioned secret is returned unchanged
-// — re-running init never rotates.
+// installDir. An External secret is left unpersisted (env-injected at runtime).
+// Otherwise a supplied value wins when the secret is absent, else a strong
+// random one is generated. An already-provisioned secret is returned unchanged —
+// re-running init never rotates.
 func provisionSecrets(installDir string, opts InitOptions) (provisioned, error) {
 	store := secrets.Open(installDir)
 
-	kcAdmin, kcCreated, err := ensureSecret(store, secrets.NameKeycloakAdmin, opts.KeycloakAdminPassword)
+	kcAdmin, kcCreated, err := ensureSecret(store, secrets.NameKeycloakAdmin, opts.KeycloakAdminPassword, opts.KeycloakAdminExternal)
 	if err != nil {
 		return provisioned{}, err
 	}
-	if _, _, err := ensureSecret(store, secrets.NamePostgres, opts.PostgresPassword); err != nil {
+	if _, _, err := ensureSecret(store, secrets.NamePostgres, opts.PostgresPassword, opts.PostgresExternal); err != nil {
 		return provisioned{}, err
-	}
-	if _, ok, err := store.Get(secrets.NamePostgres); err != nil {
-		return provisioned{}, err
-	} else if !ok {
-		return provisioned{}, fmt.Errorf("postgres secret not provisioned")
 	}
 
 	return provisioned{
 		kcAdmin:        kcAdmin,
-		kcGenerated:    kcCreated && opts.KeycloakAdminPassword == "",
+		kcGenerated:    kcCreated && opts.KeycloakAdminPassword == "" && !opts.KeycloakAdminExternal,
 		kcSetFromInput: kcCreated && opts.KeycloakAdminPassword != "",
-		pgProvisioned:  true,
+		pgProvisioned:  !opts.PostgresExternal,
 	}, nil
 }
 
-// ensureSecret provisions name with the supplied value if given (and absent),
-// else generates a strong random one when absent. Returns the effective value
-// and whether THIS call created it.
-func ensureSecret(store *secrets.Store, name, supplied string) (value string, created bool, err error) {
+// ensureSecret provisions name unless it is external (env-injected — left
+// unpersisted). Otherwise a supplied value is written when absent, else a strong
+// random one is generated. Returns the effective value and whether THIS call
+// created it (both zero for an external secret).
+func ensureSecret(store *secrets.Store, name, supplied string, external bool) (value string, created bool, err error) {
+	if external {
+		return "", false, nil
+	}
 	if supplied != "" {
 		return store.EnsureValue(name, supplied)
 	}

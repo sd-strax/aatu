@@ -113,15 +113,16 @@ func activate(build ModuleBuilder) (config.Config, module.Registry, error) {
 // and the in-process Backend, then runs the supervisor until shutdown. The PID
 // file is written on entry and removed on exit so `reckon stop` can find the
 // process.
-// requireSecret reads a provisioned install secret, failing fast with a pointer
-// to the deployer step when it is absent (the operator path never mints).
-func requireSecret(store *secrets.Store, name, label string) (string, error) {
-	v, ok, err := store.Get(name)
+// requireSecret resolves an install secret with precedence env → store, failing
+// fast when neither provides it. The env override is the operator/vault path
+// (nothing on disk); the store is the deployer-provisioned default.
+func requireSecret(store *secrets.Store, envVar, name, label string) (string, error) {
+	v, ok, err := store.Resolve(envVar, name)
 	if err != nil {
 		return "", fmt.Errorf("read %s secret: %w", label, err)
 	}
 	if !ok {
-		return "", fmt.Errorf("%s secret not provisioned — run `%s init` first (the deployer step that establishes this install's secrets)", label, branding.CLI)
+		return "", fmt.Errorf("%s secret not provisioned — run `%s init` first, or inject %s (the operator/vault path)", label, branding.CLI, envVar)
 	}
 	return v, nil
 }
@@ -168,11 +169,11 @@ func serve(cfg config.Config) error {
 		return err
 	}
 	store := secrets.Open(filepath.Dir(configPath))
-	pgPassword, err := requireSecret(store, secrets.NamePostgres, "postgres role")
+	pgPassword, err := requireSecret(store, secrets.EnvPostgres, secrets.NamePostgres, "postgres role")
 	if err != nil {
 		return err
 	}
-	kcAdminPassword, err := requireSecret(store, secrets.NameKeycloakAdmin, "keycloak admin")
+	kcAdminPassword, err := requireSecret(store, secrets.EnvKeycloakAdmin, secrets.NameKeycloakAdmin, "keycloak admin")
 	if err != nil {
 		return err
 	}
