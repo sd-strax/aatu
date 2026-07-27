@@ -321,6 +321,10 @@ type pendingAction struct {
 	Tier       string   `json:"tier"`
 	Status     string   `json:"status"`
 	Targets    []string `json:"targets,omitempty"`
+	// Expired: the approval window elapsed — the engine refuses an approve
+	// even though Status may still read pending (lazy expiry, 04). Surfaces
+	// must not offer an approve affordance on these.
+	Expired bool `json:"expired,omitempty"`
 }
 
 type turnTextNote struct {
@@ -411,6 +415,7 @@ func (s *service) handleTurn(ctx context.Context, raw json.RawMessage) (any, err
 			ActionType: a.ActionType,
 			Tier:       a.Tier,
 			Status:     a.PendingLabel(),
+			Expired:    a.Expired(time.Now()),
 		}
 		for _, t := range a.Targets {
 			id := t.ResolvedIdentifier

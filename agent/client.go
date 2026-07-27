@@ -172,9 +172,22 @@ type ActionStatus struct {
 	RequiredMode string         `json:"required_mode,omitempty"`
 	IsReversal   bool           `json:"is_reversal,omitempty"`
 	Targets      []ActionTarget `json:"targets,omitempty"`
+	// ExpiresAt is the approval deadline frozen at request time (04). The
+	// status may still read REQUESTED past it — v0 has no expiry timer; the
+	// engine refuses lazily at the approve attempt — so every surface (and
+	// the model, via the list_actions tool result) must judge approvability
+	// from this field, not the status. Dropping it here once made the agent
+	// and the workbench disagree about the same action.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// EvidenceRefs are the refs that grounded the request (08 §2) — the eval
 	// harness's G1 grader reads them from this durable view.
 	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+}
+
+// Expired reports whether the approval window has elapsed — the engine will
+// refuse an approve regardless of Status.
+func (a ActionStatus) Expired(now time.Time) bool {
+	return a.ExpiresAt != nil && now.After(*a.ExpiresAt)
 }
 
 // Pending reports whether the action still awaits a human approval.

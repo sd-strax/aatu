@@ -291,6 +291,15 @@ func (r *repl) offerApprovals(ctx context.Context, actions []agent.ActionStatus)
 		if !a.Pending() {
 			continue
 		}
+		// An elapsed approval window means the engine refuses the approve
+		// (lazily — status may still read REQUESTED, 04). Don't offer an act
+		// that can only fail; say why instead.
+		if a.Expired(time.Now()) {
+			fmt.Printf("\naction %s %s → %s [%s] EXPIRED at %s — approval window elapsed; re-request if still needed.\n",
+				a.ActionID, sanitizeTerminal(a.ActionType), targetList(a.Targets), a.Tier,
+				a.ExpiresAt.UTC().Format(time.RFC3339))
+			continue
+		}
 		fmt.Printf("\naction %s %s → %s [%s, %s] awaits your approval.\n",
 			a.ActionID, sanitizeTerminal(a.ActionType), targetList(a.Targets), a.Tier, a.PendingLabel())
 		fmt.Print("  approve? [y = approve, y <challenge> for T3, n [reason] = reject, Enter = decide later] ")

@@ -201,7 +201,10 @@ func fakeBackend(t *testing.T) *httptest.Server {
 		requireDelegate(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{"actions": []map[string]any{{
 			"action_id": "act-9", "action_type": "ioc.block", "tier": "T2", "status": "REQUESTED",
-			"targets": []map[string]any{{"entity_ref": "ipv4-addr--x", "resolved_identifier": "10.0.0.9"}},
+			// A long-elapsed approval deadline: status still reads REQUESTED
+			// (lazy expiry) but every surface must see expired=true.
+			"expires_at": "2020-01-01T00:00:00Z",
+			"targets":    []map[string]any{{"entity_ref": "ipv4-addr--x", "resolved_identifier": "10.0.0.9"}},
 		}}})
 	})
 	srv := httptest.NewServer(mux)
@@ -345,9 +348,12 @@ func TestServe_FullFlow(t *testing.T) {
 		t.Errorf("usage = %+v; want summed 250/50", tr.Usage)
 	}
 	// The pending action from the durable queue rides the result for the
-	// approval UI, with the PendingLabel vocabulary.
+	// approval UI, with the PendingLabel vocabulary — and the elapsed
+	// approval window surfaces as expired, so no surface offers an approve
+	// the engine would refuse.
 	if len(tr.PendingActions) != 1 || tr.PendingActions[0].ActionID != "act-9" ||
-		tr.PendingActions[0].Status != "PENDING_MANUAL" || tr.PendingActions[0].Targets[0] != "10.0.0.9" {
+		tr.PendingActions[0].Status != "PENDING_MANUAL" || tr.PendingActions[0].Targets[0] != "10.0.0.9" ||
+		!tr.PendingActions[0].Expired {
 		t.Errorf("pending actions = %+v", tr.PendingActions)
 	}
 

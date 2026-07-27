@@ -46,6 +46,8 @@ export interface PendingAction {
   tier: string;
   status: string;
   targets: string[];
+  /** Approval window elapsed — the engine refuses an approve; offer none. */
+  expired: boolean;
 }
 
 /** What one turn produced (mirrors sidecar.turnResult). */
@@ -92,6 +94,7 @@ interface WireTurnResult {
     tier?: string;
     status?: string;
     targets?: string[];
+    expired?: boolean;
   }[];
   error?: string;
 }
@@ -133,6 +136,7 @@ export class SidecarTransport implements AgentTransport {
           tier: a.tier ?? "",
           status: a.status ?? "",
           targets: a.targets ?? [],
+          expired: a.expired ?? false,
         })),
         error: raw.error,
       };
