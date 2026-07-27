@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // scriptedLLM replays a fixed sequence of completions and records what it was
@@ -520,10 +521,17 @@ func TestSession_ModelFailureKeepsPendingActions(t *testing.T) {
 }
 
 // TestSession_ListActionsTool: the list_actions intrinsic returns the durable
-// action queue to the model — its ground truth for action state.
+// action queue to the model — its ground truth for action state — with the
+// engine-computed expiry verdict, because the model has no clock: it cannot
+// compare expires_at to a "now" it doesn't know, so a lazily-expired action
+// (status still REQUESTED) must arrive pre-judged as expired.
 func TestSession_ListActionsTool(t *testing.T) {
 	f := newFakeBackend(t)
-	f.actions = []ActionStatus{{ActionID: "act-9", ActionType: "account.disable", Tier: "T2", Status: "SUCCEEDED"}}
+	longDead := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	f.actions = []ActionStatus{
+		{ActionID: "act-9", ActionType: "account.disable", Tier: "T2", Status: "SUCCEEDED"},
+		{ActionID: "act-10", ActionType: "ticket.create", Tier: "T2", Status: "REQUESTED", ExpiresAt: &longDead},
+	}
 	llm := &scriptedLLM{script: []CompleteResponse{
 		{StopReason: StopToolUse, Content: []ContentBlock{toolUse("t1", ToolListActions, `{}`)}},
 		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("the disable already executed")}},
@@ -537,16 +545,27 @@ func TestSession_ListActionsTool(t *testing.T) {
 	}
 
 	last := llm.requests[len(llm.requests)-1]
-	var saw bool
+	var result string
 	for _, m := range last.Messages {
 		for _, blk := range m.Content {
-			if blk.Type == BlockToolResult && strings.Contains(blk.Content, "SUCCEEDED") && strings.Contains(blk.Content, "act-9") {
-				saw = true
+			if blk.Type == BlockToolResult && strings.Contains(blk.Content, "act-9") {
+				result = blk.Content
 			}
 		}
 	}
-	if !saw {
-		t.Error("list_actions result never reached the model")
+	if result == "" {
+		t.Fatal("list_actions result never reached the model")
+	}
+	if !strings.Contains(result, "SUCCEEDED") {
+		t.Error("result lost the engine status")
+	}
+	// The REQUESTED-but-elapsed action must be pre-judged for the clockless
+	// model, and the grounding timestamp must ride along.
+	if !strings.Contains(result, `"expired":true`) {
+		t.Errorf("elapsed action not marked expired in the tool result: %s", result)
+	}
+	if !strings.Contains(result, `"now":`) {
+		t.Errorf("tool result carries no now grounding: %s", result)
 	}
 }
 

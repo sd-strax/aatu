@@ -178,7 +178,7 @@ func intrinsicTools(actionTypes []ActionType) []ToolDef {
 		},
 		{
 			Name:        ToolListActions,
-			Description: "List this investigation's requested actions with their CURRENT engine status (REQUESTED = awaiting the analyst's approval in this surface; APPROVED/EXECUTING/SUCCEEDED/FAILED/REJECTED/EXPIRED/REVERSED). Use this for ground truth about whether an action was approved or executed — never assume.",
+			Description: "List this investigation's requested actions with their CURRENT engine status (REQUESTED = awaiting the analyst's approval in this surface; APPROVED/EXECUTING/SUCCEEDED/FAILED/REJECTED/EXPIRED/REVERSED). Use this for ground truth about whether an action was approved or executed — never assume. Each row carries a computed `expired` flag (and the result carries `now`): expired=true means the approval window elapsed and the engine will refuse an approve even though status may still read REQUESTED — such an action is dead; a new request is the only way forward.",
 			InputSchema: obj(map[string]any{}),
 		},
 	}
@@ -526,10 +526,23 @@ func (s *Session) dispatch(ctx context.Context, name string, input json.RawMessa
 		if err != nil {
 			return nil, err
 		}
-		if acts == nil {
-			acts = []ActionStatus{}
+		// The model has no clock: it cannot compare expires_at to "now", so a
+		// lazily-expired action (status still REQUESTED, 04) would read as
+		// live. The engine answers the question instead — a computed expired
+		// flag per action, plus now for grounding.
+		now := time.Now().UTC()
+		type actionView struct {
+			ActionStatus
+			Expired bool `json:"expired"`
 		}
-		return json.Marshal(map[string]any{"actions": acts})
+		views := make([]actionView, 0, len(acts))
+		for _, a := range acts {
+			views = append(views, actionView{ActionStatus: a, Expired: a.Expired(now)})
+		}
+		return json.Marshal(map[string]any{
+			"now":     now.Format(time.RFC3339),
+			"actions": views,
+		})
 
 	default:
 		// A capability verb.
