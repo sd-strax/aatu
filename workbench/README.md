@@ -6,7 +6,7 @@ The analyst-facing VS Code extension — the primary product surface. The design
 
 ## Current state
 
-v0 slice (`design/13 §7`) through step 2:
+v0 slice (`design/13 §7`) through step 3:
 
 - **Version handshake** (`§2`): fail closed on an incompatible/unreachable backend.
 - **Sign in** (`reckon.signIn`): OIDC authorization-code + PKCE against the bundled Keycloak —
@@ -23,12 +23,21 @@ v0 slice (`design/13 §7`) through step 2:
   (header + hypotheses/predictions) and hosts the conversation. The extension host holds the
   token and does every fetch; the webview is a pure renderer under a strict CSP (no network,
   nonce'd script).
-- **The interactive turn loop** (`src/agent.ts`, `§7 step 3`, `05 §3.4`): the analyst types, the
-  BYOK Anthropic call streams (adaptive thinking, model from \`reckon.model\`, default
-  \`claude-opus-4-8\`), read tools are built from the tenant's *available* capability descriptors
-  (`GET /api/capabilities`) and dispatched to `POST /api/capability/{verb}`, and the turn's
-  transcript + tool calls are committed to `POST /api/interpretations` — the same committed turn
-  record the eval harness grades (`10 §3`). Read-only: state-changing actions are step 4.
+- **The interactive turn loop — via the Go sidecar** (`§7 step 3`, `05 §3.4`,
+  [`implementation/agent-sidecar.md`](../implementation/agent-sidecar.md)): there is exactly ONE
+  loop implementation — the Go `agent` package, the same code the eval harness grades. The
+  extension spawns `reckon investigate --stdio` (discovery: the `reckon.sidecarPath` setting,
+  else `reckon` on PATH) and drives it over LSP-framed JSON-RPC (`src/agentTransport.ts`,
+  `vscode-jsonrpc`). Auth stays in the extension: the sidecar holds no refresh tokens and asks
+  for short-lived access tokens via the `getToken(kind, force)` callback; the BYOK key crosses
+  once at `initialize` over the local pipe. Sign-in runs a **second, silent PKCE flow** against
+  the `reckon-agent` client (discovered from `/api/auth-config`'s `agent_client_id`, riding the
+  Keycloak SSO session), so loop turns carry the delegate token and are recorded as AI-delegated
+  — the analyst stays `sub`, `delegate_kind` is issuer-stamped. A turn's proposals surface as a
+  pending-approval list in the thread (rendering only; acting on them is step 4). Read tools
+  dispatch to `POST /api/capability/{verb}`; the turn commits to `POST /api/interpretations`. A
+  sidecar crash never takes the extension down — the next turn respawns it and re-creates the
+  session from backend state.
 
 Next (`§7 step 4`): inline T2/T3 action approvals — `request_action` → Gate 2 → approve — against
 the real write path (`server/actions.go`).
@@ -76,13 +85,9 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
 
 ## Pending seams
 
-- **The TS agent loop is transitional.** `src/agent.ts` is a stopgap: the canonical loop is the
-  Go `agent` package, and this extension will drive it as a local sidecar
-  (`reckon investigate --stdio`, JSON-RPC over stdio) per the committed decision in
-  [`implementation/agent-sidecar.md`](../implementation/agent-sidecar.md). That lands the
-  provider seam (multi-LLM), delegate attribution (second PKCE flow against `reckon-agent` on
-  the SSO session — see `implementation/jwt-claims.md`), and eval-graded loop behavior; then
-  `agent.ts` is deleted. Until then, interpretations post under the analyst's human token and
-  are recorded as human-authored.
-- **Write actions inline** (`§7 step 4`): `request_action` → Gate 2 → T2/T3 approval, wired to
-  `POST /api/actions` + `/api/actions/{id}/approve`.
+- **Write actions inline** (`§7 step 4`): approving/rejecting the pending actions the thread
+  already lists — extension UI → `POST /api/actions/{id}/approve|reject` directly on the human
+  token (never through the sidecar; approvals are the analyst's own acts).
+- **Streaming** (E.4): the sidecar's `turn/text` notifications carry round-complete text today;
+  token deltas land in `agent.LLM` and flow through the same reserved channel without a
+  protocol break.

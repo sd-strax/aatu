@@ -290,8 +290,12 @@ func serve(cfg config.Config) error {
 		KeycloakClientID: cfg.Keycloak.ClientID,
 		// The interactive human login client is the realm's public "reckon"
 		// client (keycloak_realm.json); branding.CLI is that literal, kept in
-		// one place so a rebrand doesn't drift the realm from the code.
+		// one place so a rebrand doesn't drift the realm from the code. The
+		// agent client is its delegate-path sibling ("reckon-agent", the one
+		// with the delegate_kind mapper) — advertised so surfaces discover it
+		// instead of hardcoding the suffix convention.
 		KeycloakLoginClientID: branding.CLI,
+		KeycloakAgentClientID: branding.CLI + "-agent",
 		Handler:               handler,
 		Middleware:         tel.HTTPMiddleware,
 		CapabilityResolver: capResolver,

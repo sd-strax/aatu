@@ -145,15 +145,21 @@ change.
 
 ## 7. Sequencing
 
-1. `AgentTransport` seam in the extension (createSession / turn / cancel +
-   progress events). The webview render protocol (`turn.*` messages) is its
-   event half and survives as-is.
-2. `--stdio` mode on `reckon investigate` wrapping `agent.Session`; JSON-RPC
-   server, `getToken` callback, both handshakes.
-3. `SidecarTransport` in the extension; second PKCE flow in `auth.ts`; delete
-   `workbench/src/agent.ts`.
+1. ✅ `AgentTransport` seam in the extension (`workbench/src/agentTransport.ts`
+   — sessions keyed by investigation id, turn + cancel + progress events). The
+   webview render protocol (`turn.*` messages) is its event half and survived
+   as-is (plus `turn.pending`, the honest pre-step-4 approval surface).
+2. ✅ `--stdio` mode on `reckon investigate` wrapping `agent.Session`
+   (`internal/sidecar`: LSP-framed JSON-RPC server, `getToken(kind, force)`
+   callback, both handshakes; `/api/auth-config` now advertises
+   `agent_client_id` so the client discovers the delegate client).
+3. ✅ `SidecarTransport` in the extension (spawn/respawn, discovery via
+   `reckon.sidecarPath` → PATH); second PKCE flow in `auth.ts`
+   (`token(kind)`, both refresh tokens in SecretStorage);
+   `workbench/src/agent.ts` deleted — one loop again.
 4. Streaming (E.4) lands in `agent.LLM` and flows through the reserved
-   progress channel.
+   progress channel (`turn/text` notifications carry round-complete text
+   today; deltas slot in without a protocol break).
 
 ## Open questions / deferred
 

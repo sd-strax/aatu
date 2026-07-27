@@ -35,6 +35,12 @@ export interface BackendStatus {
 export interface AuthConfig {
   issuer: string;
   clientId: string;
+  /**
+   * The delegate-path OIDC client (stamps delegate_kind issuer-side). The
+   * second, silent PKCE flow runs against it (implementation/agent-sidecar.md
+   * §5); absent when the deployment did not configure one.
+   */
+  agentClientId?: string;
 }
 
 /** Mirrors server.MeResponse (the fields the UI uses). */
@@ -191,11 +197,11 @@ export class BackendClient {
     if (!res.ok) {
       throw new Error(`auth-config ${res.status} (interactive login may be unconfigured)`);
     }
-    const body = (await res.json()) as { issuer?: string; client_id?: string };
+    const body = (await res.json()) as { issuer?: string; client_id?: string; agent_client_id?: string };
     if (!body.issuer || !body.client_id) {
       throw new Error("auth-config missing issuer/client_id");
     }
-    return { issuer: body.issuer, clientId: body.client_id };
+    return { issuer: body.issuer, clientId: body.client_id, agentClientId: body.agent_client_id };
   }
 
   /** GET /api/me — the signed-in identity. Authenticated. */

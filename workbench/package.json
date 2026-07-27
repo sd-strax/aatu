@@ -114,6 +114,11 @@
           "type": "string",
           "default": "claude-opus-4-8",
           "description": "Anthropic model the investigation agent uses (BYOK). Runs against your own API key."
+        },
+        "reckon.sidecarPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the reckon binary the workbench spawns as the agent-loop sidecar (`reckon investigate --stdio`). Empty resolves `reckon` on PATH."
         }
       }
     }
@@ -129,6 +134,6 @@
     "typescript": "^5.5.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.113.0"
+    "vscode-jsonrpc": "^8.2.0"
   }
 }

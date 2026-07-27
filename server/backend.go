@@ -73,6 +73,13 @@ type BackendConfig struct {
 	// unconfigured rather than guessing.
 	KeycloakLoginClientID string
 
+	// KeycloakAgentClientID is the public OIDC client the AI-delegate token
+	// path uses (the realm client that stamps delegate_kind issuer-side —
+	// implementation/jwt-claims.md). Advertised alongside the login client so
+	// the workbench's second PKCE flow discovers it rather than hardcoding the
+	// "-agent" naming convention (implementation/agent-sidecar.md §5).
+	KeycloakAgentClientID string
+
 	// Handler is the aggregate command dispatcher used by /api routes. Must
 	// be non-nil for any /api route to function (routes guard internally
 	// with a 503 if absent so the server still serves /healthz cleanly when
@@ -436,6 +443,10 @@ func (b *Backend) handleStatus(w http.ResponseWriter, r *http.Request) {
 type AuthConfigResponse struct {
 	Issuer   string `json:"issuer"`
 	ClientID string `json:"client_id"`
+	// AgentClientID is the delegate-path client (stamps delegate_kind). The
+	// workbench runs its silent second PKCE flow against it; omitted when the
+	// deployment did not configure one.
+	AgentClientID string `json:"agent_client_id,omitempty"`
 }
 
 // handleAuthConfig serves the login config unauthenticated (it is a
@@ -448,8 +459,9 @@ func (b *Backend) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, AuthConfigResponse{
-		Issuer:   b.cfg.KeycloakIssuer,
-		ClientID: b.cfg.KeycloakLoginClientID,
+		Issuer:        b.cfg.KeycloakIssuer,
+		ClientID:      b.cfg.KeycloakLoginClientID,
+		AgentClientID: b.cfg.KeycloakAgentClientID,
 	})
 }
 

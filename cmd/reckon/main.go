@@ -65,11 +65,20 @@ func main() {
 			log.Fatalf("%s status: %v", branding.CLI, err)
 		}
 	case "investigate":
-		id := ""
+		arg := ""
 		if len(os.Args) > 2 {
-			id = os.Args[2]
+			arg = os.Args[2]
 		}
-		if err := runInvestigate(id); err != nil {
+		if arg == "--stdio" {
+			// Sidecar mode: the workbench spawns this and speaks JSON-RPC over
+			// stdio (implementation/agent-sidecar.md §4). No investigation id —
+			// sessions name their investigation over the protocol.
+			if err := runSidecar(); err != nil {
+				log.Fatalf("%s investigate --stdio: %v", branding.CLI, err)
+			}
+			return
+		}
+		if err := runInvestigate(arg); err != nil {
 			log.Fatalf("%s investigate: %v", branding.CLI, err)
 		}
 	case "dev-auth":
@@ -101,6 +110,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  stop       signal a running %s supervisor to shut down\n", branding.CLI)
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (BYOK Anthropic key)")
+	fmt.Fprintln(os.Stderr, "  investigate --stdio  agent-loop sidecar for the workbench (JSON-RPC over stdio; spawned, not typed)")
 	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
 	fmt.Fprintln(os.Stderr, "  set-anthropic-key    store your BYOK Anthropic key in the OS keychain (client-side)")
 	fmt.Fprintln(os.Stderr, "  unset-anthropic-key  remove the stored Anthropic key from the keychain")

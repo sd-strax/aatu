@@ -4,23 +4,18 @@
 // surfaces in reckon real estate, no workspace-folder assumption).
 //
 // It renders the reasoning thread (hypotheses + predictions, read side) and
-// hosts the interactive turn loop: the analyst types, the BYOK agent streams,
-// dispatches read tools to the backend, and commits the transcript. The engine
-// (Agent, agent.ts) is decoupled — this file is the renderer + message bridge.
+// hosts the interactive turn loop. The loop itself is the canonical Go
+// implementation, reached through the AgentTransport seam (the sidecar,
+// implementation/agent-sidecar.md) — this file is the renderer + message
+// bridge, nothing more.
 //
-// The extension host holds the bearer token and the Anthropic key and does
-// every call; the webview only renders messages posted to it. The CSP forbids
-// all network from the page.
+// The extension host holds the tokens and the Anthropic key and does every
+// call; the webview only renders messages posted to it. The CSP forbids all
+// network from the page.
 
 import * as vscode from "vscode";
 import { BackendClient, Hypothesis, InvestigationDetail } from "./backend";
-import { Agent } from "./agent";
-
-/** What the extension host holds to build an agent when a turn starts. */
-export interface AgentDeps {
-  apiKey(): Thenable<string | undefined>;
-  model(): string;
-}
+import { AgentTransport, PendingAction } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
@@ -34,6 +29,7 @@ type RenderMessage =
   | { type: "turn.tool"; name: string; input: unknown }
   | { type: "turn.toolResult"; name: string; coverage: string; events: number }
   | { type: "turn.committed"; interpretationId: string }
+  | { type: "turn.pending"; actions: PendingAction[] }
   | { type: "turn.error"; message: string }
   | { type: "turn.end" };
 
@@ -42,12 +38,11 @@ type InboundMessage = { type: "refresh" | "ready" } | { type: "send"; text: stri
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
-  private readonly agents = new Map<string, Agent>();
 
   constructor(
     private readonly client: BackendClient,
     private readonly log: vscode.LogOutputChannel,
-    private readonly deps: AgentDeps,
+    private readonly transport: AgentTransport,
   ) {}
 
   /** Open (or reveal) the document for one investigation. */
@@ -77,7 +72,6 @@ export class InvestigationDocuments {
     });
     panel.onDidDispose(() => {
       this.open.delete(id);
-      this.agents.delete(id);
     });
   }
 
@@ -104,31 +98,30 @@ export class InvestigationDocuments {
     }
   }
 
-  /** Drive one analyst turn through the agent, streaming progress to the webview. */
+  /** Drive one analyst turn through the transport, streaming progress to the webview. */
   private async runTurn(id: string, panel: vscode.WebviewPanel, text: string): Promise<void> {
     void this.post(panel, { type: "turn.user", text });
-
-    const agent = await this.agentFor(id);
-    if (!agent) {
-      void this.post(panel, {
-        type: "turn.error",
-        message: "no Anthropic key — run “reckon: Set Anthropic API Key (BYOK)” first",
-      });
-      void this.post(panel, { type: "turn.end" });
-      return;
-    }
-
     void this.post(panel, { type: "turn.start" });
     try {
-      await agent.send(text, {
-        onReasoning: (delta) => void this.post(panel, { type: "turn.reasoning", delta }),
-        onText: (delta) => void this.post(panel, { type: "turn.text", delta }),
-        onToolUse: (name, input) => void this.post(panel, { type: "turn.tool", name, input }),
-        onToolResult: (name, coverage, events) =>
-          void this.post(panel, { type: "turn.toolResult", name, coverage, events }),
-        onCommitted: (interpretationId) => void this.post(panel, { type: "turn.committed", interpretationId }),
-        onError: (message) => void this.post(panel, { type: "turn.error", message }),
+      const outcome = await this.transport.turn(id, text, {
+        // Round-complete text (streaming deltas arrive with E.4; the render
+        // protocol already treats text as appendable).
+        onText: (chunk) => void this.post(panel, { type: "turn.text", delta: chunk }),
+        onToolCall: (name, input) => void this.post(panel, { type: "turn.tool", name, input }),
+        onToolResult: (name, content, isError) => {
+          const { coverage, events } = summarizeToolResult(content, isError);
+          void this.post(panel, { type: "turn.toolResult", name, coverage, events });
+        },
       });
+      if (outcome.interpretationId) {
+        void this.post(panel, { type: "turn.committed", interpretationId: outcome.interpretationId });
+      }
+      if (outcome.pendingActions.length > 0) {
+        void this.post(panel, { type: "turn.pending", actions: outcome.pendingActions });
+      }
+      if (outcome.error) {
+        void this.post(panel, { type: "turn.error", message: outcome.error });
+      }
     } catch (err) {
       void this.post(panel, { type: "turn.error", message: errText(err) });
     } finally {
@@ -136,21 +129,6 @@ export class InvestigationDocuments {
       // Reasoning nodes may have changed — refresh the thread panel.
       void this.load(id, panel);
     }
-  }
-
-  /** Lazily build (and cache) the agent for one investigation; null if no key. */
-  private async agentFor(id: string): Promise<Agent | undefined> {
-    const existing = this.agents.get(id);
-    if (existing) {
-      return existing;
-    }
-    const key = await this.deps.apiKey();
-    if (!key) {
-      return undefined;
-    }
-    const agent = new Agent(key, this.deps.model(), this.client, id);
-    this.agents.set(id, agent);
-    return agent;
   }
 
   private post(panel: vscode.WebviewPanel, msg: RenderMessage): Thenable<boolean> {
@@ -385,6 +363,15 @@ export class InvestigationDocuments {
         case "turn.committed":
           el("committed", "saved to thread · " + esc(msg.interpretationId));
           break;
+        case "turn.pending":
+          // Honest surface only: approval UI is §7 step 4 — approve/reject go
+          // extension→backend on the human token, never through the loop.
+          for (const a of msg.actions) {
+            el("tool", '<span class="verb">⏸ ' + esc(a.actionType) + '</span> ['
+              + esc(a.tier) + ', ' + esc(a.status) + '] → ' + esc((a.targets || []).join(", "))
+              + ' — awaits your approval');
+          }
+          break;
         case "turn.error":
           el("error", esc(msg.message));
           break;
@@ -400,6 +387,24 @@ export class InvestigationDocuments {
   </script>
 </body>
 </html>`;
+  }
+}
+
+/**
+ * Distill a tool-result payload (the capability envelope JSON, clipped by the
+ * sidecar for transport) into the coverage + event-count line the thread
+ * shows. A payload that doesn't parse (clipped mid-JSON, or a plain error
+ * string) degrades to an honest generic rather than hiding the row.
+ */
+function summarizeToolResult(content: string, isError: boolean): { coverage: string; events: number } {
+  if (isError) {
+    return { coverage: "ERROR", events: 0 };
+  }
+  try {
+    const parsed = JSON.parse(content) as { coverage?: string; events?: unknown[] };
+    return { coverage: parsed.coverage ?? "?", events: parsed.events?.length ?? 0 };
+  } catch {
+    return { coverage: "?", events: 0 };
   }
 }
 

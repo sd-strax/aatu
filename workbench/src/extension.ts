@@ -12,6 +12,7 @@
 import * as vscode from "vscode";
 import { BackendClient } from "./backend";
 import { Session } from "./auth";
+import { SidecarTransport } from "./agentTransport";
 import { InvestigationDocuments } from "./investigationDocument";
 
 /** Where the BYOK Anthropic key lives — never in settings, never on disk in the clear. */
@@ -30,13 +31,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const client = new BackendClient(() => backendUrl(), () => session.token());
 
   const investigations = new InvestigationsProvider(client, session);
-  const documents = new InvestigationDocuments(client, log, {
-    apiKey: () => context.secrets.get(ANTHROPIC_KEY_SECRET),
+  // The agent loop lives in the Go sidecar (implementation/agent-sidecar.md);
+  // this transport spawns it and answers its getToken callbacks from the auth
+  // session — the extension stays the sole auth owner.
+  const transport = new SidecarTransport({
+    backendUrl: () => backendUrl(),
     model: () => vscode.workspace.getConfiguration("reckon").get<string>("model", "claude-opus-4-8"),
-  });
+    apiKey: () => context.secrets.get(ANTHROPIC_KEY_SECRET),
+    getToken: (kind, force) => session.token(kind, force),
+  }, log);
+  const documents = new InvestigationDocuments(client, log, transport);
   context.subscriptions.push(
     log,
     session,
+    { dispose: () => transport.dispose() },
     session.onDidChange(() => {
       void vscode.commands.executeCommand("setContext", "reckon.signedIn", session.signedIn);
       investigations.refresh();

@@ -93,6 +93,7 @@ func TestBackendHandleAuthConfig(t *testing.T) {
 	configured := &Backend{cfg: BackendConfig{
 		KeycloakIssuer:        "http://localhost:8081/realms/reckon",
 		KeycloakLoginClientID: "reckon",
+		KeycloakAgentClientID: "reckon-agent",
 	}}
 	req := httptest.NewRequest("GET", "/api/auth-config", nil)
 	w := httptest.NewRecorder()
@@ -106,6 +107,11 @@ func TestBackendHandleAuthConfig(t *testing.T) {
 	}
 	if resp.Issuer != "http://localhost:8081/realms/reckon" || resp.ClientID != "reckon" {
 		t.Errorf("auth-config = %+v; want issuer+client populated", resp)
+	}
+	// The delegate-path client rides along so the workbench's second PKCE flow
+	// discovers it instead of hardcoding the "-agent" suffix.
+	if resp.AgentClientID != "reckon-agent" {
+		t.Errorf("agent_client_id = %q; want reckon-agent", resp.AgentClientID)
 	}
 
 	// Unconfigured: 503, so the extension reports "auth unconfigured" rather
