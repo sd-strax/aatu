@@ -6,7 +6,7 @@ The analyst-facing VS Code extension — the primary product surface. The design
 
 ## Current state
 
-v0 slice (`design/13 §7`) through step 3:
+v0 slice (`design/13 §7`) through step 4:
 
 - **Version handshake** (`§2`): fail closed on an incompatible/unreachable backend.
 - **Sign in** (`reckon.signIn`): OIDC authorization-code + PKCE against the bundled Keycloak —
@@ -83,11 +83,16 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
   diagnostic on mismatch, absence, or unreachability — it never dispatches against an
   incompatible surface.
 
+- **Inline approvals** (`§7 step 4`): the document renders the investigation's **durable action
+  queue** (fetched on open and re-fetched after every turn and decision — actions from earlier
+  turns or sessions are never stranded). Each pending row carries Approve/Reject: the decision
+  goes extension → `POST /api/actions/{id}/approve|reject` **directly on the human token, never
+  through the sidecar** (approving is the analyst's own act; the backend 403s delegate tokens
+  regardless). A T3 approval demands the typed challenge (`04 §5.5`) via input box; rejections
+  record a reason. Server explanations (Gate 2 denials, guarded transitions) surface verbatim.
+
 ## Pending seams
 
-- **Write actions inline** (`§7 step 4`): approving/rejecting the pending actions the thread
-  already lists — extension UI → `POST /api/actions/{id}/approve|reject` directly on the human
-  token (never through the sidecar; approvals are the analyst's own acts).
 - **Streaming** (E.4): the sidecar's `turn/text` notifications carry round-complete text today;
   token deltas land in `agent.LLM` and flow through the same reserved channel without a
   protocol break.

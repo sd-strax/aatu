@@ -31,7 +31,12 @@ const PROTOCOL_VERSION = 1;
 export interface TurnProgress {
   onText(text: string): void;
   onToolCall(name: string, input: unknown): void;
-  onToolResult(name: string, content: string, isError: boolean): void;
+  /**
+   * coverage/eventCount are distilled sidecar-side from the FULL result
+   * payload (content is clipped for transport and may not parse). Undefined
+   * when the result is not a capability envelope (e.g. list_actions).
+   */
+  onToolResult(name: string, content: string, isError: boolean, coverage?: string, eventCount?: number): void;
 }
 
 /** One action awaiting the analyst (mirrors sidecar.pendingAction). */
@@ -210,8 +215,17 @@ export class SidecarTransport implements AgentTransport {
     });
     connection.onNotification(
       "turn/tool_result",
-      (p: { session_id?: string; name?: string; content?: string; is_error?: boolean }) => {
-        this.inFlight.get(p?.session_id ?? "")?.onToolResult(p?.name ?? "", p?.content ?? "", p?.is_error ?? false);
+      (p: {
+        session_id?: string;
+        name?: string;
+        content?: string;
+        is_error?: boolean;
+        coverage?: string;
+        event_count?: number;
+      }) => {
+        this.inFlight.get(p?.session_id ?? "")?.onToolResult(
+          p?.name ?? "", p?.content ?? "", p?.is_error ?? false, p?.coverage, p?.event_count,
+        );
       },
     );
     connection.listen();

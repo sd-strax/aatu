@@ -14,27 +14,31 @@
 // network from the page.
 
 import * as vscode from "vscode";
-import { BackendClient, Hypothesis, InvestigationDetail } from "./backend";
-import { AgentTransport, PendingAction } from "./agentTransport";
+import { ActionRow, BackendClient, Hypothesis, InvestigationDetail } from "./backend";
+import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
   | { type: "loading" }
   | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[] }
   | { type: "error"; message: string }
+  | { type: "pending"; actions: ActionRow[] }
   | { type: "turn.start" }
   | { type: "turn.user"; text: string }
   | { type: "turn.reasoning"; delta: string }
   | { type: "turn.text"; delta: string }
   | { type: "turn.tool"; name: string; input: unknown }
-  | { type: "turn.toolResult"; name: string; coverage: string; events: number }
+  | { type: "turn.toolResult"; name: string; isError: boolean; coverage?: string; events?: number }
   | { type: "turn.committed"; interpretationId: string }
-  | { type: "turn.pending"; actions: PendingAction[] }
   | { type: "turn.error"; message: string }
   | { type: "turn.end" };
 
 /** What the webview posts back to the extension host. */
-type InboundMessage = { type: "refresh" | "ready" } | { type: "send"; text: string };
+type InboundMessage =
+  | { type: "refresh" | "ready" }
+  | { type: "send"; text: string }
+  | { type: "action.approve"; actionId: string; tier: string; actionType: string }
+  | { type: "action.reject"; actionId: string; actionType: string };
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
@@ -68,6 +72,10 @@ export class InvestigationDocuments {
         void this.load(id, panel);
       } else if (msg.type === "send") {
         void this.runTurn(id, panel, msg.text);
+      } else if (msg.type === "action.approve") {
+        void this.approve(id, panel, msg);
+      } else if (msg.type === "action.reject") {
+        void this.reject(id, panel, msg);
       }
     });
     panel.onDidDispose(() => {
@@ -96,6 +104,83 @@ export class InvestigationDocuments {
       this.log.error(`load investigation ${id}: ${message}`);
       void this.post(panel, { type: "error", message });
     }
+    // The durable action queue rides every load (open, refresh, post-turn,
+    // post-decision) — the panel always shows what actually awaits the
+    // analyst, not just what the last turn proposed.
+    await this.postPending(id, panel);
+  }
+
+  /** Fetch + render the action queue. Failure logs and leaves the panel as-is. */
+  private async postPending(id: string, panel: vscode.WebviewPanel): Promise<void> {
+    try {
+      const actions = await this.client.actions(id);
+      void this.post(panel, { type: "pending", actions });
+    } catch (err) {
+      // A 503 here just means the action layer is off — not a broken panel.
+      this.log.debug(`list actions ${id}: ${errText(err)}`);
+    }
+  }
+
+  /**
+   * Approve one action — the analyst's own act, extension→backend on the
+   * HUMAN token, never through the sidecar (implementation/agent-sidecar.md
+   * §5). A T3 approval demands the typed challenge (04 §5.5) via input box.
+   */
+  private async approve(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { actionId: string; tier: string; actionType: string },
+  ): Promise<void> {
+    let challenge: string | undefined;
+    if (msg.tier === "T3") {
+      challenge = await vscode.window.showInputBox({
+        title: `reckon — approve ${msg.actionType} (T3)`,
+        prompt: "Tier-3 approval requires the typed challenge. This action has high blast radius.",
+        ignoreFocusOut: true,
+        validateInput: (v) => (v.trim() === "" ? "the challenge text is required for T3" : undefined),
+      });
+      if (challenge === undefined || challenge.trim() === "") {
+        await this.postPending(id, panel); // cancelled — re-enable the buttons
+        return;
+      }
+    }
+    try {
+      const decision = await this.client.approveAction(msg.actionId, challenge);
+      void vscode.window.showInformationMessage(
+        `reckon: ${msg.actionType} → ${decision.status}${decision.stage ? ` (${decision.stage})` : ""}`,
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: approve failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
+  }
+
+  /** Reject one action — ditto, human token only. */
+  private async reject(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { actionId: string; actionType: string },
+  ): Promise<void> {
+    const reason = await vscode.window.showInputBox({
+      title: `reckon — reject ${msg.actionType}`,
+      prompt: "Why is this action rejected? (recorded on the audit trail)",
+      ignoreFocusOut: true,
+      placeHolder: "rejected from the workbench",
+    });
+    if (reason === undefined) {
+      await this.postPending(id, panel); // cancelled — re-enable the buttons
+      return;
+    }
+    try {
+      const decision = await this.client.rejectAction(
+        msg.actionId,
+        reason.trim() === "" ? "rejected from the workbench" : reason.trim(),
+      );
+      void vscode.window.showInformationMessage(`reckon: ${msg.actionType} → ${decision.status}`);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: reject failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
   }
 
   /** Drive one analyst turn through the transport, streaming progress to the webview. */
@@ -108,17 +193,19 @@ export class InvestigationDocuments {
         // protocol already treats text as appendable).
         onText: (chunk) => void this.post(panel, { type: "turn.text", delta: chunk }),
         onToolCall: (name, input) => void this.post(panel, { type: "turn.tool", name, input }),
-        onToolResult: (name, content, isError) => {
-          const { coverage, events } = summarizeToolResult(content, isError);
-          void this.post(panel, { type: "turn.toolResult", name, coverage, events });
-        },
+        // coverage/events come distilled from the sidecar (from the full,
+        // unclipped payload) — absent for non-envelope results, and the
+        // webview renders that honestly instead of a bogus "? · 0".
+        onToolResult: (name, _content, isError, coverage, events) =>
+          void this.post(panel, { type: "turn.toolResult", name, isError, coverage, events }),
       });
       if (outcome.interpretationId) {
         void this.post(panel, { type: "turn.committed", interpretationId: outcome.interpretationId });
       }
-      if (outcome.pendingActions.length > 0) {
-        void this.post(panel, { type: "turn.pending", actions: outcome.pendingActions });
-      }
+      // Pending actions are NOT posted from the outcome: the finally-load
+      // re-fetches the durable queue, so the panel renders the backend's
+      // truth (including actions from earlier turns/sessions) with the
+      // approve/reject affordances attached.
       if (outcome.error) {
         void this.post(panel, { type: "turn.error", message: outcome.error });
       }
@@ -217,6 +304,12 @@ export class InvestigationDocuments {
     .tool .verb { font-weight: 600; }
     .tool .result { opacity: 0.85; }
     .committed { font-size: 0.76rem; opacity: 0.55; margin: 0.3rem 0; }
+    .decide { margin-top: 0.45rem; display: flex; gap: 0.5rem; }
+    .decide .primary {
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+    }
+    .decide .primary:hover { background: var(--vscode-button-hoverBackground); }
     .error { color: var(--vscode-errorForeground); margin: 0.4rem 0; }
     .empty, .loading { opacity: 0.7; font-style: italic; margin: 1rem 0; }
     code { font-family: var(--vscode-editor-font-family); font-size: 0.85em; }
@@ -244,6 +337,10 @@ export class InvestigationDocuments {
     <details class="thread" id="threadWrap" open>
       <summary>Reasoning thread</summary>
       <div id="thread"><div class="loading">Loading…</div></div>
+    </details>
+    <details class="thread" id="pendingWrap" open style="display:none">
+      <summary>Pending actions — your approval</summary>
+      <div id="pending"></div>
     </details>
     <div id="conversation"></div>
   </div>
@@ -289,6 +386,63 @@ export class InvestigationDocuments {
       if (html !== undefined) d.innerHTML = html;
       conversation.appendChild(d);
       return d;
+    }
+
+    // The action queue: rows are DOM-built (action_type/targets are
+    // model-influenced — no innerHTML for them), each with Approve/Reject
+    // posting to the host, which does the real call on the human token.
+    function renderPending(actions) {
+      const wrap = $("pendingWrap");
+      const box = $("pending");
+      const pend = (actions || []).filter((a) => a.pending);
+      box.textContent = "";
+      wrap.style.display = pend.length ? "" : "none";
+      for (const a of pend) {
+        const row = document.createElement("div");
+        row.className = "hypothesis";
+
+        const head = document.createElement("div");
+        const name = document.createElement("span");
+        name.className = "statement";
+        name.textContent = a.actionType;
+        const tier = document.createElement("span");
+        tier.className = "badge";
+        tier.textContent = a.tier;
+        const state = document.createElement("span");
+        state.className = "badge";
+        state.textContent = a.pendingLabel;
+        head.append(name, tier, state);
+
+        const targets = document.createElement("div");
+        targets.className = "meta";
+        targets.textContent = "→ " + (a.targets || []).join(", ");
+
+        const decide = document.createElement("div");
+        decide.className = "decide";
+        const ok = document.createElement("button");
+        ok.className = "primary";
+        ok.textContent = a.tier === "T3" ? "Approve (challenge)…" : "Approve";
+        ok.addEventListener("click", () => {
+          setDecideEnabled(false);
+          vscode.postMessage({ type: "action.approve", actionId: a.actionId, tier: a.tier, actionType: a.actionType });
+        });
+        const no = document.createElement("button");
+        no.textContent = "Reject…";
+        no.addEventListener("click", () => {
+          setDecideEnabled(false);
+          vscode.postMessage({ type: "action.reject", actionId: a.actionId, actionType: a.actionType });
+        });
+        decide.append(ok, no);
+
+        row.append(head, targets, decide);
+        box.appendChild(row);
+      }
+    }
+
+    // One decision in flight at a time; the host re-posts the queue after
+    // every outcome (including cancel), which re-enables via re-render.
+    function setDecideEnabled(on) {
+      for (const b of document.querySelectorAll("#pending button")) b.disabled = !on;
     }
 
     function setComposerEnabled(on) {
@@ -354,23 +508,23 @@ export class InvestigationDocuments {
           }));
           break;
         }
-        case "turn.toolResult":
+        case "turn.toolResult": {
+          // Envelope results show coverage + count (distilled from the full
+          // payload); non-envelope results just complete; errors say so.
+          const mark = msg.isError ? "✗" : "✓";
+          const detail = msg.isError ? " — error"
+            : msg.coverage !== undefined ? " — " + esc(msg.coverage) + " · " + esc(msg.events) + " event(s)"
+            : "";
           (turn ? turn.wrap : conversation).appendChild(Object.assign(document.createElement("div"), {
-            className: "tool", innerHTML: '<span class="result">✓ ' + esc(msg.name) + ' — ' + esc(msg.coverage)
-              + ' · ' + esc(msg.events) + ' event(s)</span>',
+            className: "tool", innerHTML: '<span class="result">' + mark + ' ' + esc(msg.name) + detail + '</span>',
           }));
           break;
+        }
         case "turn.committed":
           el("committed", "saved to thread · " + esc(msg.interpretationId));
           break;
-        case "turn.pending":
-          // Honest surface only: approval UI is §7 step 4 — approve/reject go
-          // extension→backend on the human token, never through the loop.
-          for (const a of msg.actions) {
-            el("tool", '<span class="verb">⏸ ' + esc(a.actionType) + '</span> ['
-              + esc(a.tier) + ', ' + esc(a.status) + '] → ' + esc((a.targets || []).join(", "))
-              + ' — awaits your approval');
-          }
+        case "pending":
+          renderPending(msg.actions);
           break;
         case "turn.error":
           el("error", esc(msg.message));
@@ -387,24 +541,6 @@ export class InvestigationDocuments {
   </script>
 </body>
 </html>`;
-  }
-}
-
-/**
- * Distill a tool-result payload (the capability envelope JSON, clipped by the
- * sidecar for transport) into the coverage + event-count line the thread
- * shows. A payload that doesn't parse (clipped mid-JSON, or a plain error
- * string) degrades to an honest generic rather than hiding the row.
- */
-function summarizeToolResult(content: string, isError: boolean): { coverage: string; events: number } {
-  if (isError) {
-    return { coverage: "ERROR", events: 0 };
-  }
-  try {
-    const parsed = JSON.parse(content) as { coverage?: string; events?: unknown[] };
-    return { coverage: parsed.coverage ?? "?", events: parsed.events?.length ?? 0 };
-  } catch {
-    return { coverage: "?", events: 0 };
   }
 }
 

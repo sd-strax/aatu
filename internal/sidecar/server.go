@@ -253,9 +253,18 @@ func (s *service) handleCreateSession(ctx context.Context, raw json.RawMessage) 
 				s.conn.Notify("turn/tool_call", turnToolCallNote{SessionID: sessionID, Name: name, Input: input})
 			},
 			OnToolResult: func(name, content string, isError bool) {
-				s.conn.Notify("turn/tool_result", turnToolResultNote{
+				note := turnToolResultNote{
 					SessionID: sessionID, Name: name, Content: clipRunes(content, toolResultClip), IsError: isError,
-				})
+				}
+				// Summarize from the FULL payload before clipping — the client
+				// renders coverage + event count from these fields, never by
+				// parsing Content (which may be clipped mid-JSON). Absent when
+				// the result is not a capability envelope (e.g. list_actions).
+				if cov, n, ok := summarizeEnvelope(content); ok && !isError {
+					note.Coverage = cov
+					note.EventCount = &n
+				}
+				s.conn.Notify("turn/tool_result", note)
 			},
 		},
 	})
@@ -330,6 +339,28 @@ type turnToolResultNote struct {
 	Name      string `json:"name"`
 	Content   string `json:"content"`
 	IsError   bool   `json:"is_error"`
+	// Coverage + EventCount are distilled from the FULL result payload before
+	// Content is clipped for transport, so the render ticker never lies about
+	// a large result. Present only when the result parsed as a capability
+	// envelope; EventCount is a pointer so an honest zero ("COMPLETE · 0
+	// events") is distinguishable from not-an-envelope.
+	Coverage   string `json:"coverage,omitempty"`
+	EventCount *int   `json:"event_count,omitempty"`
+}
+
+// summarizeEnvelope distills a capability-envelope result into the ticker
+// fields: its coverage classification and event count. ok=false when the
+// payload is not an envelope (a plain error string, or a non-capability tool
+// result like list_actions).
+func summarizeEnvelope(content string) (coverage string, eventCount int, ok bool) {
+	var env struct {
+		Coverage string            `json:"coverage"`
+		Events   []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(content), &env); err != nil || env.Coverage == "" {
+		return "", 0, false
+	}
+	return env.Coverage, len(env.Events), true
 }
 
 func (s *service) handleTurn(ctx context.Context, raw json.RawMessage) (any, error) {

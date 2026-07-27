@@ -122,6 +122,28 @@ export interface ToolCallRecord {
   args: unknown;
 }
 
+/** One row of the durable action queue (mirrors server.ActionView). */
+export interface ActionRow {
+  actionId: string;
+  actionType: string;
+  tier: string;
+  /** Raw engine lifecycle status (REQUESTED, PENDING_SECONDARY, APPROVED, …). */
+  status: string;
+  requiredMode: string;
+  targets: string[];
+  /** True while the action still awaits a human decision. */
+  pending: boolean;
+  /** The awaiting state in approval vocabulary (PENDING_MANUAL / PENDING_TWO_PARTY). */
+  pendingLabel: string;
+}
+
+/** Where an approve/reject left the action (mirrors server.ActionDecisionResponse). */
+export interface ActionDecision {
+  actionId: string;
+  status: string;
+  stage?: string;
+}
+
 /** Raw server.InvestigationView row, as served under {investigations: [...]}. */
 interface RawInvestigation {
   aggregate_id: string;
@@ -356,6 +378,68 @@ export class BackendClient {
     }));
   }
 
+  /**
+   * GET /api/investigations/{id}/actions — the durable action queue
+   * (design/13 §7 step 4). The pending flag/label mirror the Go client's
+   * ActionStatus.Pending/PendingLabel so every surface speaks one vocabulary.
+   */
+  async actions(investigationId: string): Promise<ActionRow[]> {
+    interface Raw {
+      action_id?: string;
+      action_type?: string;
+      tier?: string;
+      status?: string;
+      required_mode?: string;
+      targets?: { entity_ref?: string; resolved_identifier?: string }[];
+    }
+    const body = await this.authedGet<{ actions?: Raw[] }>(
+      `/api/investigations/${encodeURIComponent(investigationId)}/actions`,
+    );
+    return (body.actions ?? []).map((a) => {
+      const status = a.status ?? "";
+      const mode = a.required_mode ?? "";
+      const pending = status === "REQUESTED" || status === "PENDING_SECONDARY"
+        || status === "PENDING_MANUAL" || status === "PENDING_TWO_PARTY";
+      const pendingLabel =
+        status === "REQUESTED" && mode === "TWO_PARTY" ? "PENDING_TWO_PARTY"
+        : status === "REQUESTED" ? "PENDING_MANUAL"
+        : status === "PENDING_SECONDARY" ? "PENDING_TWO_PARTY"
+        : status;
+      return {
+        actionId: a.action_id ?? "",
+        actionType: a.action_type ?? "",
+        tier: a.tier ?? "",
+        status,
+        requiredMode: mode,
+        targets: (a.targets ?? []).map((t) => t.resolved_identifier || t.entity_ref || ""),
+        pending,
+        pendingLabel,
+      };
+    });
+  }
+
+  /**
+   * POST /api/actions/{id}/approve — the analyst's own act, always on the
+   * human token (a delegate token is 403'd server-side). challengeResponse is
+   * the typed challenge a T3 approval requires (04 §5.5).
+   */
+  async approveAction(actionId: string, challengeResponse?: string): Promise<ActionDecision> {
+    const r = await this.authedPost<{ action_id?: string; status?: string; stage?: string }>(
+      `/api/actions/${encodeURIComponent(actionId)}/approve`,
+      challengeResponse ? { challenge_response: challengeResponse } : {},
+    );
+    return { actionId: r.action_id ?? actionId, status: r.status ?? "", stage: r.stage };
+  }
+
+  /** POST /api/actions/{id}/reject — ditto, human token only. */
+  async rejectAction(actionId: string, reason: string): Promise<ActionDecision> {
+    const r = await this.authedPost<{ action_id?: string; status?: string; stage?: string }>(
+      `/api/actions/${encodeURIComponent(actionId)}/reject`,
+      { reason },
+    );
+    return { actionId: r.action_id ?? actionId, status: r.status ?? "", stage: r.stage };
+  }
+
   /** POST /api/investigations — seed a new investigation. Analyst role. */
   async createInvestigation(title: string): Promise<InvestigationDetail> {
     const r = await this.authedPost<RawInvestigation>("/api/investigations", { title });
@@ -390,7 +474,17 @@ export class BackendClient {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
-      throw new Error(`${method} ${path} → ${res.status}`);
+      // Surface the server's explanation when it sent one — a Gate 2 denial
+      // or a guarded transition is information, not noise (approve/reject
+      // rejections carry their reason in the error body).
+      let detail = "";
+      try {
+        const body = (await res.json()) as { error?: string };
+        detail = body.error ? `: ${body.error}` : "";
+      } catch {
+        // non-JSON error body — the status alone will have to do
+      }
+      throw new Error(`${method} ${path} → ${res.status}${detail}`);
     }
     return (await res.json()) as T;
   }

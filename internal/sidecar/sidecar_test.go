@@ -357,6 +357,17 @@ func TestServe_FullFlow(t *testing.T) {
 	}
 	if n := c.notifications("turn/tool_result"); len(n) != 1 {
 		t.Errorf("turn/tool_result notifications = %d; want 1", len(n))
+	} else {
+		// The ticker fields are distilled from the FULL payload pre-clip: an
+		// honest "COMPLETE · 0 events" must arrive structurally, not by the
+		// client parsing (possibly clipped) content.
+		var note turnToolResultNote
+		if err := json.Unmarshal(n[0].Params, &note); err != nil {
+			t.Fatal(err)
+		}
+		if note.Coverage != "COMPLETE" || note.EventCount == nil || *note.EventCount != 0 {
+			t.Errorf("tool_result note = coverage %q, count %v; want COMPLETE with explicit 0", note.Coverage, note.EventCount)
+		}
 	}
 	if n := c.notifications("turn/text"); len(n) < 1 {
 		t.Error("no turn/text notifications")
