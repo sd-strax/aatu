@@ -122,6 +122,21 @@ export interface ToolCallRecord {
   args: unknown;
 }
 
+/** One reasoning act in the thread (mirrors server.ThreadEntryView). */
+export interface ThreadEntry {
+  sequenceNo: number;
+  occurredAt: string;
+  actor: { principal: string; kind: string; model?: string };
+  interpretationId: string;
+  interpretationType: string;
+  summary: string;
+  confidence?: string;
+  inputRefs: string[];
+  outputRefs: string[];
+  toolCalls: number;
+  hasTranscript: boolean;
+}
+
 /** One row of the durable action queue (mirrors server.ActionView). */
 export interface ActionRow {
   actionId: string;
@@ -382,6 +397,48 @@ export class BackendClient {
         status: p.status,
         testResultRefs: p.test_result_refs ?? [],
       })),
+    }));
+  }
+
+  /**
+   * GET /api/investigations/{id}/thread — the chronological reasoning thread
+   * (13 §4): every recorded reasoning act, including the interpretations
+   * paired with lifecycle/action transitions, in aggregate sequence order.
+   * This is the "how did it get here" surface.
+   */
+  async thread(id: string): Promise<ThreadEntry[]> {
+    interface Raw {
+      sequence_no?: number;
+      occurred_at?: string;
+      actor?: { principal?: string; kind?: string; model?: string };
+      interpretation_id?: string;
+      interpretation_type?: string;
+      summary?: string;
+      confidence?: string;
+      input_refs?: string[];
+      output_refs?: string[];
+      tool_calls?: number;
+      has_transcript?: boolean;
+    }
+    const body = await this.authedGet<{ thread?: Raw[] }>(
+      `/api/investigations/${encodeURIComponent(id)}/thread`,
+    );
+    return (body.thread ?? []).map((e) => ({
+      sequenceNo: e.sequence_no ?? 0,
+      occurredAt: e.occurred_at ?? "",
+      actor: {
+        principal: e.actor?.principal ?? "",
+        kind: e.actor?.kind ?? "HUMAN",
+        model: e.actor?.model,
+      },
+      interpretationId: e.interpretation_id ?? "",
+      interpretationType: e.interpretation_type ?? "",
+      summary: e.summary ?? "",
+      confidence: e.confidence,
+      inputRefs: e.input_refs ?? [],
+      outputRefs: e.output_refs ?? [],
+      toolCalls: e.tool_calls ?? 0,
+      hasTranscript: e.has_transcript ?? false,
     }));
   }
 

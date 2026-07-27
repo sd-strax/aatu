@@ -504,7 +504,8 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 
 // /investigations/{id} handles GET (load one); the /hypotheses sub-resource
 // lists the investigation's reasoning nodes (D.2); the /actions sub-resource
-// lists its x-actions (the pending-approval queue + audit list); the /export
+// lists its x-actions (the pending-approval queue + audit list); the /thread
+// sub-resource lists the chronological reasoning thread (13 §4); the /export
 // sub-resource triggers the post-conclusion export bundle (D.5); the /lifecycle
 // sub-resource drives the state machine (activate/pause/resume/conclude/reopen/
 // archive, D.6).
@@ -523,6 +524,15 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationActions)
+		default:
+			methodNotAllowed(w, "GET")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/thread") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationThread)
 		default:
 			methodNotAllowed(w, "GET")
 		}

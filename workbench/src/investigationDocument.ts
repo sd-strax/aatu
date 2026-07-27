@@ -14,15 +14,16 @@
 // network from the page.
 
 import * as vscode from "vscode";
-import { ActionRow, BackendClient, Capability, Hypothesis, InvestigationDetail } from "./backend";
+import { ActionRow, BackendClient, Capability, Hypothesis, InvestigationDetail, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
   | { type: "loading" }
   // capabilities is null when the capability layer is off/unreachable — the
-  // rail renders that honestly instead of an empty list.
-  | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[]; capabilities: Capability[] | null }
+  // rail renders that honestly instead of an empty list. thread is the
+  // chronological reasoning history (13 §4); null when its fetch failed.
+  | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[]; capabilities: Capability[] | null; thread: ThreadEntry[] | null }
   | { type: "error"; message: string }
   | { type: "pending"; actions: ActionRow[] }
   | { type: "turn.start" }
@@ -95,15 +96,18 @@ export class InvestigationDocuments {
   private async load(id: string, panel: vscode.WebviewPanel): Promise<void> {
     void this.post(panel, { type: "loading" });
     try {
-      const [investigation, hypotheses, capabilities] = await Promise.all([
+      const [investigation, hypotheses, capabilities, thread] = await Promise.all([
         this.client.getInvestigation(id),
         this.client.hypotheses(id),
         // Capability health is a v0 rail surface (13 §4); a 503 just means the
         // layer is off — null renders as "unavailable", never a broken panel.
         this.client.capabilities().catch(() => null),
+        // The reasoning history — how the investigation got to its current
+        // state. Failure degrades to "history unavailable", not a broken panel.
+        this.client.thread(id).catch(() => null),
       ]);
       panel.title = `⚖ ${investigation.title}`;
-      void this.post(panel, { type: "data", investigation, hypotheses, capabilities });
+      void this.post(panel, { type: "data", investigation, hypotheses, capabilities, thread });
     } catch (err) {
       const message = errText(err);
       this.log.error(`load investigation ${id}: ${message}`);
@@ -371,6 +375,25 @@ export class InvestigationDocuments {
     .committed, .usage { font-size: 0.74rem; opacity: 0.5; margin: 0.35rem 0; }
     .error { color: var(--vscode-errorForeground); margin: 0.4rem 0; max-width: 78ch; }
 
+    /* ---- reasoning history (the thread, 13 §4) ---- */
+    #historyWrap { margin: 0.6rem 0 1rem; max-width: 78ch; }
+    #historyWrap > summary {
+      cursor: pointer; font-size: 0.78rem; text-transform: uppercase;
+      letter-spacing: 0.06em; opacity: 0.6; font-weight: 600; margin-bottom: 0.3rem;
+    }
+    .step {
+      border-left: 2px solid var(--vscode-panel-border);
+      padding: 0.15rem 0 0.3rem 0.8rem; margin: 0.55rem 0;
+    }
+    .step.ai { border-left-color: var(--vscode-charts-blue, #4e94ce); }
+    .step .stephead {
+      font-size: 0.72rem; opacity: 0.65;
+      display: flex; align-items: baseline; gap: 0.55rem; flex-wrap: wrap;
+    }
+    .step .stephead .who { font-weight: 600; }
+    .step .stepbody { font-size: 0.86rem; margin-top: 0.1rem; }
+    .step .stepbody p { margin: 0.2rem 0; }
+
     /* ---- rail ---- */
     #rail section { margin-bottom: 1.1rem; }
     #rail h2 {
@@ -432,6 +455,10 @@ export class InvestigationDocuments {
 
     <div id="scroll">
       <div id="banner"></div>
+      <details id="historyWrap" open style="display:none">
+        <summary id="historySummary">How this investigation got here</summary>
+        <div id="history"></div>
+      </details>
       <div id="conversation"></div>
     </div>
 
@@ -598,6 +625,67 @@ export class InvestigationDocuments {
       row.querySelector("summary").appendChild(st);
     }
 
+    // ---- reasoning history -------------------------------------------------
+    // Frozen at the sequence seen on FIRST load: acts recorded later arrive
+    // through the live conversation (or the rail), so re-fetches never
+    // duplicate what a live turn already rendered below.
+    let historyCutoff = null;
+
+    function renderHistory(entries) {
+      const wrap = $("historyWrap");
+      const box = $("history");
+      if (!entries || !entries.length) {
+        wrap.style.display = "none";
+        return;
+      }
+      if (historyCutoff === null) {
+        historyCutoff = entries[entries.length - 1].sequenceNo;
+      }
+      const shown = entries.filter((e) => e.sequenceNo <= historyCutoff);
+      if (!shown.length) {
+        wrap.style.display = "none";
+        return;
+      }
+      wrap.style.display = "";
+      $("historySummary").textContent =
+        "How this investigation got here · " + shown.length + " step" + (shown.length === 1 ? "" : "s");
+      box.textContent = "";
+      for (const e of shown) {
+        const step = document.createElement("div");
+        step.className = "step" + (e.actor.kind === "AI_DELEGATED" ? " ai" : "");
+
+        const head = document.createElement("div");
+        head.className = "stephead";
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = e.actor.kind === "AI_DELEGATED" ? "AI" + (e.actor.model ? " · " + e.actor.model : "")
+          : e.actor.kind === "SYSTEM" ? "system" : "analyst";
+        who.title = e.actor.principal;
+        const typ = document.createElement("span");
+        typ.textContent = e.interpretationType;
+        const when = document.createElement("span");
+        when.textContent = e.occurredAt ? new Date(e.occurredAt).toLocaleString() : "";
+        head.append(who, typ, when);
+        const extras = [];
+        if (e.confidence) extras.push(e.confidence.toLowerCase() + " confidence");
+        if (e.toolCalls) extras.push(e.toolCalls + " tool call" + (e.toolCalls === 1 ? "" : "s"));
+        const refs = (e.inputRefs?.length ?? 0) + (e.outputRefs?.length ?? 0);
+        if (refs) extras.push(refs + " evidence ref" + (refs === 1 ? "" : "s"));
+        if (extras.length) {
+          const ex = document.createElement("span");
+          ex.textContent = extras.join(" · ");
+          head.append(ex);
+        }
+
+        const body = document.createElement("div");
+        body.className = "stepbody md";
+        body.innerHTML = md(e.summary);
+
+        step.append(head, body);
+        box.appendChild(step);
+      }
+    }
+
     // ---- rail --------------------------------------------------------------
     function renderHypotheses(hs) {
       const box = $("hyps");
@@ -751,6 +839,7 @@ export class InvestigationDocuments {
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
           renderHypotheses(msg.hypotheses);
           renderCapabilities(msg.capabilities);
+          renderHistory(msg.thread);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');

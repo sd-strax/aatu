@@ -99,7 +99,18 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
 
 The investigation document is a two-region surface (`design/13 §4`): the **conversation**
 (center, measure-capped) and a persistent **state rail** (right) carrying what the analyst
-needs at a glance, not buried in the transcript:
+needs at a glance, not buried in the transcript.
+
+Opening an investigation renders **"How this investigation got here"** — the chronological
+reasoning thread from `GET /api/investigations/{id}/thread` (`server/thread.go`), reassembled
+from `interpretation.recorded` events alone (every lifecycle/action transition pairs one in
+the same transaction, so the history is complete with no duplicates, ordered by
+`sequence_no`). Each step shows the author (**analyst / AI · model / system** — the
+"delegate, never principal" attribution made visible), the interpretation type, rationale,
+confidence, and tool-call/evidence counts. The list freezes at the sequence seen on first
+load; later acts arrive through the live conversation, so re-fetches never duplicate them.
+
+The rail:
 
 - **Needs your approval** — the durable action queue with the Approve/Reject buttons (and the
   EXPIRED posture); always visible, honest empty state.
