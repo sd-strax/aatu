@@ -410,31 +410,42 @@ export class InvestigationDocuments {
         tier.textContent = a.tier;
         const state = document.createElement("span");
         state.className = "badge";
-        state.textContent = a.pendingLabel;
+        state.textContent = a.expired ? "EXPIRED" : a.pendingLabel;
         head.append(name, tier, state);
 
         const targets = document.createElement("div");
         targets.className = "meta";
         targets.textContent = "→ " + (a.targets || []).join(", ");
 
-        const decide = document.createElement("div");
-        decide.className = "decide";
-        const ok = document.createElement("button");
-        ok.className = "primary";
-        ok.textContent = a.tier === "T3" ? "Approve (challenge)…" : "Approve";
-        ok.addEventListener("click", () => {
-          setDecideEnabled(false);
-          vscode.postMessage({ type: "action.approve", actionId: a.actionId, tier: a.tier, actionType: a.actionType });
-        });
-        const no = document.createElement("button");
-        no.textContent = "Reject…";
-        no.addEventListener("click", () => {
-          setDecideEnabled(false);
-          vscode.postMessage({ type: "action.reject", actionId: a.actionId, actionType: a.actionType });
-        });
-        decide.append(ok, no);
+        row.append(head, targets);
 
-        row.append(head, targets, decide);
+        if (a.expired) {
+          // The approval deadline passed — the engine refuses an approve, so
+          // no buttons: an affordance that can only fail is a lie.
+          row.style.opacity = "0.55";
+          const note = document.createElement("div");
+          note.className = "meta";
+          note.textContent = "approval window elapsed — re-request the action if it is still needed";
+          row.append(note);
+        } else {
+          const decide = document.createElement("div");
+          decide.className = "decide";
+          const ok = document.createElement("button");
+          ok.className = "primary";
+          ok.textContent = a.tier === "T3" ? "Approve (challenge)…" : "Approve";
+          ok.addEventListener("click", () => {
+            setDecideEnabled(false);
+            vscode.postMessage({ type: "action.approve", actionId: a.actionId, tier: a.tier, actionType: a.actionType });
+          });
+          const no = document.createElement("button");
+          no.textContent = "Reject…";
+          no.addEventListener("click", () => {
+            setDecideEnabled(false);
+            vscode.postMessage({ type: "action.reject", actionId: a.actionId, actionType: a.actionType });
+          });
+          decide.append(ok, no);
+          row.append(decide);
+        }
         box.appendChild(row);
       }
     }

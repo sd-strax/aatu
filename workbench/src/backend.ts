@@ -135,6 +135,13 @@ export interface ActionRow {
   pending: boolean;
   /** The awaiting state in approval vocabulary (PENDING_MANUAL / PENDING_TWO_PARTY). */
   pendingLabel: string;
+  /**
+   * True when the request's approval deadline (expires_at, frozen at request
+   * time) has passed: the engine will refuse an approve, so the UI must not
+   * offer one. The status may still read REQUESTED — v0 has no expiry timer;
+   * the engine checks lazily at the approve attempt.
+   */
+  expired: boolean;
 }
 
 /** Where an approve/reject left the action (mirrors server.ActionDecisionResponse). */
@@ -390,6 +397,7 @@ export class BackendClient {
       tier?: string;
       status?: string;
       required_mode?: string;
+      expires_at?: string;
       targets?: { entity_ref?: string; resolved_identifier?: string }[];
     }
     const body = await this.authedGet<{ actions?: Raw[] }>(
@@ -405,6 +413,7 @@ export class BackendClient {
         : status === "REQUESTED" ? "PENDING_MANUAL"
         : status === "PENDING_SECONDARY" ? "PENDING_TWO_PARTY"
         : status;
+      const expiry = a.expires_at ? Date.parse(a.expires_at) : NaN;
       return {
         actionId: a.action_id ?? "",
         actionType: a.action_type ?? "",
@@ -414,6 +423,7 @@ export class BackendClient {
         targets: (a.targets ?? []).map((t) => t.resolved_identifier || t.entity_ref || ""),
         pending,
         pendingLabel,
+        expired: Number.isFinite(expiry) && Date.now() > expiry,
       };
     });
   }
