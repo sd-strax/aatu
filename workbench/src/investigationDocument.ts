@@ -189,9 +189,12 @@ export class InvestigationDocuments {
     void this.post(panel, { type: "turn.start" });
     try {
       const outcome = await this.transport.turn(id, text, {
-        // Round-complete text (streaming deltas arrive with E.4; the render
-        // protocol already treats text as appendable).
+        // Both text paths land on the same appendable turn.text case: deltas
+        // stream token-by-token (E.4); round-complete text arrives only from a
+        // non-streaming provider (mutually exclusive per completion, enforced
+        // sidecar-side — never both for the same text).
         onText: (chunk) => void this.post(panel, { type: "turn.text", delta: chunk }),
+        onTextDelta: (chunk) => void this.post(panel, { type: "turn.text", delta: chunk }),
         onToolCall: (name, input) => void this.post(panel, { type: "turn.tool", name, input }),
         // coverage/events come distilled from the sidecar (from the full,
         // unclipped payload) — absent for non-envelope results, and the

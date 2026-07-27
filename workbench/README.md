@@ -6,7 +6,7 @@ The analyst-facing VS Code extension — the primary product surface. The design
 
 ## Current state
 
-v0 slice (`design/13 §7`) through step 4:
+v0 slice (`design/13 §7`) complete — all four steps plus E.4 streaming:
 
 - **Version handshake** (`§2`): fail closed on an incompatible/unreachable backend.
 - **Sign in** (`reckon.signIn`): OIDC authorization-code + PKCE against the bundled Keycloak —
@@ -33,14 +33,11 @@ v0 slice (`design/13 §7`) through step 4:
   once at `initialize` over the local pipe. Sign-in runs a **second, silent PKCE flow** against
   the `reckon-agent` client (discovered from `/api/auth-config`'s `agent_client_id`, riding the
   Keycloak SSO session), so loop turns carry the delegate token and are recorded as AI-delegated
-  — the analyst stays `sub`, `delegate_kind` is issuer-stamped. A turn's proposals surface as a
-  pending-approval list in the thread (rendering only; acting on them is step 4). Read tools
-  dispatch to `POST /api/capability/{verb}`; the turn commits to `POST /api/interpretations`. A
-  sidecar crash never takes the extension down — the next turn respawns it and re-creates the
-  session from backend state.
-
-Next (`§7 step 4`): inline T2/T3 action approvals — `request_action` → Gate 2 → approve — against
-the real write path (`server/actions.go`).
+  — the analyst stays `sub`, `delegate_kind` is issuer-stamped. Read tools dispatch to
+  `POST /api/capability/{verb}`; the turn commits to `POST /api/interpretations`. A sidecar
+  crash never takes the extension down — the next turn respawns it and re-creates the session
+  from backend state. Pending actions render with inline approvals (see "Backend contract"),
+  and model text streams token-by-token (see "Streaming").
 
 ## Development
 
@@ -91,8 +88,12 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
   regardless). A T3 approval demands the typed challenge (`04 §5.5`) via input box; rejections
   record a reason. Server explanations (Gate 2 denials, guarded transitions) surface verbatim.
 
+- **Streaming** (`E.4`): model text arrives token-by-token via `turn/text_delta` notifications
+  (`agent.StreamingLLM` → SSE → sidecar → the webview's appendable text case). `turn/text`
+  (round-complete) fires only when the provider cannot stream — the two are mutually exclusive
+  per completion, enforced sidecar-side, so the renderer appends both and never dedupes.
+
 ## Pending seams
 
-- **Streaming** (E.4): the sidecar's `turn/text` notifications carry round-complete text today;
-  token deltas land in `agent.LLM` and flow through the same reserved channel without a
-  protocol break.
+None — the `design/13 §7` v0 slice and the `implementation/agent-sidecar.md` §7 sequence
+(steps 1–4 including E.4 streaming) are complete.

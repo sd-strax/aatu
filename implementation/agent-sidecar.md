@@ -85,8 +85,11 @@ deliberately small:
 - `createSession(investigationID)` / `turn(sessionID, userText)` /
   `cancel(sessionID)`.
 - Server→client notifications: turn progress (tool use, tool results, text).
-  Streaming deltas land on this same channel when the `agent.LLM` seam grows
-  streaming (E.4) — reserved now so streaming is not a protocol break.
+  Streaming (E.4, built): `turn/text_delta` carries fragments as the model
+  generates them; `turn/text` carries round-complete text only when the
+  provider cannot stream. Mutually exclusive per completion, enforced at the
+  source (`agent.Hooks` contract) — clients append either, never dedupe. The
+  addition was purely additive, as reserved: no protocol version bump.
 - Client→server callback: `getToken(kind)` — see §5.
 
 Two version handshakes, one recipe (the `/status` `api_version` pattern,
@@ -157,9 +160,11 @@ change.
    `reckon.sidecarPath` → PATH); second PKCE flow in `auth.ts`
    (`token(kind)`, both refresh tokens in SecretStorage);
    `workbench/src/agent.ts` deleted — one loop again.
-4. Streaming (E.4) lands in `agent.LLM` and flows through the reserved
-   progress channel (`turn/text` notifications carry round-complete text
-   today; deltas slot in without a protocol break).
+4. ✅ Streaming (E.4): `agent.StreamingLLM` (optional-interface upgrade;
+   `Anthropic.CompleteStream` over SSE, retries only before first output) →
+   `Hooks.OnTextDelta` (replaces `OnText` for streamed completions) →
+   `turn/text_delta` notifications → the webview's appendable text case. The
+   CLI streams to stdout the same way.
 
 ## Open questions / deferred
 

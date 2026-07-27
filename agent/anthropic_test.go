@@ -115,6 +115,193 @@ func TestAnthropic_CachingDisabled(t *testing.T) {
 	}
 }
 
+// sseBody joins pre-framed SSE events for a fake streaming endpoint.
+func sseBody(events ...string) string {
+	var b strings.Builder
+	for _, e := range events {
+		b.WriteString(e)
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+// A complete happy-path stream: text in two fragments, then a tool_use whose
+// input arrives as two partial_json deltas.
+var streamHappyPath = sseBody(
+	`event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":40,"output_tokens":1,"cache_creation_input_tokens":30,"cache_read_input_tokens":100}}}`,
+	`event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+	`event: ping
+data: {"type":"ping"}`,
+	`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"chec"}}`,
+	`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"king"}}`,
+	`event: content_block_stop
+data: {"type":"content_block_stop","index":0}`,
+	`event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"enumerate_logons","input":{}}}`,
+	`event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"entity\":"}}`,
+	`event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"host\":\"H1\"}}"}}`,
+	`event: content_block_stop
+data: {"type":"content_block_stop","index":1}`,
+	`event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":12}}`,
+	`event: message_stop
+data: {"type":"message_stop"}`,
+)
+
+// TestAnthropic_CompleteStream: the SSE stream emits text deltas in order and
+// folds into the SAME CompleteResponse the non-streaming path would return —
+// text blocks assembled, tool_use input joined from partial_json, usage merged
+// from message_start + message_delta (the StreamingLLM contract).
+func TestAnthropic_CompleteStream(t *testing.T) {
+	var got anthropicRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &got)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(streamHappyPath))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	a := &Anthropic{APIKey: "k", BaseURL: srv.URL}
+	resp, err := a.CompleteStream(context.Background(), CompleteRequest{
+		MaxTokens: 128,
+		Messages:  []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}}},
+	}, func(text string) { deltas = append(deltas, text) })
+	if err != nil {
+		t.Fatalf("CompleteStream: %v", err)
+	}
+
+	if !got.Stream {
+		t.Error("request did not set stream:true")
+	}
+	if want := []string{"chec", "king"}; len(deltas) != 2 || deltas[0] != want[0] || deltas[1] != want[1] {
+		t.Errorf("deltas = %q; want %q", deltas, want)
+	}
+	if resp.StopReason != StopToolUse || len(resp.Content) != 2 {
+		t.Fatalf("response mangled: %+v", resp)
+	}
+	if txt := resp.Content[0]; txt.Type != BlockText || txt.Text != "checking" {
+		t.Errorf("text block = %+v; want assembled 'checking'", txt)
+	}
+	tu := resp.Content[1]
+	if tu.Type != BlockToolUse || tu.ToolUseID != "tu1" || tu.ToolName != "enumerate_logons" {
+		t.Errorf("tool_use mangled: %+v", tu)
+	}
+	if string(tu.Input) != `{"entity":{"host":"H1"}}` {
+		t.Errorf("tool input = %s; want the joined partial_json", tu.Input)
+	}
+	if resp.Usage != (Usage{Input: 40, Output: 12, CacheWrite: 30, CacheRead: 100}) {
+		t.Errorf("usage = %+v; want message_start input + message_delta output", resp.Usage)
+	}
+}
+
+// TestAnthropic_StreamRetriesBeforeFirstDelta: a 529 before any SSE bytes is
+// ordinary backpressure — retried like the non-streaming path, and the
+// eventual stream's deltas are emitted exactly once.
+func TestAnthropic_StreamRetriesBeforeFirstDelta(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(529)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(streamHappyPath))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	a := &Anthropic{APIKey: "k", BaseURL: srv.URL, RetryBaseDelay: time.Millisecond}
+	resp, err := a.CompleteStream(context.Background(), CompleteRequest{MaxTokens: 1},
+		func(text string) { deltas = append(deltas, text) })
+	if err != nil {
+		t.Fatalf("CompleteStream after transient 529: %v", err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("attempts = %d; want 2", n)
+	}
+	if len(deltas) != 2 {
+		t.Errorf("deltas emitted %d times; a retried call must not replay them", len(deltas))
+	}
+	if resp.StopReason != StopToolUse {
+		t.Errorf("stop reason = %q", resp.StopReason)
+	}
+}
+
+// TestAnthropic_StreamMidwayFailureIsTerminal: once a delta has reached the
+// surface, a retry would replay already-rendered text — a stream that dies
+// after first output fails without another attempt.
+func TestAnthropic_StreamMidwayFailureIsTerminal(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		// One delta, then the stream ends with no message_stop (connection died).
+		_, _ = w.Write([]byte(sseBody(
+			`event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`,
+			`event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		)))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	a := &Anthropic{APIKey: "k", BaseURL: srv.URL, RetryBaseDelay: time.Millisecond}
+	_, err := a.CompleteStream(context.Background(), CompleteRequest{MaxTokens: 1},
+		func(text string) { deltas = append(deltas, text) })
+	if err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error = %v; want the truncated-stream failure surfaced", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("attempts = %d; a mid-stream failure after output must not retry", n)
+	}
+	if len(deltas) != 1 || deltas[0] != "partial" {
+		t.Errorf("deltas = %q; want the one fragment that arrived", deltas)
+	}
+}
+
+// TestAnthropic_StreamErrorEventBeforeOutputRetries: a provider error event
+// that arrives before any text (e.g. overloaded_error at stream start) is
+// still safe to retry — nothing has been rendered.
+func TestAnthropic_StreamErrorEventBeforeOutputRetries(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls.Add(1) == 1 {
+			_, _ = w.Write([]byte(sseBody(
+				`event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+			)))
+			return
+		}
+		_, _ = w.Write([]byte(streamHappyPath))
+	}))
+	defer srv.Close()
+
+	a := &Anthropic{APIKey: "k", BaseURL: srv.URL, RetryBaseDelay: time.Millisecond}
+	resp, err := a.CompleteStream(context.Background(), CompleteRequest{MaxTokens: 1}, func(string) {})
+	if err != nil {
+		t.Fatalf("CompleteStream after pre-output error event: %v", err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("attempts = %d; want 2 (error event before output is retryable)", n)
+	}
+	if resp.StopReason != StopToolUse {
+		t.Errorf("stop reason = %q", resp.StopReason)
+	}
+}
+
 // TestAnthropic_APIError: a non-200 with the API error envelope surfaces the
 // provider's message. A 400 is a request defect — it must NOT be retried.
 func TestAnthropic_APIError(t *testing.T) {

@@ -27,6 +27,14 @@ type Hooks struct {
 	OnText       func(text string)                        // model text as each round completes
 	OnToolCall   func(name string, input json.RawMessage) // a tool is about to dispatch
 	OnToolResult func(name string, content string, isError bool)
+
+	// OnTextDelta receives text fragments as the model generates them (E.4).
+	// When set and the LLM implements StreamingLLM, completions stream and a
+	// streamed completion's text arrives ONLY here — OnText is not called for
+	// it (the deltas were the delivery; a surface that got both would render
+	// the text twice). OnText still fires when the LLM cannot stream, so a
+	// surface sets both and renders whichever arrives.
+	OnTextDelta func(delta string)
 }
 
 // Config assembles a session.
@@ -166,12 +174,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 
 	rounds := 0
 	for {
-		resp, err := s.llm.Complete(ctx, CompleteRequest{
-			System:    s.system,
-			Messages:  s.messages,
-			Tools:     s.tools,
-			MaxTokens: s.maxTokens,
-		})
+		resp, streamed, err := s.complete(ctx)
 		if err != nil {
 			// Return a partial result rather than nil: any action the model
 			// already requested this turn is recorded server-side and pending —
@@ -196,7 +199,9 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 				if blk.Text != "" {
 					fmt.Fprintf(&transcript, "[assistant] %s\n", sanitizeTranscript(blk.Text))
 					finalText.WriteString(blk.Text)
-					if s.hooks.OnText != nil {
+					// A streamed completion's text already reached the surface as
+					// deltas (Hooks contract) — firing OnText too would double it.
+					if !streamed && s.hooks.OnText != nil {
 						s.hooks.OnText(blk.Text)
 					}
 				}
@@ -275,6 +280,26 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	}
 	res.InterpretationID = interp.InterpretationID
 	return res, nil
+}
+
+// complete runs one model call, streaming when both sides can (the surface
+// registered OnTextDelta and the provider implements StreamingLLM). streamed
+// reports whether deltas carried the text, so the caller skips OnText for it.
+func (s *Session) complete(ctx context.Context) (resp CompleteResponse, streamed bool, err error) {
+	req := CompleteRequest{
+		System:    s.system,
+		Messages:  s.messages,
+		Tools:     s.tools,
+		MaxTokens: s.maxTokens,
+	}
+	if s.hooks.OnTextDelta != nil {
+		if sl, ok := s.llm.(StreamingLLM); ok {
+			resp, err = sl.CompleteStream(ctx, req, s.hooks.OnTextDelta)
+			return resp, true, err
+		}
+	}
+	resp, err = s.llm.Complete(ctx, req)
+	return resp, false, err
 }
 
 // refreshPending returns the investigation's actions still awaiting approval,

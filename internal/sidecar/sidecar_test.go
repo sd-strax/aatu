@@ -246,6 +246,22 @@ func (l *scriptLLM) Complete(ctx context.Context, _ agent.CompleteRequest) (agen
 	}, nil
 }
 
+// streamScriptLLM upgrades scriptLLM to a streaming provider (E.4): each text
+// block arrives as two fragments before the response returns.
+type streamScriptLLM struct{ scriptLLM }
+
+func (l *streamScriptLLM) CompleteStream(ctx context.Context, req agent.CompleteRequest, onDelta func(string)) (agent.CompleteResponse, error) {
+	resp, err := l.Complete(ctx, req)
+	for _, blk := range resp.Content {
+		if blk.Type == agent.BlockText && blk.Text != "" {
+			mid := len(blk.Text) / 2
+			onDelta(blk.Text[:mid])
+			onDelta(blk.Text[mid:])
+		}
+	}
+	return resp, err
+}
+
 // startSidecar wires Serve over pipes and returns the test client.
 func startSidecar(t *testing.T, llm agent.LLM) *testClient {
 	t.Helper()
@@ -395,6 +411,66 @@ func TestServe_FullFlow(t *testing.T) {
 	// shutdown: responds, then Serve exits (asserted in cleanup).
 	if resp := c.call("shutdown", struct{}{}); resp.Error != nil {
 		t.Errorf("shutdown error: %+v", resp.Error)
+	}
+}
+
+// TestServe_StreamsTextDeltas (E.4): a streaming provider's text reaches the
+// client as turn/text_delta fragments, and turn/text stays silent — the
+// mutual-exclusion contract (the client appends both notification types, so
+// both firing for the same text would render it twice).
+func TestServe_StreamsTextDeltas(t *testing.T) {
+	backend := fakeBackend(t)
+	c := startSidecar(t, &streamScriptLLM{})
+
+	if resp := c.call("initialize", initParams(backend.URL)); resp.Error != nil {
+		t.Fatalf("initialize error: %+v", resp.Error)
+	}
+	resp := c.call("createSession", createSessionParams{InvestigationID: "inv-1"})
+	if resp.Error != nil {
+		t.Fatalf("createSession error: %+v", resp.Error)
+	}
+	var cs createSessionResult
+	if err := json.Unmarshal(resp.Result, &cs); err != nil {
+		t.Fatal(err)
+	}
+	resp = c.call("turn", turnParams{SessionID: cs.SessionID, Text: "any odd logons on h1?"})
+	if resp.Error != nil {
+		t.Fatalf("turn error: %+v", resp.Error)
+	}
+	var tr turnResult
+	if err := json.Unmarshal(resp.Result, &tr); err != nil {
+		t.Fatal(err)
+	}
+	if tr.Error != "" {
+		t.Fatalf("turn carried error %q", tr.Error)
+	}
+
+	// Both rounds' text blocks streamed as two fragments each, in order.
+	deltas := c.notifications("turn/text_delta")
+	if len(deltas) != 4 {
+		t.Fatalf("turn/text_delta notifications = %d; want 4 (2 blocks × 2 fragments)", len(deltas))
+	}
+	var joined strings.Builder
+	for _, n := range deltas {
+		var note turnTextNote
+		if err := json.Unmarshal(n.Params, &note); err != nil {
+			t.Fatal(err)
+		}
+		if note.SessionID != cs.SessionID {
+			t.Errorf("delta rode session %q; want %q", note.SessionID, cs.SessionID)
+		}
+		joined.WriteString(note.Text)
+	}
+	if want := "checking logons" + "no anomalous logons found"; joined.String() != want {
+		t.Errorf("joined deltas = %q; want %q", joined.String(), want)
+	}
+	if n := c.notifications("turn/text"); len(n) != 0 {
+		t.Errorf("turn/text fired %d times alongside deltas; want 0 (mutual exclusion)", len(n))
+	}
+	// The final result still carries the full text — the record comes from the
+	// response blocks, not from the fragments.
+	if !strings.Contains(tr.Text, "no anomalous logons found") {
+		t.Errorf("turn text = %q", tr.Text)
 	}
 }
 

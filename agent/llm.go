@@ -118,3 +118,17 @@ func (u *Usage) Add(o Usage) {
 type LLM interface {
 	Complete(ctx context.Context, req CompleteRequest) (CompleteResponse, error)
 }
+
+// StreamingLLM is the optional streaming upgrade of LLM (E.4). Providers that
+// can deliver text as it is generated implement it; the session type-asserts
+// and prefers CompleteStream when the surface registered a delta hook.
+//
+// onDelta receives each text fragment in order, on the calling goroutine.
+// The returned CompleteResponse must be the same complete response Complete
+// would have produced — deltas are a rendering courtesy, never the record
+// (the transcript and the conversation history are built from the response
+// blocks, not from deltas).
+type StreamingLLM interface {
+	LLM
+	CompleteStream(ctx context.Context, req CompleteRequest, onDelta func(text string)) (CompleteResponse, error)
+}

@@ -47,10 +47,10 @@ type Options struct {
 // LSP-framed JSON-RPC 2.0 — what vscode-jsonrpc speaks natively.
 //
 // Method surface (§4): initialize, createSession, turn, cancel, shutdown;
-// notifications turn/text, turn/tool_call, turn/tool_result; and the
-// getToken(kind, force) request BACK to the client — the token handoff (§5):
-// the extension owns auth and refresh, this process holds tokens only
-// per-call, in memory.
+// notifications turn/text, turn/text_delta, turn/tool_call, turn/tool_result;
+// and the getToken(kind, force) request BACK to the client — the token
+// handoff (§5): the extension owns auth and refresh, this process holds
+// tokens only per-call, in memory.
 func Serve(ctx context.Context, r io.Reader, w io.Writer, opts Options) error {
 	if opts.NewLLM == nil {
 		return fmt.Errorf("sidecar: Options.NewLLM is required")
@@ -246,8 +246,15 @@ func (s *service) handleCreateSession(ctx context.Context, raw json.RawMessage) 
 		LLM:             s.opts.NewLLM(model, apiKey),
 		InvestigationID: p.InvestigationID,
 		Hooks: agent.Hooks{
+			// The two text hooks are mutually exclusive per completion (agent.Hooks
+			// contract): a streaming provider delivers via turn/text_delta and
+			// turn/text stays silent; a non-streaming one delivers round-complete
+			// text via turn/text. The client appends both — no dedupe needed.
 			OnText: func(text string) {
 				s.conn.Notify("turn/text", turnTextNote{SessionID: sessionID, Text: text})
+			},
+			OnTextDelta: func(delta string) {
+				s.conn.Notify("turn/text_delta", turnTextNote{SessionID: sessionID, Text: delta})
 			},
 			OnToolCall: func(name string, input json.RawMessage) {
 				s.conn.Notify("turn/tool_call", turnToolCallNote{SessionID: sessionID, Name: name, Input: input})
@@ -327,6 +334,9 @@ type pendingAction struct {
 	Expired bool `json:"expired,omitempty"`
 }
 
+// turnTextNote rides both text notifications: turn/text carries a
+// round-complete block (non-streaming provider), turn/text_delta a generated
+// fragment (streaming, E.4). Renderers append either.
 type turnTextNote struct {
 	SessionID string `json:"session_id"`
 	Text      string `json:"text"`

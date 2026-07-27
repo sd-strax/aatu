@@ -30,6 +30,26 @@ func (s *scriptedLLM) Complete(_ context.Context, req CompleteRequest) (Complete
 	return next, nil
 }
 
+// streamingScriptedLLM upgrades scriptedLLM to StreamingLLM: each scripted
+// text block is delivered as two fragments before the full response returns.
+type streamingScriptedLLM struct {
+	scriptedLLM
+	streamCalls int
+}
+
+func (s *streamingScriptedLLM) CompleteStream(ctx context.Context, req CompleteRequest, onDelta func(string)) (CompleteResponse, error) {
+	s.streamCalls++
+	resp, err := s.Complete(ctx, req)
+	for _, blk := range resp.Content {
+		if blk.Type == BlockText && blk.Text != "" {
+			mid := len(blk.Text) / 2
+			onDelta(blk.Text[:mid])
+			onDelta(blk.Text[mid:])
+		}
+	}
+	return resp, err
+}
+
 // recordedCall is one request the fake backend saw.
 type recordedCall struct {
 	Method string
@@ -405,6 +425,85 @@ func TestSession_Turn(t *testing.T) {
 	}
 	if !sawRef {
 		t.Error("hypothesis ref never fed back to the model")
+	}
+}
+
+// TestSession_StreamingContract (E.4): with OnTextDelta set and a StreamingLLM,
+// text reaches the surface only as deltas — OnText stays silent (no double
+// render) — while the record (transcript, TurnResult.Text) still carries the
+// full block text from the response, never assembled from deltas.
+func TestSession_StreamingContract(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &streamingScriptedLLM{scriptedLLM: scriptedLLM{script: []CompleteResponse{
+		{StopReason: StopToolUse, Content: []ContentBlock{
+			TextBlock("Checking logons."),
+			toolUse("t1", "enumerate_logons", `{"entity":{"host":{"hostname":"H1"}}}`),
+		}},
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("All clear.")}},
+	}}}
+
+	var deltas, texts []string
+	s, err := NewSession(context.Background(), Config{
+		Backend: f.client(), LLM: llm, InvestigationID: "inv-1",
+		Hooks: Hooks{
+			OnText:      func(text string) { texts = append(texts, text) },
+			OnTextDelta: func(d string) { deltas = append(deltas, d) },
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	res, err := s.Turn(context.Background(), "odd logons?")
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+
+	if llm.streamCalls != 2 {
+		t.Errorf("CompleteStream calls = %d; want 2 (every round streams)", llm.streamCalls)
+	}
+	if len(texts) != 0 {
+		t.Errorf("OnText fired %d times on streamed completions; deltas were the delivery", len(texts))
+	}
+	if got := strings.Join(deltas, ""); got != "Checking logons.All clear." {
+		t.Errorf("joined deltas = %q; want both blocks' text in order", got)
+	}
+	if res.Text != "Checking logons.All clear." {
+		t.Errorf("TurnResult.Text = %q; the record must come from the response blocks", res.Text)
+	}
+	if !strings.Contains(res.Transcript, "[assistant] Checking logons.") ||
+		!strings.Contains(res.Transcript, "[assistant] All clear.") {
+		t.Errorf("transcript lost streamed text:\n%s", res.Transcript)
+	}
+}
+
+// TestSession_DeltaHookWithoutStreamingLLM: a surface that registered
+// OnTextDelta against a provider that cannot stream still gets its text — via
+// OnText (the fallback half of the Hooks contract).
+func TestSession_DeltaHookWithoutStreamingLLM(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &scriptedLLM{script: []CompleteResponse{
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("plain answer")}},
+	}}
+
+	var deltas, texts []string
+	s, err := NewSession(context.Background(), Config{
+		Backend: f.client(), LLM: llm, InvestigationID: "inv-1",
+		Hooks: Hooks{
+			OnText:      func(text string) { texts = append(texts, text) },
+			OnTextDelta: func(d string) { deltas = append(deltas, d) },
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := s.Turn(context.Background(), "hi"); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if len(deltas) != 0 {
+		t.Errorf("OnTextDelta fired %d times without a StreamingLLM", len(deltas))
+	}
+	if len(texts) != 1 || texts[0] != "plain answer" {
+		t.Errorf("OnText = %q; want the round-complete fallback", texts)
 	}
 }
 

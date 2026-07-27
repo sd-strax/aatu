@@ -33,6 +33,17 @@ type repl struct {
 	invID     string
 	in        *bufio.Scanner
 	lastTools []toolExchange
+	// streaming: a delta run is mid-line on stdout; the next non-delta print
+	// must start with a newline (set by OnTextDelta, cleared at each break).
+	streaming bool
+}
+
+// breakStream terminates a mid-line delta run before other output.
+func (r *repl) breakStream() {
+	if r.streaming {
+		fmt.Println()
+		r.streaming = false
+	}
 }
 
 // runInvestigate drives the interactive agent loop (05 §3.4) against a running
@@ -93,10 +104,22 @@ func runInvestigate(invID string) error {
 		LLM:             llm,
 		InvestigationID: invID,
 		Hooks: agent.Hooks{
+			// OnText fires only when the provider cannot stream (agent.Hooks
+			// contract); with Anthropic the deltas below carry the text.
 			OnText: func(text string) {
 				fmt.Printf("\n%s\n", text)
 			},
+			OnTextDelta: func(delta string) {
+				if !r.streaming {
+					fmt.Println()
+					r.streaming = true
+				}
+				// Block sanitization: prose keeps its newlines, cursor-control
+				// bytes are still neutralized.
+				fmt.Print(sanitizeTerminalBlock(delta))
+			},
 			OnToolCall: func(name string, input json.RawMessage) {
+				r.breakStream()
 				fmt.Printf("  → %s %s\n", sanitizeTerminal(name), sanitizeTerminal(compactJSON(input)))
 				r.lastTools = append(r.lastTools, toolExchange{name: name, input: string(input)})
 			},
@@ -144,6 +167,7 @@ func runInvestigate(invID string) error {
 		// A fresh turn: clear the raw-result buffer so /raw shows THIS turn.
 		r.lastTools = nil
 		res, err := session.Turn(ctx, line)
+		r.breakStream()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "turn error: %v\n", err)
 			if res == nil {

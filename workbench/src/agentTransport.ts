@@ -29,7 +29,14 @@ const PROTOCOL_VERSION = 1;
 
 /** Progress callbacks one turn renders. */
 export interface TurnProgress {
+  /** Round-complete text — fires only when the provider cannot stream. */
   onText(text: string): void;
+  /**
+   * A text fragment as the model generates it (E.4). Mutually exclusive with
+   * onText per completion (enforced sidecar-side): a streamed completion's
+   * text arrives ONLY as deltas. Renderers append both the same way.
+   */
+  onTextDelta(text: string): void;
   onToolCall(name: string, input: unknown): void;
   /**
    * coverage/eventCount are distilled sidecar-side from the FULL result
@@ -213,6 +220,9 @@ export class SidecarTransport implements AgentTransport {
     // Turn progress → the in-flight turn's sink, routed by session id.
     connection.onNotification("turn/text", (p: { session_id?: string; text?: string }) => {
       this.inFlight.get(p?.session_id ?? "")?.onText(p?.text ?? "");
+    });
+    connection.onNotification("turn/text_delta", (p: { session_id?: string; text?: string }) => {
+      this.inFlight.get(p?.session_id ?? "")?.onTextDelta(p?.text ?? "");
     });
     connection.onNotification("turn/tool_call", (p: { session_id?: string; name?: string; input?: unknown }) => {
       this.inFlight.get(p?.session_id ?? "")?.onToolCall(p?.name ?? "", p?.input);
