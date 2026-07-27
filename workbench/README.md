@@ -6,7 +6,9 @@ The analyst-facing VS Code extension — the primary product surface. The design
 
 ## Current state
 
-v0 slice (`design/13 §7`) complete — all four steps plus E.4 streaming:
+The sidecar transport sequence (`implementation/agent-sidecar.md §7`, steps 1–4 + E.4
+streaming) is complete; of the broader `design/13 §7` slice, steps 5–8 remain (see "Pending
+seams"). Built so far:
 
 - **Version handshake** (`§2`): fail closed on an incompatible/unreachable backend.
 - **Sign in** (`reckon.signIn`): OIDC authorization-code + PKCE against the bundled Keycloak —
@@ -93,7 +95,29 @@ bundle); without one, every surface degrades to "not connected" with a pointer �
   (round-complete) fires only when the provider cannot stream — the two are mutually exclusive
   per completion, enforced sidecar-side, so the renderer appends both and never dedupes.
 
+## Document layout
+
+The investigation document is a two-region surface (`design/13 §4`): the **conversation**
+(center, measure-capped) and a persistent **state rail** (right) carrying what the analyst
+needs at a glance, not buried in the transcript:
+
+- **Needs your approval** — the durable action queue with the Approve/Reject buttons (and the
+  EXPIRED posture); always visible, honest empty state.
+- **Hypotheses** — the reasoning-thread state with prediction status badges.
+- **Capabilities** — the `03 §6.3` health view: per-verb available/degraded/unavailable dots
+  (a 503 renders "capability layer off", never an empty lie).
+
+Conversation rendering: assistant text goes through a **minimal escape-first markdown
+renderer** (inline in the webview — the CSP forbids external libraries; every path escapes
+before formatting because model text is untrusted). Streamed deltas re-render the current
+text segment live, and a tool call closes the segment so later text lands *after* the tool
+row, in reading order. Tool rows are one-line disclosures (verb + args preview → ✓/✗ +
+coverage) with full args behind `<details>`. Turn metadata (token usage, commit id) renders
+muted.
+
 ## Pending seams
 
-None — the `design/13 §7` v0 slice and the `implementation/agent-sidecar.md` §7 sequence
-(steps 1–4 including E.4 streaming) are complete.
+The `implementation/agent-sidecar.md` §7 transport sequence (steps 1–4, including E.4
+streaming) is complete. Of the broader `design/13 §7` slice, steps 5–8 remain: enablement
+widgets (`11 §5.1`), raw evidence in reach (read-only OCSF JSON via reckon URIs from cited
+refs), the minimal two-layer graph, and the profile trim (`13 §6`).

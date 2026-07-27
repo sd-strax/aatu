@@ -14,13 +14,15 @@
 // network from the page.
 
 import * as vscode from "vscode";
-import { ActionRow, BackendClient, Hypothesis, InvestigationDetail } from "./backend";
+import { ActionRow, BackendClient, Capability, Hypothesis, InvestigationDetail } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
   | { type: "loading" }
-  | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[] }
+  // capabilities is null when the capability layer is off/unreachable — the
+  // rail renders that honestly instead of an empty list.
+  | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[]; capabilities: Capability[] | null }
   | { type: "error"; message: string }
   | { type: "pending"; actions: ActionRow[] }
   | { type: "turn.start" }
@@ -31,7 +33,7 @@ type RenderMessage =
   | { type: "turn.toolResult"; name: string; isError: boolean; coverage?: string; events?: number }
   | { type: "turn.committed"; interpretationId: string }
   | { type: "turn.error"; message: string }
-  | { type: "turn.end" };
+  | { type: "turn.end"; usage?: { input: number; output: number; cacheRead: number }; rounds?: number };
 
 /** What the webview posts back to the extension host. */
 type InboundMessage =
@@ -93,12 +95,15 @@ export class InvestigationDocuments {
   private async load(id: string, panel: vscode.WebviewPanel): Promise<void> {
     void this.post(panel, { type: "loading" });
     try {
-      const [investigation, hypotheses] = await Promise.all([
+      const [investigation, hypotheses, capabilities] = await Promise.all([
         this.client.getInvestigation(id),
         this.client.hypotheses(id),
+        // Capability health is a v0 rail surface (13 §4); a 503 just means the
+        // layer is off — null renders as "unavailable", never a broken panel.
+        this.client.capabilities().catch(() => null),
       ]);
       panel.title = `⚖ ${investigation.title}`;
-      void this.post(panel, { type: "data", investigation, hypotheses });
+      void this.post(panel, { type: "data", investigation, hypotheses, capabilities });
     } catch (err) {
       const message = errText(err);
       this.log.error(`load investigation ${id}: ${message}`);
@@ -212,10 +217,19 @@ export class InvestigationDocuments {
       if (outcome.error) {
         void this.post(panel, { type: "turn.error", message: outcome.error });
       }
+      void this.post(panel, {
+        type: "turn.end",
+        rounds: outcome.toolRounds,
+        usage: {
+          input: outcome.usage.input + outcome.usage.cacheRead + outcome.usage.cacheWrite,
+          output: outcome.usage.output,
+          cacheRead: outcome.usage.cacheRead,
+        },
+      });
     } catch (err) {
       void this.post(panel, { type: "turn.error", message: errText(err) });
-    } finally {
       void this.post(panel, { type: "turn.end" });
+    } finally {
       // Reasoning nodes may have changed — refresh the thread panel.
       void this.load(id, panel);
     }
@@ -247,26 +261,39 @@ export class InvestigationDocuments {
     html, body { height: 100%; }
     body {
       font-family: var(--vscode-font-family);
+      font-size: 13px;
+      line-height: 1.55;
       color: var(--vscode-foreground);
       margin: 0;
       display: flex;
-      flex-direction: column;
       height: 100vh;
+      overflow: hidden;
     }
+
+    /* ---- two-region layout: conversation + state rail ---- */
+    #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    #rail {
+      flex: none; width: 272px; min-width: 200px;
+      border-left: 1px solid var(--vscode-panel-border);
+      overflow-y: auto; padding: 0.75rem 0.9rem 1rem;
+      background: var(--vscode-sideBar-background, transparent);
+    }
+    @media (max-width: 640px) { #rail { display: none; } }
+
     header {
-      padding: 0.8rem 1.25rem 0.6rem;
+      padding: 0.7rem 1.25rem 0.55rem;
       border-bottom: 1px solid var(--vscode-panel-border);
-      display: flex;
-      align-items: baseline;
-      gap: 0.75rem;
       flex: none;
     }
-    header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
+    .titlerow { display: flex; align-items: baseline; gap: 0.7rem; }
+    header h1 { font-size: 1.05rem; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .state {
-      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
-      padding: 0.1rem 0.5rem; border-radius: 0.6rem;
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.12rem 0.55rem; border-radius: 0.65rem;
       background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
     }
+    #meta { font-size: 0.74rem; opacity: 0.55; margin-top: 0.15rem; }
+
     button {
       font: inherit; color: var(--vscode-button-secondaryForeground);
       background: var(--vscode-button-secondaryBackground); border: none;
@@ -274,48 +301,112 @@ export class InvestigationDocuments {
     }
     button:hover { background: var(--vscode-button-secondaryHoverBackground); }
     button:disabled { opacity: 0.5; cursor: default; }
-    #scroll { flex: 1; overflow-y: auto; padding: 0 1.25rem 1rem; }
-    .meta { font-size: 0.78rem; opacity: 0.7; margin: 0.6rem 0 0.4rem; }
-    details.thread { margin: 0.6rem 0 1rem; }
-    details.thread summary { cursor: pointer; font-size: 0.9rem; font-weight: 600; }
-    .hypothesis { border: 1px solid var(--vscode-panel-border); border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin: 0.5rem 0; }
-    .hypothesis .statement { font-weight: 600; }
-    .badge {
-      font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.03em;
-      padding: 0.05rem 0.4rem; border-radius: 0.5rem; border: 1px solid var(--vscode-panel-border);
-      margin-left: 0.5rem; vertical-align: middle;
+
+    #scroll { flex: 1; overflow-y: auto; padding: 0.4rem 1.25rem 1rem; }
+    #banner { color: var(--vscode-errorForeground); margin: 0.5rem 0; }
+    #banner:empty { display: none; }
+    #conversation:empty::before {
+      content: "Ask reckon to investigate — it reasons over the evidence, cites what it saw, and proposes actions for your approval.";
+      display: block; opacity: 0.55; font-style: italic; margin: 1.4rem 0; max-width: 46ch;
     }
-    .predictions { list-style: none; padding: 0; margin: 0.4rem 0 0; }
-    .predictions li { padding: 0.3rem 0 0.3rem 0.8rem; border-left: 2px solid var(--vscode-panel-border); margin: 0.3rem 0; }
-    .msg { margin: 0.85rem 0; }
-    .msg.user { text-align: right; }
+
+    /* ---- conversation ---- */
+    .msg { margin: 1rem 0; max-width: 78ch; }
+    .msg.user { display: flex; justify-content: flex-end; max-width: none; }
     .msg.user .bubble {
-      display: inline-block; text-align: left; max-width: 80%;
+      max-width: 60ch; white-space: pre-wrap;
       background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border);
-      border-radius: 0.5rem; padding: 0.5rem 0.75rem; white-space: pre-wrap;
+      border-radius: 0.6rem; padding: 0.45rem 0.8rem;
     }
-    .msg.assistant .text { white-space: pre-wrap; }
     .reasoning {
       font-style: italic; opacity: 0.7; font-size: 0.86rem; white-space: pre-wrap;
       border-left: 2px solid var(--vscode-panel-border); padding-left: 0.6rem; margin: 0.3rem 0;
     }
-    .tool {
-      font-family: var(--vscode-editor-font-family); font-size: 0.82rem;
-      background: var(--vscode-textCodeBlock-background); border-radius: 0.3rem;
-      padding: 0.2rem 0.5rem; margin: 0.35rem 0; display: block;
+
+    /* markdown-rendered assistant text */
+    .md p { margin: 0.45rem 0; }
+    .md ul, .md ol { margin: 0.35rem 0; padding-left: 1.4rem; }
+    .md li { margin: 0.15rem 0; }
+    .md .mdh { font-weight: 600; margin: 0.7rem 0 0.3rem; }
+    .md code, code {
+      font-family: var(--vscode-editor-font-family); font-size: 0.86em;
+      background: var(--vscode-textCodeBlock-background);
+      padding: 0.05em 0.3em; border-radius: 0.25em;
     }
-    .tool .verb { font-weight: 600; }
-    .tool .result { opacity: 0.85; }
-    .committed { font-size: 0.76rem; opacity: 0.55; margin: 0.3rem 0; }
-    .decide { margin-top: 0.45rem; display: flex; gap: 0.5rem; }
-    .decide .primary {
-      color: var(--vscode-button-foreground);
-      background: var(--vscode-button-background);
+    .md pre.codeblock {
+      font-family: var(--vscode-editor-font-family); font-size: 0.84rem; line-height: 1.45;
+      background: var(--vscode-textCodeBlock-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin: 0.5rem 0;
+      overflow-x: auto; white-space: pre;
     }
+    .md pre.codeblock code { background: none; padding: 0; }
+
+    /* tool rows: one-line summary, args behind the disclosure */
+    details.tool {
+      font-family: var(--vscode-editor-font-family); font-size: 0.8rem;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 0.35rem; margin: 0.4rem 0; max-width: 78ch;
+      background: var(--vscode-textCodeBlock-background);
+    }
+    details.tool summary {
+      cursor: pointer; padding: 0.28rem 0.6rem; list-style: none;
+      display: flex; align-items: baseline; gap: 0.5rem; overflow: hidden;
+    }
+    details.tool summary::-webkit-details-marker { display: none; }
+    .tool .mark { flex: none; }
+    .tool .mark.ok { color: var(--vscode-charts-green, #89d185); }
+    .tool .mark.err { color: var(--vscode-errorForeground); }
+    .tool .verb { font-weight: 600; flex: none; }
+    .tool .hint {
+      opacity: 0.55; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+    }
+    .tool .status { flex: none; opacity: 0.8; }
+    .tool pre {
+      margin: 0; padding: 0.5rem 0.6rem 0.6rem;
+      border-top: 1px solid var(--vscode-panel-border);
+      overflow-x: auto; white-space: pre;
+    }
+
+    .committed, .usage { font-size: 0.74rem; opacity: 0.5; margin: 0.35rem 0; }
+    .error { color: var(--vscode-errorForeground); margin: 0.4rem 0; max-width: 78ch; }
+
+    /* ---- rail ---- */
+    #rail section { margin-bottom: 1.1rem; }
+    #rail h2 {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+      opacity: 0.6; margin: 0 0 0.45rem; font-weight: 600;
+    }
+    .card {
+      border: 1px solid var(--vscode-panel-border); border-radius: 0.4rem;
+      padding: 0.5rem 0.65rem; margin: 0.4rem 0; font-size: 0.84rem;
+    }
+    .card .statement { font-weight: 600; }
+    .badge {
+      font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.03em;
+      padding: 0.05rem 0.4rem; border-radius: 0.5rem; border: 1px solid var(--vscode-panel-border);
+      margin-left: 0.4rem; vertical-align: middle; white-space: nowrap;
+    }
+    .predictions { list-style: none; padding: 0; margin: 0.35rem 0 0; }
+    .predictions li {
+      padding: 0.2rem 0 0.2rem 0.6rem; border-left: 2px solid var(--vscode-panel-border);
+      margin: 0.25rem 0; font-size: 0.8rem;
+    }
+    .cardmeta { font-size: 0.74rem; opacity: 0.65; margin-top: 0.25rem; word-break: break-word; }
+    .decide { margin-top: 0.45rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .decide button { font-size: 0.8rem; padding: 0.2rem 0.6rem; }
+    .decide .primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
     .decide .primary:hover { background: var(--vscode-button-hoverBackground); }
-    .error { color: var(--vscode-errorForeground); margin: 0.4rem 0; }
-    .empty, .loading { opacity: 0.7; font-style: italic; margin: 1rem 0; }
-    code { font-family: var(--vscode-editor-font-family); font-size: 0.85em; }
+    .empty { opacity: 0.55; font-style: italic; font-size: 0.8rem; }
+    .caprow { display: flex; align-items: baseline; gap: 0.45rem; font-size: 0.8rem; margin: 0.15rem 0; }
+    .dot { flex: none; width: 0.5em; height: 0.5em; border-radius: 50%; background: var(--vscode-charts-green, #89d185); }
+    .dot.degraded { background: var(--vscode-charts-yellow, #cca700); }
+    .dot.unavailable { background: var(--vscode-charts-red, #f14c4c); opacity: 0.7; }
+    .caprow .verb { font-family: var(--vscode-editor-font-family); }
+    .caprow.unavailable .verb { opacity: 0.5; }
+    body.loading #rail { opacity: 0.6; }
+
+    /* ---- composer ---- */
     #composer {
       flex: none; display: flex; gap: 0.5rem; padding: 0.6rem 1.25rem;
       border-top: 1px solid var(--vscode-panel-border);
@@ -328,30 +419,42 @@ export class InvestigationDocuments {
     #send { align-self: flex-end; }
   </style>
 </head>
-<body>
-  <header>
-    <h1 id="title">Investigation</h1>
-    <span class="state" id="state"></span>
-    <button id="refresh" title="Reload from the backend">Refresh</button>
-  </header>
+<body class="loading">
+  <div id="main">
+    <header>
+      <div class="titlerow">
+        <h1 id="title">Investigation</h1>
+        <span class="state" id="state"></span>
+        <button id="refresh" title="Reload from the backend">Refresh</button>
+      </div>
+      <div id="meta"></div>
+    </header>
 
-  <div id="scroll">
-    <div class="meta" id="meta"></div>
-    <details class="thread" id="threadWrap" open>
-      <summary>Reasoning thread</summary>
-      <div id="thread"><div class="loading">Loading…</div></div>
-    </details>
-    <details class="thread" id="pendingWrap" open style="display:none">
-      <summary>Pending actions — your approval</summary>
-      <div id="pending"></div>
-    </details>
-    <div id="conversation"></div>
+    <div id="scroll">
+      <div id="banner"></div>
+      <div id="conversation"></div>
+    </div>
+
+    <div id="composer">
+      <textarea id="input" rows="1" placeholder="Ask reckon to investigate… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="send">Send</button>
+    </div>
   </div>
 
-  <div id="composer">
-    <textarea id="input" rows="1" placeholder="Ask reckon to investigate… (Enter to send, Shift+Enter for newline)"></textarea>
-    <button id="send">Send</button>
-  </div>
+  <aside id="rail">
+    <section>
+      <h2>Needs your approval</h2>
+      <div id="pending"><div class="empty">Nothing waiting</div></div>
+    </section>
+    <section>
+      <h2>Hypotheses</h2>
+      <div id="hyps"><div class="empty">None yet</div></div>
+    </section>
+    <section>
+      <h2>Capabilities</h2>
+      <div id="caps"><div class="empty">…</div></div>
+    </section>
+  </aside>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -361,7 +464,11 @@ export class InvestigationDocuments {
     const input = $("input");
     const sendBtn = $("send");
 
-    let turn = null; // { textEl, reasoningEl } for the in-flight assistant message
+    // The in-flight assistant message: wrap is the container; seg/buf are the
+    // current markdown text segment (closed by a tool row, so text after a
+    // tool round lands AFTER it, in reading order); tools is the FIFO of tool
+    // rows awaiting their result.
+    let turn = null;
 
     function esc(s) {
       return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -371,16 +478,62 @@ export class InvestigationDocuments {
     function atBottom() { return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40; }
     function stick(was) { if (was) scroll.scrollTop = scroll.scrollHeight; }
 
-    function renderHypotheses(hs) {
-      if (!hs.length) return '<div class="empty">No hypotheses yet.</div>';
-      return hs.map((h) => {
-        const preds = (h.predictions || []).map((p) =>
-          '<li>' + esc(p.statement) + '<span class="badge">' + esc(p.status) + '</span></li>'
-        ).join("");
-        return '<div class="hypothesis"><div><span class="statement">' + esc(h.statement) + '</span>'
-          + '<span class="badge">' + esc(h.status) + '</span></div>'
-          + (preds ? '<ul class="predictions">' + preds + '</ul>' : '') + '</div>';
-      }).join("");
+    // ---- minimal markdown, escape-first ------------------------------------
+    // Model text is untrusted: every path escapes BEFORE formatting, and only
+    // these known-safe elements are ever produced. Covers what the agent
+    // actually emits (inline code, bold, bullets, numbered lists, fenced
+    // blocks, light headings); everything else renders as written.
+    function inlineMd(s) {
+      let out = esc(s);
+      out = out.replace(/\`([^\`]+)\`/g, "<code>$1</code>");
+      out = out.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+      return out;
+    }
+    function md(src) {
+      const lines = String(src ?? "").split("\\n");
+      const out = [];
+      let para = [];
+      let list = null;
+      const flushPara = () => {
+        if (para.length) { out.push("<p>" + para.map(inlineMd).join("<br>") + "</p>"); para = []; }
+      };
+      const flushList = () => {
+        if (list) {
+          out.push("<" + list.tag + ">" + list.items.map((it) => "<li>" + inlineMd(it) + "</li>").join("") + "</" + list.tag + ">");
+          list = null;
+        }
+      };
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\\s*\`\`\`/.test(line)) {
+          flushPara(); flushList();
+          const buf = [];
+          for (i++; i < lines.length && !/^\\s*\`\`\`/.test(lines[i]); i++) buf.push(lines[i]);
+          // An unclosed fence (mid-stream) still renders as a block — the
+          // re-render on the next delta keeps it live.
+          out.push('<pre class="codeblock"><code>' + esc(buf.join("\\n")) + "</code></pre>");
+          continue;
+        }
+        const ul = line.match(/^\\s*[-*•]\\s+(.*)$/);
+        const ol = line.match(/^\\s*\\d+[.)]\\s+(.*)$/);
+        const h = line.match(/^\\s*#{1,4}\\s+(.*)$/);
+        if (ul || ol) {
+          flushPara();
+          const tag = ul ? "ul" : "ol";
+          if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+          list.items.push((ul || ol)[1]);
+        } else if (h) {
+          flushPara(); flushList();
+          out.push('<div class="mdh">' + inlineMd(h[1]) + "</div>");
+        } else if (line.trim() === "") {
+          flushPara(); flushList();
+        } else {
+          flushList();
+          para.push(line);
+        }
+      }
+      flushPara(); flushList();
+      return out.join("");
     }
 
     function el(cls, html) {
@@ -391,18 +544,119 @@ export class InvestigationDocuments {
       return d;
     }
 
+    // Append streamed/completed text into the current segment, re-rendering
+    // its markdown from the accumulated raw buffer (cheap at chat sizes).
+    function appendText(delta) {
+      if (!turn) return;
+      if (!turn.seg) {
+        turn.seg = document.createElement("div");
+        turn.seg.className = "md";
+        turn.buf = "";
+        turn.wrap.appendChild(turn.seg);
+      }
+      turn.buf += delta;
+      turn.seg.innerHTML = md(turn.buf);
+    }
+
+    function addToolRow(name, inputArgs) {
+      const row = document.createElement("details");
+      row.className = "tool";
+      const sum = document.createElement("summary");
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      mark.textContent = "→";
+      const verb = document.createElement("span");
+      verb.className = "verb";
+      verb.textContent = name;
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = JSON.stringify(inputArgs ?? {});
+      sum.append(mark, verb, hint);
+      const body = document.createElement("pre");
+      body.textContent = JSON.stringify(inputArgs ?? {}, null, 2);
+      row.append(sum, body);
+      (turn ? turn.wrap : conversation).appendChild(row);
+      if (turn) { turn.seg = null; turn.tools.push(row); }
+      return row;
+    }
+
+    function settleToolRow(msg) {
+      const row = turn && turn.tools.length ? turn.tools.shift() : null;
+      const detail = msg.isError ? "error"
+        : msg.coverage !== undefined ? msg.coverage + " · " + msg.events + " event(s)"
+        : "done";
+      if (!row) {
+        el("committed", (msg.isError ? "✗ " : "✓ ") + esc(msg.name) + " — " + esc(detail));
+        return;
+      }
+      const mark = row.querySelector(".mark");
+      mark.textContent = msg.isError ? "✗" : "✓";
+      mark.classList.add(msg.isError ? "err" : "ok");
+      const st = document.createElement("span");
+      st.className = "hint status";
+      st.textContent = detail;
+      row.querySelector("summary").appendChild(st);
+    }
+
+    // ---- rail --------------------------------------------------------------
+    function renderHypotheses(hs) {
+      const box = $("hyps");
+      if (!hs || !hs.length) {
+        box.innerHTML = '<div class="empty">None yet</div>';
+        return;
+      }
+      box.innerHTML = hs.map((h) => {
+        const preds = (h.predictions || []).map((p) =>
+          '<li>' + esc(p.statement) + '<span class="badge">' + esc(p.status) + '</span></li>'
+        ).join("");
+        return '<div class="card"><div><span class="statement">' + esc(h.statement) + '</span>'
+          + '<span class="badge">' + esc(h.status) + '</span></div>'
+          + (preds ? '<ul class="predictions">' + preds + '</ul>' : '') + '</div>';
+      }).join("");
+    }
+
+    function renderCapabilities(caps) {
+      const box = $("caps");
+      if (caps === null) {
+        box.innerHTML = '<div class="empty">capability layer off</div>';
+        return;
+      }
+      if (!caps.length) {
+        box.innerHTML = '<div class="empty">none configured</div>';
+        return;
+      }
+      const order = { available: 0, degraded: 1, unavailable: 2 };
+      const sorted = caps.slice().sort((a, b) =>
+        (order[a.status] ?? 3) - (order[b.status] ?? 3) || a.verb.localeCompare(b.verb));
+      box.textContent = "";
+      for (const c of sorted) {
+        const row = document.createElement("div");
+        row.className = "caprow " + c.status;
+        const dot = document.createElement("span");
+        dot.className = "dot " + c.status;
+        dot.title = c.status;
+        const verb = document.createElement("span");
+        verb.className = "verb";
+        verb.textContent = c.verb;
+        row.append(dot, verb);
+        box.appendChild(row);
+      }
+    }
+
     // The action queue: rows are DOM-built (action_type/targets are
     // model-influenced — no innerHTML for them), each with Approve/Reject
     // posting to the host, which does the real call on the human token.
     function renderPending(actions) {
-      const wrap = $("pendingWrap");
       const box = $("pending");
       const pend = (actions || []).filter((a) => a.pending);
       box.textContent = "";
-      wrap.style.display = pend.length ? "" : "none";
+      if (!pend.length) {
+        box.innerHTML = '<div class="empty">Nothing waiting</div>';
+        return;
+      }
       for (const a of pend) {
         const row = document.createElement("div");
-        row.className = "hypothesis";
+        row.className = "card";
 
         const head = document.createElement("div");
         const name = document.createElement("span");
@@ -417,7 +671,7 @@ export class InvestigationDocuments {
         head.append(name, tier, state);
 
         const targets = document.createElement("div");
-        targets.className = "meta";
+        targets.className = "cardmeta";
         targets.textContent = "→ " + (a.targets || []).join(", ");
 
         row.append(head, targets);
@@ -427,7 +681,7 @@ export class InvestigationDocuments {
           // no buttons: an affordance that can only fail is a lie.
           row.style.opacity = "0.55";
           const note = document.createElement("div");
-          note.className = "meta";
+          note.className = "cardmeta";
           note.textContent = "approval window elapsed — re-request the action if it is still needed";
           row.append(note);
         } else {
@@ -483,59 +737,48 @@ export class InvestigationDocuments {
       const was = atBottom();
       switch (msg.type) {
         case "loading":
-          $("thread").innerHTML = '<div class="loading">Loading…</div>';
+          document.body.classList.add("loading");
           break;
         case "error":
-          $("thread").innerHTML = '<div class="error">Could not load: ' + esc(msg.message) + '</div>';
+          document.body.classList.remove("loading");
+          $("banner").textContent = "Could not load: " + msg.message;
           break;
         case "data":
+          document.body.classList.remove("loading");
+          $("banner").textContent = "";
           $("title").textContent = msg.investigation.title;
           $("state").textContent = msg.investigation.state;
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
-          $("thread").innerHTML = renderHypotheses(msg.hypotheses);
+          renderHypotheses(msg.hypotheses);
+          renderCapabilities(msg.capabilities);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');
           break;
-        case "turn.start": {
-          const wrap = el("msg assistant");
-          const reasoningEl = document.createElement("div");
-          reasoningEl.className = "reasoning";
-          reasoningEl.style.display = "none";
-          const textEl = document.createElement("div");
-          textEl.className = "text";
-          wrap.appendChild(reasoningEl);
-          wrap.appendChild(textEl);
-          turn = { wrap, reasoningEl, textEl };
+        case "turn.start":
+          turn = { wrap: el("msg assistant"), seg: null, buf: "", tools: [], reasoningEl: null };
           break;
-        }
         case "turn.reasoning":
-          if (turn) { turn.reasoningEl.style.display = "block"; turn.reasoningEl.textContent += msg.delta; }
+          if (turn) {
+            if (!turn.reasoningEl) {
+              turn.reasoningEl = document.createElement("div");
+              turn.reasoningEl.className = "reasoning";
+              turn.wrap.prepend(turn.reasoningEl);
+            }
+            turn.reasoningEl.textContent += msg.delta;
+          }
           break;
         case "turn.text":
-          if (turn) turn.textEl.textContent += msg.delta;
+          appendText(msg.delta);
           break;
-        case "turn.tool": {
-          const args = esc(JSON.stringify(msg.input));
-          (turn ? turn.wrap : conversation).appendChild(Object.assign(document.createElement("div"), {
-            className: "tool", innerHTML: '<span class="verb">→ ' + esc(msg.name) + '</span> <code>' + args + '</code>',
-          }));
+        case "turn.tool":
+          addToolRow(msg.name, msg.input);
           break;
-        }
-        case "turn.toolResult": {
-          // Envelope results show coverage + count (distilled from the full
-          // payload); non-envelope results just complete; errors say so.
-          const mark = msg.isError ? "✗" : "✓";
-          const detail = msg.isError ? " — error"
-            : msg.coverage !== undefined ? " — " + esc(msg.coverage) + " · " + esc(msg.events) + " event(s)"
-            : "";
-          (turn ? turn.wrap : conversation).appendChild(Object.assign(document.createElement("div"), {
-            className: "tool", innerHTML: '<span class="result">' + mark + ' ' + esc(msg.name) + detail + '</span>',
-          }));
+        case "turn.toolResult":
+          settleToolRow(msg);
           break;
-        }
         case "turn.committed":
-          el("committed", "saved to thread · " + esc(msg.interpretationId));
+          el("committed", "saved to thread · " + esc(String(msg.interpretationId).slice(0, 8)) + "…");
           break;
         case "pending":
           renderPending(msg.actions);
@@ -543,10 +786,22 @@ export class InvestigationDocuments {
         case "turn.error":
           el("error", esc(msg.message));
           break;
-        case "turn.end":
+        case "turn.end": {
+          if (msg.usage && turn) {
+            const u = msg.usage;
+            const parts = [];
+            if (msg.rounds) parts.push(msg.rounds + " tool round" + (msg.rounds === 1 ? "" : "s"));
+            parts.push(u.input.toLocaleString() + " in / " + u.output.toLocaleString() + " out");
+            if (u.cacheRead) parts.push(u.cacheRead.toLocaleString() + " cached");
+            const line = document.createElement("div");
+            line.className = "usage";
+            line.textContent = parts.join(" · ");
+            turn.wrap.appendChild(line);
+          }
           turn = null;
           setComposerEnabled(true);
           break;
+        }
       }
       stick(was);
     });
