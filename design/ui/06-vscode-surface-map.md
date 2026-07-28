@@ -78,8 +78,14 @@ Gate the palette with `when` clauses (`reckon.hasActiveInvestigation`,
 ▸ CONCLUDED (3)
 ```
 
+- **The tree is a triage queue, not a file listing.** Within the ACTIVE group, order by
+  needs-me-first: investigations with an approval window expiring soonest, then pending
+  approvals, then unseen changes, then recency. The question the tree answers is
+  "what needs *me*, *now*?"
 - Group by status; `CONCLUDED` collapsed by default and searchable.
-- Row description: `<Status> · N entities · <age>`.
+- Row description: `<Status> · N entities · <age>`; `⏳ 9m` when an approval window is
+  open (soonest across the investigation); an unseen-changes dot when the thread grew
+  since this analyst last viewed it (`02 §2.12`).
 - Status dot colors: ACTIVE info · PAUSED/VERDICT_REACHED warning · REMEDIATING danger ·
   DRAFT muted · CONCLUDED indigo · ARCHIVED faint.
 - `⚠` badge when an escalation policy has triggered; `⏰` when a follow-up is due.

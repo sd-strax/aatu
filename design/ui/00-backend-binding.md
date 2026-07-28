@@ -237,8 +237,13 @@ and flow in the comms sheet carries forward; only the phase and the data authori
    schema is repurposed as the export format specification.
 6. **`retry_of` lineage** on action requests (renders the retry chain per §2.3).
 7. **Raw evidence in reach** — read-only OCSF JSON via reckon URIs from cited refs
-   (`13 §7` step 6; the sheets' "View raw response" and evidence chips are its UI).
-8. Phase F: comms descriptors, timers, ingestion (§4).
+   (`13 §7` step 6; `02 §2.8` is its UI — every citation opens).
+8. **Real seeds** — `CreateInvestigation` currently takes a title only; the Seed extension
+   (`01` Extension 1: alert / entity / hypothesis seeds) is unimplemented, so the seed
+   picker (`02 §2.7`) has nothing to bind to and "never start from an empty chat" is not
+   yet true on either side. Entity-rooted seeds are load-bearing: the entity dossier,
+   cross-investigation joins, and alert→investigation ingestion all depend on them.
+9. Phase F: comms descriptors, timers, ingestion (§4).
 
 ---
 
@@ -257,6 +262,18 @@ Deliberate non-decisions, tracked here per house convention:
 - **Auth surface**: sign-in/out state, the 401-refresh appearance, and the welcome view's
   sign-in affordance need design — the extension's dual-client PKCE flow is built and
   load-bearing.
+- **Structural navigation**: the investigation is a graph (hypotheses, entities, evidence,
+  typed edges) rendered today as a chronological log. The thread is the right *audit* lens
+  but not the only *working* lens — what are the other lenses (by entity, by hypothesis,
+  by event time), and how does the analyst move between them without losing place?
+- **Two clocks**: investigation time (when we learned it) vs event time (when it
+  happened). The event-time strip (`13 §4` Timeline, minimal at v0) needs its relationship
+  to the thread designed — the reference scenario's own decisive fact is a 7-second
+  event-time anomaly.
+- **Mid-turn steering**: a multi-round agent turn is currently atomic (watch or cancel).
+  A queued interjection the loop reads between tool rounds ("skip DNS, chase the service
+  account") would change the feel from batch job to colleague — needs sidecar/agent
+  design, not just UI.
 
 (Resolved: naming. The package's original product name was a prototype-era simplification;
 the product is **reckon** — command ids, config keys, and copy use the `reckon.` prefix

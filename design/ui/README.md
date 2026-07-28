@@ -44,6 +44,14 @@ expressed through VS Code theme variables where noted.
    events and are never overwritten by the AI.
 6. **Verdict is the midpoint, not the end.** The investigation stays open through remediation
    and coordination until every action and comms thread reaches a terminal state.
+7. **Guards have affordance parity.** Every engine gate renders its preflight state *before*
+   the attempt — a checklist whose unmet items link to the action that satisfies them
+   (pin before verdict, verdict before conclude, terminal actions before close). The engine's
+   rejection message is the fallback surface, never the primary UX: whatever the engine will
+   refuse, the UI makes the legal path the easy one.
+8. **Every citation opens.** Any evidence ref rendered anywhere — in prose, on an action
+   card, in a pin — is an affordance that opens the cited object (raw OCSF event or STIX
+   node) read-only in one click. A ref the analyst cannot inspect is a claim, not evidence.
 
 ## Seam rules
 

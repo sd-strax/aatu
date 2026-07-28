@@ -240,7 +240,70 @@ Other entries: `⌘⇧O` open (`*.inv.md` picker), `⌘⇧P` all reckon commands
 
 ---
 
-## 2.8 Notifications & empty states
+## 2.8 Evidence in reach
+
+The trust loop's last step (README non-negotiable #8): every rendered evidence ref opens.
+Clicking a cited `observed-data` / OCSF-event ref anywhere — assistant prose, a pin, an
+action card's evidence chips, a prediction's test results — opens the underlying record
+read-only (raw JSON via a reckon URI in a real editor tab; `design/13 §7` step 6). The
+same affordance from the tool-call block's raw view and from the entity popover. An
+analyst's trust in the agent is calibrated by spot-checking it; spot-checking is one click.
+
+## 2.9 Hypothesis tracker — the drivable loop
+
+Hypotheses are the unit of work, not passive rail entries. Each hypothesis card renders the
+full epistemic state from the engine (statuses verbatim: `PROPOSED / OPEN / SUPPORTED /
+REFUTED / INCONCLUSIVE / ABANDONED`) with its **predictions** nested — statement, status
+(`UNTESTED / CONFIRMED / DISCONFIRMED / INCONCLUSIVE`), and test-result refs (clickable,
+§2.8). Interactions:
+
+- **Acknowledge** on a `PROPOSED` (AI-authored) hypothesis — the human taking ownership
+  (engine-enforced human act).
+- **Test this** on an `UNTESTED` prediction — stages the prediction's declared test query
+  as a composer question (staged, never auto-fired — the pivot pattern).
+- The tracker surfaces the **cheapest untested prediction** as the suggested next move:
+  the "what would decide this?" question answered at a glance.
+
+The scoreboard framing is the point: what is still open, and what evidence would decide it.
+
+## 2.10 Verdict dialog — preflight and residual
+
+`/verdict` (or the header action) opens a confirmation dialog that renders the engine's
+gates as a **preflight checklist** (non-negotiable #7), live before submission:
+
+- ☑/☐ at least one pinned evidence item (unmet → links to the pinned-evidence surface)
+- ☑/☐ evidence cited on this verdict (the dialog collects refs)
+- rationale field (required)
+
+Below the checklist, the **coverage residual** — what the analyst is signing over:
+
+- Capability verbs `UNAVAILABLE_TENANT` for this investigation ("the email vector was
+  never checkable — Proofpoint is not configured")
+- Searches that returned `COMPLETE` with zero events (evidence of absence — each pinnable
+  as a finding directly from this list)
+- Predictions still `UNTESTED`
+
+The residual panel is decision support, not a blocker: the analyst may proceed, but the
+record of what was *not* investigated is in front of them at the moment of judgment — and
+it is what goes in the postmortem if the verdict was wrong. The conclude dialog reuses the
+same checklist pattern (verdict recorded · actions terminal · comms resolved).
+
+## 2.11 Consulted knowledge
+
+When a turn's interpretation carries `consulted_sops` (the schema distinguishes retrieved
+from `used`), the turn renders a knowledge chip: *"followed SOP: ransomware-triage §3"*
+(used) vs a muted *"consulted, not applied"*. Click opens the SOP. This is the
+"it follows our procedures and shows where" surface — provenance the engine already
+records, made visible.
+
+## 2.12 Returning to an investigation
+
+Interruption is the norm. On open, if the thread has grown since this analyst last viewed
+it, render a **"since you were here" divider** at the first unseen entry (last-seen
+position is view state, not investigation state) and a one-line delta in the context bar:
+*"+3 reasoning steps · 1 action resulted · 1 approval expiring in 12m"*.
+
+## 2.13 Notifications & empty states
 
 Toasts: 340px, `--overlay-bg`, `--shadow-pop`, 18px semantic glyph, title 13px/600, message 12px
 `--text-2`, optional actions in `--he-primary-soft`. Auto-dismiss 4.2s unless actions are present.

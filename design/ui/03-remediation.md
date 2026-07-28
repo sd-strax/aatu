@@ -46,9 +46,26 @@ recovery info · notify green) · title (`Isolate host` + entity chip) with tier
 
 **Body by state**
 
-- **REQUESTED (T2)** — Reason row · Evidence chips (amber, clickable → jump to the pinned
-  finding) · TTL if set · *"Requested by AI · via CrowdStrike EDR"* ·
+- **REQUESTED (T2)** — Reason row · Evidence chips (amber, clickable → open the cited
+  record, `02 §2.8`) · TTL if set · *"Requested by AI · via CrowdStrike EDR"* ·
   buttons **Approve ⏎** (success fill) / **Reject ⎋** / **Modify**.
+
+  **Decision-grade requirements** (every REQUESTED card, both tiers — this is the
+  highest-stakes click in the product and the card must answer the decision, not just
+  offer the buttons):
+  - **Approval window countdown** — the frozen `expires_at` rendered live ("expires in
+    14m"), turning warning-colored under 5m. Expiry is lazy engine-side; the countdown is
+    the analyst's only warning. On elapse the card flips to the EXPIRED posture (badge,
+    zero affordances, "re-request if still needed").
+  - **Reversibility class, honestly** — `REVERSIBLE` ("undone by host.unisolate") ·
+    `BEST_EFFORT` ("reversal attempted, cannot be verified — treated as permanent") ·
+    `IRREVERSIBLE` (danger copy). Frozen at request time; the card states which *before*
+    approval, not after.
+  - **Escalation reason when tier was escalated** — a T2 action over the blast-radius
+    threshold arrives as T3 (engine rule, non-negotiable): the card says why
+    ("escalated: 14 targets").
+  - **Dispatch route** — which binding/adapter will execute ("via crowdstrike-edr" vs
+    "via fixture"): what will *actually happen*, not just what was asked.
 - **REQUESTED (T3)** — same, plus a danger-tinted challenge box:
   *"Irreversible action. Type **purge 23 emails** to confirm."* with a mono input.
   Buttons: **Confirm** / **Reject**. Mismatch → shake the border red + toast, never proceed.
@@ -121,7 +138,9 @@ Natural language works too ("isolate the HR host") and produces the same request
 Persistent strip under the panel context bar, visible whenever actions exist.
 
 Collapsed: `Remediation 4/6 · 2/3 comms` · segmented progress bar (success / danger / muted
-proportions) · counts by state · chevron.
+proportions) · counts by state · chevron · **nearest-expiry cue** when any approval window
+is open (`⏳ approve within 9m` — the summary bar is where a batch reviewed slowly learns
+it is expiring piecemeal).
 Expanded: grouped list — **Actions** then **Comms & external work** — each row with a state icon,
 label, and state pill. Clicking a row jumps to it in the file.
 

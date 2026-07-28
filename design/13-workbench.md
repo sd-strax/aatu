@@ -143,7 +143,7 @@ fixture-scenario walking skeleton; **v1** = live-tenant hardening; **SaaS** = te
 
 | Surface | What it is | Semantics | Phase |
 |---|---|---|---|
-| Investigation list | Open/recent investigations, lifecycle state, seed summary | `01` | v0 |
+| Investigation list | Open/recent investigations as a triage queue: lifecycle state, seed summary, needs-me cues (expiring approvals, unseen changes) | `01` | v0 |
 | Seed entry | Start an investigation (entity-rooted) or hunt (hypothesis-rooted) | `01` | v0 |
 | Pending approvals | Actions awaiting this analyst, presence-aware later | `04 §5` | v0 |
 | Capability health | Verbs/actions available–degraded–unavailable; installed-not-enabled (operator view) | `03 §6.3`, `11 §6.2` | v0 |
@@ -159,7 +159,7 @@ fixture-scenario walking skeleton; **v1** = live-tenant hardening; **SaaS** = te
 | Inline approval flow | T2 single-confirm (verb + targets + evidence + approve/reject); T3 typed challenge; two-party | `04 §5` | v0 (T2/T3), SaaS (two-party) |
 | Enablement widgets | Schema-derived config forms, secret-backend chooser, gap-closure hints | `11 §5.1`, `§4.3` | v0 |
 | Evidence graph | Two-layer view: interpretation objects joined to telemetry, typed edges explicit | `01` | v0 (minimal), v1 (rich) |
-| Timeline | Event-time ordering of observed data across sources | `01`, `02` | v1 |
+| Timeline | Event-time ordering of observed data across sources — attacks are sequences, and event time is not investigation time | `01`, `02` | v0 (minimal strip), v1 (rich) |
 | Pivot panels | Entity context, indicator context, similar investigations | `03 §2`, `06 §4` | v1 |
 | Conclusion flow | ConclusionSlot rendering; export/post-conclusion handoff | `01`, `07` | v1 |
 

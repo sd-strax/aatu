@@ -52,32 +52,44 @@ traceable to raw JSON in one click.
 
 ## Phase 5 — Entities & evidence
 
-Entity registry with UUIDv5, chips everywhere, popover with cross-investigation lookup, aliasing,
-pivot. Evidence pinning from panel, file selection, and `/pin`, with gutter decorations.
+Entity chips everywhere (ids are engine-minted — binding §1), popover with
+cross-investigation lookup, aliasing, pivot. Evidence pinning from every surface. **Evidence
+in reach** (`02 §2.8`): every cited ref opens the raw record read-only — this ships in the
+same phase as pinning because pins without openable citations are labels, not evidence.
 
 **Done when:** the same IP in two investigations resolves to one id; pinning from any surface
-updates frontmatter, panel, file, and counts together.
+updates every view together; clicking any cited ref anywhere opens the underlying OCSF
+event / STIX node in one click.
 
 ---
 
 ## Phase 6 — Verdict & lifecycle
 
-Slash autocomplete, `/verdict` confirmation dialog, `/status` with precondition validation,
-`/hypothesis`. Full state machine including `VERDICT_REACHED`.
+Slash autocomplete, the `/verdict` dialog with **preflight checklist + coverage residual**
+(`02 §2.10`), `/status` with precondition preflight, `/hypothesis` and the **drivable
+hypothesis tracker** (`02 §2.9`). Derived presentation states (verdict-reached,
+remediating — binding §2.4).
 
-**Done when:** concluding without evidence is blocked with a clear reason; verdict moves the
-investigation to `VERDICT_REACHED` rather than closing it.
+**Done when:** the verdict dialog shows the gate state *before* submission with unmet items
+linked to their remedy (the engine's rejection message is never the first thing the analyst
+sees); the residual panel lists unavailable verbs, evidence-of-absence results, and untested
+predictions at the moment of judgment; a verdict renders the investigation as
+verdict-reached rather than closing it.
 
 ---
 
 ## Phase 7 — Remediation
 
-Action model and state machine, action cards in all states, plan block with grouping, T2 approval,
-T3 typed challenge + second approver, retry/reverse/waive, summary bar, `## Remediation` output,
-closure prompt and `## Conclusion`.
+Action cards in all engine states (including `PARTIAL` with per-target residuals,
+reversal-attempted, and the expired posture — binding §2.3), **decision-grade** per
+`03 §3.3`: countdown, reversibility class, escalation reason, dispatch route. Plan block
+with grouping, T2 approval, T3 typed challenge, retry-as-new-action with lineage, reverse,
+summary bar with nearest-expiry, closure preflight.
 
-**Done when:** nothing executes without explicit approval; a failed action can be retried and a
-succeeded reversible action produces a paired reversal entry (both retained); closure is blocked
+**Done when:** nothing executes without explicit approval; an approval card answers why /
+on what evidence / what will execute / how undoable / how long before the window closes —
+without leaving the card; a succeeded reversible action produces a paired reversal entry
+(both retained) and a BEST_EFFORT reversal never claims REVERSED; closure preflight blocks
 until every action is terminal.
 
 ---
@@ -98,14 +110,18 @@ on next open.
 
 Validate these continuously, not at the end:
 
-- [ ] Panel and file never disagree; on divergence the file wins.
-- [ ] Analyst edits in `## Reasoning` survive the next AI turn.
+- [ ] Every surface renders engine state; on divergence the backend wins (binding §1).
+- [ ] Analyst-authored acts are attributed events and are never overwritten by the AI.
 - [ ] Every tool call exposes query, summary, coverage, and raw response.
-- [ ] "No data" and "not configured" render as information, never as errors.
+- [ ] Every cited evidence ref, anywhere, opens the underlying record in one click.
+- [ ] "No data" and "not configured" render as information, never as errors — and
+      evidence-of-absence results are pinnable as findings.
 - [ ] No action or message executes without explicit analyst confirmation.
-- [ ] Status is correct in all four places at once (file, panel, tree, status bar).
-- [ ] Closing and reopening VS Code days later restores exact state from the file.
-- [ ] The produced `.inv.md` is something an analyst would paste into a ticket unedited.
+- [ ] Every engine gate has a preflight surface; rejection messages are the fallback.
+- [ ] Approval windows are visibly counting down wherever an approval is offered.
+- [ ] Status is correct in every surface at once (document, panel, tree, status bar).
+- [ ] Closing and reopening VS Code days later restores exact state from the backend.
+- [ ] The exported markdown is something an analyst would paste into a ticket unedited.
 
 ## Success signals (from the original brief)
 
