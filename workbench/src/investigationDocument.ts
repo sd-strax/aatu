@@ -14,7 +14,7 @@
 // network from the page.
 
 import * as vscode from "vscode";
-import { ActionRow, BackendClient, Capability, Hypothesis, InvestigationDetail, ThreadEntry } from "./backend";
+import { ActionRow, BackendClient, Capability, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
@@ -26,12 +26,13 @@ type RenderMessage =
   | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[]; capabilities: Capability[] | null; thread: ThreadEntry[] | null }
   | { type: "error"; message: string }
   | { type: "pending"; actions: ActionRow[] }
+  | { type: "pins"; pins: PinRow[] }
   | { type: "turn.start" }
   | { type: "turn.user"; text: string }
   | { type: "turn.reasoning"; delta: string }
   | { type: "turn.text"; delta: string }
   | { type: "turn.tool"; name: string; input: unknown }
-  | { type: "turn.toolResult"; name: string; isError: boolean; coverage?: string; events?: number }
+  | { type: "turn.toolResult"; name: string; isError: boolean; coverage?: string; events?: number; refs?: string[] }
   | { type: "turn.committed"; interpretationId: string }
   | { type: "turn.error"; message: string }
   | { type: "turn.end"; usage?: { input: number; output: number; cacheRead: number }; rounds?: number };
@@ -41,7 +42,11 @@ type InboundMessage =
   | { type: "refresh" | "ready" }
   | { type: "send"; text: string }
   | { type: "action.approve"; actionId: string; tier: string; actionType: string }
-  | { type: "action.reject"; actionId: string; actionType: string };
+  | { type: "action.reject"; actionId: string; actionType: string }
+  | { type: "pin.add"; refs: string[]; hint?: string }
+  | { type: "pin.unpin"; interpretationId: string }
+  | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
+  | { type: "evidence.open"; ref: string };
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
@@ -79,6 +84,14 @@ export class InvestigationDocuments {
         void this.approve(id, panel, msg);
       } else if (msg.type === "action.reject") {
         void this.reject(id, panel, msg);
+      } else if (msg.type === "pin.add") {
+        void this.pin(id, panel, msg.refs, msg.hint);
+      } else if (msg.type === "pin.unpin") {
+        void this.unpin(id, panel, msg.interpretationId);
+      } else if (msg.type === "verdict.submit") {
+        void this.submitVerdict(id, panel, msg);
+      } else if (msg.type === "evidence.open") {
+        void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
       }
     });
     panel.onDidDispose(() => {
@@ -119,7 +132,7 @@ export class InvestigationDocuments {
     await this.postPending(id, panel);
   }
 
-  /** Fetch + render the action queue. Failure logs and leaves the panel as-is. */
+  /** Fetch + render the action queue and pin fold. Failure logs, never breaks. */
   private async postPending(id: string, panel: vscode.WebviewPanel): Promise<void> {
     try {
       const actions = await this.client.actions(id);
@@ -128,6 +141,69 @@ export class InvestigationDocuments {
       // A 503 here just means the action layer is off — not a broken panel.
       this.log.debug(`list actions ${id}: ${errText(err)}`);
     }
+    try {
+      const pins = await this.client.pins(id);
+      void this.post(panel, { type: "pins", pins });
+    } catch (err) {
+      this.log.debug(`list pins ${id}: ${errText(err)}`);
+    }
+  }
+
+  /** Pin evidence — the analyst's curation act, on the human token. */
+  private async pin(id: string, panel: vscode.WebviewPanel, refs: string[], hint?: string): Promise<void> {
+    if (!refs.length) {
+      return;
+    }
+    const finding = await vscode.window.showInputBox({
+      title: "reckon — pin as evidence",
+      prompt: `What makes this load-bearing? (${refs.length} ref${refs.length === 1 ? "" : "s"} cited; recorded on the thread)`,
+      value: hint ?? "",
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() === "" ? "state the finding — the pin is the record" : undefined),
+    });
+    if (finding === undefined || finding.trim() === "") {
+      return;
+    }
+    try {
+      await this.client.pinEvidence(id, finding.trim(), refs);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: pin failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
+  }
+
+  /** Un-pin = supersession with a reason; the pin stays visible, struck. */
+  private async unpin(id: string, panel: vscode.WebviewPanel, interpretationId: string): Promise<void> {
+    const reason = await vscode.window.showInputBox({
+      title: "reckon — un-pin evidence",
+      prompt: "Why is this no longer load-bearing? (recorded; the pin stays visible, struck)",
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() === "" ? "a reason is required" : undefined),
+    });
+    if (reason === undefined || reason.trim() === "") {
+      return;
+    }
+    try {
+      await this.client.supersedeInterpretation(interpretationId, id, reason.trim());
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: un-pin failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
+  }
+
+  /** Record the verdict of record — always the analyst's act here (human token). */
+  private async submitVerdict(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { disposition: string; rationale: string; refs: string[] },
+  ): Promise<void> {
+    try {
+      await this.client.recordVerdict(id, msg.disposition, msg.rationale, msg.refs);
+      void vscode.window.showInformationMessage(`reckon: verdict recorded — ${msg.disposition}`);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: verdict failed — ${errText(err)}`);
+    }
+    await this.load(id, panel);
   }
 
   /**
@@ -208,8 +284,8 @@ export class InvestigationDocuments {
         // coverage/events come distilled from the sidecar (from the full,
         // unclipped payload) — absent for non-envelope results, and the
         // webview renders that honestly instead of a bogus "? · 0".
-        onToolResult: (name, _content, isError, coverage, events) =>
-          void this.post(panel, { type: "turn.toolResult", name, isError, coverage, events }),
+        onToolResult: (name, _content, isError, coverage, events, refs) =>
+          void this.post(panel, { type: "turn.toolResult", name, isError, coverage, events, refs }),
       });
       if (outcome.interpretationId) {
         void this.post(panel, { type: "turn.committed", interpretationId: outcome.interpretationId });
@@ -429,6 +505,51 @@ export class InvestigationDocuments {
     .caprow.unavailable .verb { opacity: 0.5; }
     body.loading #rail { opacity: 0.6; }
 
+    /* ---- verdict + pins + citations ---- */
+    .verdictbadge.BENIGN { background: rgba(78,199,123,.2); color: var(--vscode-charts-green, #4ec77b); }
+    .verdictbadge.SUSPICIOUS { background: rgba(245,181,61,.2); color: var(--vscode-charts-yellow, #f5b53d); }
+    .verdictbadge.MALICIOUS { background: rgba(255,95,110,.2); color: var(--vscode-charts-red, #ff5f6e); }
+    .refchip {
+      display: inline-block; font-family: var(--vscode-editor-font-family);
+      font-size: 0.72rem; padding: 0.02rem 0.35rem; margin: 0.1rem 0.15rem 0.1rem 0;
+      border: 1px solid var(--vscode-panel-border); border-radius: 0.3rem;
+      cursor: pointer; opacity: 0.85; max-width: 100%; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+    }
+    .refchip:hover { border-color: var(--vscode-focusBorder, currentColor); opacity: 1; }
+    .pinrow .finding { font-size: 0.84rem; }
+    .pinrow.superseded .finding { text-decoration: line-through; opacity: 0.55; }
+    .pinrow .unpin { float: right; font-size: 0.72rem; padding: 0 0.35rem; }
+    .countdown.warn { color: var(--vscode-charts-yellow, #f5b53d); font-weight: 600; }
+    .countdown.due { color: var(--vscode-errorForeground); font-weight: 600; }
+    .toolrefs { padding: 0.35rem 0.6rem 0.5rem; border-top: 1px solid var(--vscode-panel-border); font-family: var(--vscode-font-family); }
+    .toolrefs button { font-size: 0.72rem; padding: 0.05rem 0.45rem; margin-left: 0.3rem; }
+
+    #verdictDialog {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: flex; align-items: center; justify-content: center; z-index: 10;
+    }
+    #verdictDialog .dlg {
+      width: min(480px, 90vw); background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+      border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+      border-radius: 0.5rem; padding: 0.9rem 1.1rem 1rem;
+      box-shadow: 0 8px 28px rgba(0,0,0,.45);
+    }
+    #verdictDialog h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+    .checklist { margin: 0.3rem 0 0.6rem; font-size: 0.84rem; }
+    .checklist .item { margin: 0.2rem 0; }
+    .checklist .ok { color: var(--vscode-charts-green, #4ec77b); }
+    .checklist .unmet { color: var(--vscode-charts-yellow, #f5b53d); }
+    .dlglabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; opacity: 0.6; margin: 0.55rem 0 0.25rem; }
+    .dispositions label { margin-right: 0.9rem; font-size: 0.86rem; cursor: pointer; }
+    #verdictRationale {
+      width: 100%; box-sizing: border-box; font: inherit; resize: vertical;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 0.3rem; padding: 0.4rem 0.5rem;
+    }
+    .residual { font-size: 0.78rem; opacity: 0.75; margin-top: 0.55rem; border-left: 2px solid var(--vscode-panel-border); padding-left: 0.6rem; }
+    .residual .rtitle { text-transform: uppercase; letter-spacing: .05em; font-size: 0.7rem; opacity: 0.8; margin-bottom: 0.2rem; }
+
     /* ---- composer ---- */
     #composer {
       flex: none; display: flex; gap: 0.5rem; padding: 0.6rem 1.25rem;
@@ -448,6 +569,8 @@ export class InvestigationDocuments {
       <div class="titlerow">
         <h1 id="title">Investigation</h1>
         <span class="state" id="state"></span>
+        <span class="state verdictbadge" id="verdictBadge" style="display:none"></span>
+        <button id="verdictBtn" title="Record the disposition of record">Verdict…</button>
         <button id="refresh" title="Reload from the backend">Refresh</button>
       </div>
       <div id="meta"></div>
@@ -474,6 +597,10 @@ export class InvestigationDocuments {
       <div id="pending"><div class="empty">Nothing waiting</div></div>
     </section>
     <section>
+      <h2 id="pinsHead">Pinned evidence</h2>
+      <div id="pinsBox"><div class="empty">Nothing pinned yet</div></div>
+    </section>
+    <section>
       <h2>Hypotheses</h2>
       <div id="hyps"><div class="empty">None yet</div></div>
     </section>
@@ -482,6 +609,26 @@ export class InvestigationDocuments {
       <div id="caps"><div class="empty">…</div></div>
     </section>
   </aside>
+
+  <div id="verdictDialog" style="display:none">
+    <div class="dlg">
+      <h3>Record verdict</h3>
+      <div class="checklist" id="verdictChecklist"></div>
+      <div class="dlglabel">Disposition</div>
+      <div class="dispositions" id="dispositions">
+        <label><input type="radio" name="disp" value="BENIGN"> BENIGN</label>
+        <label><input type="radio" name="disp" value="SUSPICIOUS"> SUSPICIOUS</label>
+        <label><input type="radio" name="disp" value="MALICIOUS"> MALICIOUS</label>
+      </div>
+      <div class="dlglabel">Rationale (required — this is the record)</div>
+      <textarea id="verdictRationale" rows="3"></textarea>
+      <div class="residual" id="verdictResidual"></div>
+      <div class="decide">
+        <button class="primary" id="verdictSubmit" disabled>Record verdict</button>
+        <button id="verdictCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -496,6 +643,63 @@ export class InvestigationDocuments {
     // tool round lands AFTER it, in reading order); tools is the FIFO of tool
     // rows awaiting their result.
     let turn = null;
+
+    // Rail state the verdict dialog + header badges derive from.
+    let lastPins = [], lastHyps = [], lastCaps = null, lastVerdict = null, lastPending = [];
+
+    // A clickable citation (02 §2.8): every ref opens.
+    function refChip(ref) {
+      const c = document.createElement("span");
+      c.className = "refchip";
+      c.textContent = ref;
+      c.title = "Open evidence: " + ref;
+      c.addEventListener("click", (e) => {
+        e.stopPropagation();
+        vscode.postMessage({ type: "evidence.open", ref });
+      });
+      return c;
+    }
+
+    // Live approval-window countdown (03 §3.3): the analyst's only warning
+    // for lazy expiry. Elements carry data-expires (epoch ms).
+    function fmtRemaining(ms) {
+      if (ms <= 0) return "expired";
+      const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+      return m > 0 ? m + "m " + s + "s" : s + "s";
+    }
+    setInterval(() => {
+      for (const el of document.querySelectorAll("[data-expires]")) {
+        const left = Number(el.dataset.expires) - Date.now();
+        el.textContent = left <= 0 ? "window expired — refresh" : "expires in " + fmtRemaining(left);
+        el.classList.toggle("due", left <= 0);
+        el.classList.toggle("warn", left > 0 && left < 5 * 60000);
+      }
+    }, 1000);
+
+    // Header badges: engine status + verdict + the derived presentation label
+    // (binding §2.4 — ACTIVE reads as remediating / verdict-reached; derived,
+    // never stored).
+    function renderHeaderState(status) {
+      if (status) $("state").dataset.engine = status;
+      const engine = $("state").dataset.engine || "";
+      let label = engine;
+      if (engine === "ACTIVE") {
+        const open = lastPending.some((a) => a.pending && !a.expired) ||
+          lastPending.some((a) => a.status === "APPROVED" || a.status === "EXECUTING");
+        if (open) label = "ACTIVE · REMEDIATING";
+        else if (lastVerdict) label = "ACTIVE · VERDICT REACHED";
+      }
+      $("state").textContent = label;
+      const vb = $("verdictBadge");
+      if (lastVerdict) {
+        vb.style.display = "";
+        vb.textContent = lastVerdict.disposition;
+        vb.className = "state verdictbadge " + lastVerdict.disposition;
+        vb.title = lastVerdict.rationale || "";
+      } else {
+        vb.style.display = "none";
+      }
+    }
 
     function esc(s) {
       return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -623,6 +827,23 @@ export class InvestigationDocuments {
       st.className = "hint status";
       st.textContent = detail;
       row.querySelector("summary").appendChild(st);
+
+      // Citations + pin-from-result (02 §2.8, 01 §Pinned evidence): the
+      // result's refs open, and the whole result can be pinned in one motion.
+      if (msg.refs && msg.refs.length) {
+        const box = document.createElement("div");
+        box.className = "toolrefs";
+        const pin = document.createElement("button");
+        pin.textContent = "Pin as evidence…";
+        pin.title = "Pin this result's findings (cites " + msg.refs.length + " refs)";
+        pin.addEventListener("click", (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: "pin.add", refs: msg.refs, hint: "" });
+        });
+        for (const r of msg.refs) box.appendChild(refChip(r));
+        box.appendChild(pin);
+        row.appendChild(box);
+      }
     }
 
     // ---- reasoning history -------------------------------------------------
@@ -731,12 +952,52 @@ export class InvestigationDocuments {
       }
     }
 
+    // Pinned evidence (01 §Pinned evidence): the curation fold. Superseded
+    // pins render struck, never absent. DOM-built (findings are free text).
+    function renderPins(pins) {
+      lastPins = pins || [];
+      const box = $("pinsBox");
+      const active = lastPins.filter((p) => !p.superseded).length;
+      $("pinsHead").textContent = "Pinned evidence" + (lastPins.length ? " · " + active : "");
+      box.textContent = "";
+      if (!lastPins.length) {
+        box.innerHTML = '<div class="empty">Nothing pinned yet — pin load-bearing findings from tool results</div>';
+        return;
+      }
+      for (const p of lastPins) {
+        const row = document.createElement("div");
+        row.className = "card pinrow" + (p.superseded ? " superseded" : "");
+        if (!p.superseded) {
+          const un = document.createElement("button");
+          un.className = "unpin";
+          un.textContent = "un-pin";
+          un.title = "Supersede this pin (stays visible, struck)";
+          un.addEventListener("click", () =>
+            vscode.postMessage({ type: "pin.unpin", interpretationId: p.interpretationId }));
+          row.appendChild(un);
+        }
+        const finding = document.createElement("div");
+        finding.className = "finding";
+        finding.textContent = p.finding;
+        const meta = document.createElement("div");
+        meta.className = "cardmeta";
+        meta.textContent = (p.actor === "AI_DELEGATED" ? "AI" : p.actor === "SYSTEM" ? "system" : "analyst")
+          + (p.pinnedAt ? " · " + new Date(p.pinnedAt).toLocaleString() : "");
+        const refs = document.createElement("div");
+        for (const r of p.inputRefs || []) refs.appendChild(refChip(r));
+        row.append(finding, meta, refs);
+        box.appendChild(row);
+      }
+    }
+
     // The action queue: rows are DOM-built (action_type/targets are
     // model-influenced — no innerHTML for them), each with Approve/Reject
     // posting to the host, which does the real call on the human token.
     function renderPending(actions) {
+      lastPending = actions || [];
+      renderHeaderState();
       const box = $("pending");
-      const pend = (actions || []).filter((a) => a.pending);
+      const pend = lastPending.filter((a) => a.pending);
       box.textContent = "";
       if (!pend.length) {
         box.innerHTML = '<div class="empty">Nothing waiting</div>';
@@ -763,6 +1024,36 @@ export class InvestigationDocuments {
         targets.textContent = "→ " + (a.targets || []).join(", ");
 
         row.append(head, targets);
+
+        // Decision-grade rows (03 §3.3): the card answers the decision.
+        if (a.tierEscalated) {
+          const esc2 = document.createElement("div");
+          esc2.className = "cardmeta";
+          esc2.textContent = "⚠ escalated to " + a.tier + ": " + (a.targets || []).length + " targets (blast radius)";
+          row.append(esc2);
+        }
+        if (a.reversibility) {
+          const rev = document.createElement("div");
+          rev.className = "cardmeta";
+          rev.textContent = a.reversibility === "REVERSIBLE" ? "↩ reversible"
+            : a.reversibility === "BEST_EFFORT" ? "↩? best-effort reversal — cannot be verified undone; treat as permanent"
+            : "⚠ irreversible";
+          row.append(rev);
+        }
+        if ((a.evidenceRefs || []).length) {
+          const ev = document.createElement("div");
+          ev.className = "cardmeta";
+          ev.textContent = "evidence: ";
+          for (const r of a.evidenceRefs) ev.appendChild(refChip(r));
+          row.append(ev);
+        }
+        if (!a.expired && a.expiresAt) {
+          const cd = document.createElement("div");
+          cd.className = "cardmeta countdown";
+          cd.dataset.expires = String(Date.parse(a.expiresAt));
+          cd.textContent = "…";
+          row.append(cd);
+        }
 
         if (a.expired) {
           // The approval deadline passed — the engine refuses an approve, so
@@ -820,6 +1111,82 @@ export class InvestigationDocuments {
     }
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
 
+    // ---- verdict dialog: preflight + residual (02 §2.10) -------------------
+    // The engine's gates rendered BEFORE the attempt (non-negotiable #7): the
+    // rejection message is the fallback, never the first thing seen.
+    function openVerdictDialog() {
+      const activePins = lastPins.filter((p) => !p.superseded);
+      const check = $("verdictChecklist");
+      check.textContent = "";
+      const item = (ok, text) => {
+        const d = document.createElement("div");
+        d.className = "item " + (ok ? "ok" : "unmet");
+        d.textContent = (ok ? "☑ " : "☐ ") + text;
+        check.appendChild(d);
+      };
+      item(activePins.length > 0, activePins.length > 0
+        ? activePins.length + " evidence item(s) pinned"
+        : "no pinned evidence — pin the load-bearing findings first (the engine will refuse)");
+      item(true, "cites the pinned evidence (attached automatically)");
+      if (lastVerdict) {
+        item(true, "revises the current verdict (" + lastVerdict.disposition + ") — history is preserved");
+      }
+
+      // The residual: what the analyst is signing over (02 §2.10).
+      const res = $("verdictResidual");
+      res.textContent = "";
+      const rt = document.createElement("div");
+      rt.className = "rtitle";
+      rt.textContent = "Not investigated — you are signing over this residual";
+      res.appendChild(rt);
+      const unavailable = (lastCaps || []).filter((c) => c.status === "unavailable").map((c) => c.verb);
+      const untested = [];
+      for (const h of lastHyps) {
+        for (const p of h.predictions || []) {
+          if (p.status === "UNTESTED") untested.push(p.statement);
+        }
+      }
+      const line = (text) => {
+        const d = document.createElement("div");
+        d.textContent = "· " + text;
+        res.appendChild(d);
+      };
+      if (unavailable.length) line("verbs never checkable in this tenant: " + unavailable.join(", "));
+      for (const s of untested.slice(0, 5)) line("untested prediction: " + s);
+      if (untested.length > 5) line("… and " + (untested.length - 5) + " more untested predictions");
+      if (!unavailable.length && !untested.length) line("no known gaps — all configured verbs available, no untested predictions");
+
+      $("verdictRationale").value = "";
+      for (const r of document.querySelectorAll('input[name="disp"]')) r.checked = false;
+      updateVerdictSubmit();
+      $("verdictDialog").style.display = "flex";
+    }
+    function updateVerdictSubmit() {
+      const disp = document.querySelector('input[name="disp"]:checked');
+      const rationale = $("verdictRationale").value.trim();
+      const pinsOk = lastPins.some((p) => !p.superseded);
+      $("verdictSubmit").disabled = !(disp && rationale && pinsOk);
+    }
+    $("verdictBtn").addEventListener("click", openVerdictDialog);
+    $("verdictCancel").addEventListener("click", () => { $("verdictDialog").style.display = "none"; });
+    $("verdictRationale").addEventListener("input", updateVerdictSubmit);
+    $("dispositions").addEventListener("change", updateVerdictSubmit);
+    $("verdictSubmit").addEventListener("click", () => {
+      const disp = document.querySelector('input[name="disp"]:checked');
+      if (!disp) return;
+      const refs = [];
+      for (const p of lastPins.filter((x) => !x.superseded)) {
+        for (const r of p.inputRefs || []) if (!refs.includes(r)) refs.push(r);
+      }
+      vscode.postMessage({
+        type: "verdict.submit",
+        disposition: disp.value,
+        rationale: $("verdictRationale").value.trim(),
+        refs,
+      });
+      $("verdictDialog").style.display = "none";
+    });
+
     window.addEventListener("message", (event) => {
       const msg = event.data;
       const was = atBottom();
@@ -835,11 +1202,17 @@ export class InvestigationDocuments {
           document.body.classList.remove("loading");
           $("banner").textContent = "";
           $("title").textContent = msg.investigation.title;
-          $("state").textContent = msg.investigation.state;
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
+          lastHyps = msg.hypotheses || [];
+          lastCaps = msg.capabilities;
+          lastVerdict = msg.investigation.verdict || null;
+          renderHeaderState(msg.investigation.state);
           renderHypotheses(msg.hypotheses);
           renderCapabilities(msg.capabilities);
           renderHistory(msg.thread);
+          break;
+        case "pins":
+          renderPins(msg.pins);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');

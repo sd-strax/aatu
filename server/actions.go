@@ -55,6 +55,14 @@ type ActionView struct {
 	Targets      []aggregate.TargetSpec `json:"targets,omitempty"`
 	EvidenceRefs []string               `json:"evidence_refs,omitempty"`
 	ExpiresAt    *time.Time             `json:"expires_at,omitempty"`
+
+	// Reversibility is the classification frozen at request time (04 §7):
+	// REVERSIBLE | BEST_EFFORT | IRREVERSIBLE — the decision-grade card states
+	// it honestly BEFORE approval (design/ui 03 §3.3).
+	Reversibility string `json:"reversibility,omitempty"`
+	// TierEscalated: the blast-radius escalator raised this above the type's
+	// default tier (04 §1) — the card says why it is T3.
+	TierEscalated bool `json:"tier_escalated,omitempty"`
 }
 
 // listInvestigationActions serves GET /api/investigations/{id}/actions: every
@@ -80,19 +88,27 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 	out := make([]ActionView, 0, len(acts))
 	for _, a := range acts {
 		v := ActionView{
-			ActionID:     a.ActionID.String(),
-			ActionType:   a.ActionType,
-			Tier:         a.Tier,
-			Status:       a.Status,
-			RequiredMode: a.RequiredMode,
-			Mode:         a.Mode,
-			IsReversal:   a.IsReversal,
-			Targets:      a.Targets,
-			EvidenceRefs: a.EvidenceRefs,
+			ActionID:      a.ActionID.String(),
+			ActionType:    a.ActionType,
+			Tier:          a.Tier,
+			Status:        a.Status,
+			RequiredMode:  a.RequiredMode,
+			Mode:          a.Mode,
+			IsReversal:    a.IsReversal,
+			Targets:       a.Targets,
+			EvidenceRefs:  a.EvidenceRefs,
+			Reversibility: a.Reversibility,
 		}
 		if !a.ExpiresAt.IsZero() {
 			t := a.ExpiresAt
 			v.ExpiresAt = &t
+		}
+		// The escalation is derivable, not stored: the catalog's default tier
+		// for the type vs the frozen tier on the action.
+		if b.cfg.ActionCatalog != nil {
+			if d, ok := b.cfg.ActionCatalog.Descriptor(a.ActionType); ok && d.DefaultTier != a.Tier && a.Tier == aggregate.TierT3 {
+				v.TierEscalated = true
+			}
 		}
 		out = append(out, v)
 	}

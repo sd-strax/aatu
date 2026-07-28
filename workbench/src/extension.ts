@@ -14,6 +14,7 @@ import { BackendClient } from "./backend";
 import { Session } from "./auth";
 import { SidecarTransport } from "./agentTransport";
 import { InvestigationDocuments } from "./investigationDocument";
+import { EVIDENCE_SCHEME, EvidenceProvider, openEvidence } from "./evidenceProvider";
 
 /** Where the BYOK Anthropic key lives — never in settings, never on disk in the clear. */
 const ANTHROPIC_KEY_SECRET = "reckon.anthropicApiKey";
@@ -45,6 +46,13 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     session,
     { dispose: () => transport.dispose() },
+    // Citation-open: reckon-evidence:/<ref>.json virtual documents (02 §2.8).
+    vscode.workspace.registerTextDocumentContentProvider(EVIDENCE_SCHEME, new EvidenceProvider(client)),
+    vscode.commands.registerCommand("reckon.openEvidence", (ref?: string) => {
+      if (typeof ref === "string" && ref !== "") {
+        void openEvidence(ref);
+      }
+    }),
     session.onDidChange(() => {
       void vscode.commands.executeCommand("setContext", "reckon.signedIn", session.signedIn);
       investigations.refresh();

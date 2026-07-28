@@ -371,6 +371,18 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.interpretationsItem),
 	))
 
+	// GET /api/evidence/{ref} — citation-open (design/ui 02 §2.8): any cited
+	// STIX object or raw OCSF telemetry record, read-only. Any reader.
+	api.Handle("/evidence/", authz.RequireAuth(verifier)(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				methodNotAllowed(w, "GET")
+				return
+			}
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.getEvidence)
+		},
+	)))
+
 	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval.
 	if b.cfg.Knowledge != nil {
 		api.Handle("/knowledge/recall_sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSOPs)))

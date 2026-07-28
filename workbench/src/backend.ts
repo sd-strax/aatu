@@ -58,12 +58,42 @@ export interface InvestigationSummary {
   state: string;
 }
 
+/** The verdict of record (mirrors server.VerdictView) — absent when none. */
+export interface Verdict {
+  disposition: string; // BENIGN | SUSPICIOUS | MALICIOUS
+  rationale?: string;
+  verdictAt: string;
+}
+
 /** A single investigation's detail (mirrors server.InvestigationView). */
 export interface InvestigationDetail {
   id: string;
   title: string;
   state: string;
   lastEventSequence: number;
+  verdict?: Verdict;
+}
+
+/** One pinned-evidence row (mirrors server.PinView). */
+export interface PinRow {
+  interpretationId: string;
+  finding: string;
+  inputRefs: string[];
+  actor: string; // HUMAN | AI_DELEGATED | SYSTEM
+  pinnedAt: string;
+  superseded: boolean;
+}
+
+/** One opened citation (mirrors server.EvidenceView). */
+export interface EvidenceDoc {
+  ref: string;
+  kind: string; // "stix" | "ocsf"
+  type: string;
+  payload: unknown;
+  classUid?: number;
+  time?: string;
+  recordedAt?: string;
+  sourceTool?: string;
 }
 
 /** One prediction under a hypothesis (mirrors server.PredictionView). */
@@ -157,6 +187,14 @@ export interface ActionRow {
    * the engine checks lazily at the approve attempt.
    */
   expired: boolean;
+  /** The approval deadline (ISO), for the live countdown. */
+  expiresAt?: string;
+  /** REVERSIBLE | BEST_EFFORT | IRREVERSIBLE — frozen at request time. */
+  reversibility?: string;
+  /** The blast-radius escalator raised this above the type's default tier. */
+  tierEscalated: boolean;
+  /** Cited evidence — each ref opens (02 §2.8). */
+  evidenceRefs: string[];
 }
 
 /** Where an approve/reject left the action (mirrors server.ActionDecisionResponse). */
@@ -172,6 +210,7 @@ interface RawInvestigation {
   title: string;
   status: string;
   last_event_sequence?: number;
+  verdict?: { disposition?: string; rationale?: string; verdict_at?: string };
 }
 
 /** Raw server.HypothesisView, as served under {hypotheses: [...]}. */
@@ -373,6 +412,11 @@ export class BackendClient {
       title: r.title || "(untitled)",
       state: r.status,
       lastEventSequence: r.last_event_sequence ?? 0,
+      verdict: r.verdict?.disposition ? {
+        disposition: r.verdict.disposition,
+        rationale: r.verdict.rationale,
+        verdictAt: r.verdict.verdict_at ?? "",
+      } : undefined,
     };
   }
 
@@ -456,6 +500,9 @@ export class BackendClient {
       required_mode?: string;
       expires_at?: string;
       targets?: { entity_ref?: string; resolved_identifier?: string }[];
+      reversibility?: string;
+      tier_escalated?: boolean;
+      evidence_refs?: string[];
     }
     const body = await this.authedGet<{ actions?: Raw[] }>(
       `/api/investigations/${encodeURIComponent(investigationId)}/actions`,
@@ -481,8 +528,91 @@ export class BackendClient {
         pending,
         pendingLabel,
         expired: Number.isFinite(expiry) && Date.now() > expiry,
+        expiresAt: a.expires_at,
+        reversibility: a.reversibility,
+        tierEscalated: a.tier_escalated ?? false,
+        evidenceRefs: a.evidence_refs ?? [],
       };
     });
+  }
+
+  /** GET /api/investigations/{id}/pins — the pinned-evidence fold. */
+  async pins(id: string): Promise<PinRow[]> {
+    interface Raw {
+      interpretation_id?: string;
+      finding?: string;
+      input_refs?: string[];
+      actor?: string;
+      pinned_at?: string;
+      superseded?: boolean;
+    }
+    const body = await this.authedGet<{ pins?: Raw[] }>(
+      `/api/investigations/${encodeURIComponent(id)}/pins`,
+    );
+    return (body.pins ?? []).map((p) => ({
+      interpretationId: p.interpretation_id ?? "",
+      finding: p.finding ?? "",
+      inputRefs: p.input_refs ?? [],
+      actor: p.actor ?? "HUMAN",
+      pinnedAt: p.pinned_at ?? "",
+      superseded: p.superseded ?? false,
+    }));
+  }
+
+  /**
+   * Pin evidence: an evidence-pin interpretation on the HUMAN token — the
+   * analyst's curation act (01 §Pinned evidence).
+   */
+  async pinEvidence(investigationId: string, finding: string, refs: string[]): Promise<void> {
+    await this.authedPost("/api/interpretations", {
+      investigation_ref: investigationId,
+      interpretation_type: "evidence-pin",
+      input_refs: refs,
+      rationale: finding,
+    });
+  }
+
+  /** Record/revise the verdict of record (01 §Verdict). Human token. */
+  async recordVerdict(
+    investigationId: string,
+    disposition: string,
+    rationale: string,
+    refs: string[],
+  ): Promise<void> {
+    await this.authedPost("/api/interpretations", {
+      investigation_ref: investigationId,
+      interpretation_type: "verdict",
+      verdict: { disposition },
+      input_refs: refs,
+      rationale,
+    });
+  }
+
+  /** POST /api/interpretations/{id}/supersede — un-pin / retraction. */
+  async supersedeInterpretation(interpretationId: string, investigationId: string, reason: string): Promise<void> {
+    await this.authedPost(
+      `/api/interpretations/${encodeURIComponent(interpretationId)}/supersede`,
+      { investigation_ref: investigationId, reason },
+    );
+  }
+
+  /** GET /api/evidence/{ref} — citation-open (02 §2.8). */
+  async evidence(ref: string): Promise<EvidenceDoc> {
+    interface Raw {
+      ref?: string; kind?: string; type?: string; payload?: unknown;
+      class_uid?: number; time?: string; recorded_at?: string; source_tool?: string;
+    }
+    const r = await this.authedGet<Raw>(`/api/evidence/${encodeURIComponent(ref)}`);
+    return {
+      ref: r.ref ?? ref,
+      kind: r.kind ?? "",
+      type: r.type ?? "",
+      payload: r.payload,
+      classUid: r.class_uid,
+      time: r.time,
+      recordedAt: r.recorded_at,
+      sourceTool: r.source_tool,
+    };
   }
 
   /**

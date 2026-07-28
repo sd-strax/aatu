@@ -126,6 +126,17 @@ func (b *Backend) capabilityInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Eager promotion at ingest (03 §4.13): the telemetry + normalized objects
+	// are persisted before the refs leave the building — a ref the caller cites
+	// must be openable later (design/ui 02 §2.8). Persist failure fails the
+	// invocation rather than minting dangling citations.
+	if b.cfg.Handler != nil {
+		if err := persistInvokeResult(r, b.cfg.Handler.DB(), res); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, verb+": persist results: "+err.Error())
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, buildInvokeResponse(verb, res))
 }
 

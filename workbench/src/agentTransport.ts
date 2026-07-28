@@ -39,11 +39,13 @@ export interface TurnProgress {
   onTextDelta(text: string): void;
   onToolCall(name: string, input: unknown): void;
   /**
-   * coverage/eventCount are distilled sidecar-side from the FULL result
+   * coverage/eventCount/refs are distilled sidecar-side from the FULL result
    * payload (content is clipped for transport and may not parse). Undefined
-   * when the result is not a capability envelope (e.g. list_actions).
+   * when the result is not a capability envelope (e.g. list_actions). refs
+   * are the envelope's citation ids — what pin-from-result and citation-open
+   * act on.
    */
-  onToolResult(name: string, content: string, isError: boolean, coverage?: string, eventCount?: number): void;
+  onToolResult(name: string, content: string, isError: boolean, coverage?: string, eventCount?: number, refs?: string[]): void;
 }
 
 /** One action awaiting the analyst (mirrors sidecar.pendingAction). */
@@ -236,9 +238,10 @@ export class SidecarTransport implements AgentTransport {
         is_error?: boolean;
         coverage?: string;
         event_count?: number;
+        refs?: string[];
       }) => {
         this.inFlight.get(p?.session_id ?? "")?.onToolResult(
-          p?.name ?? "", p?.content ?? "", p?.is_error ?? false, p?.coverage, p?.event_count,
+          p?.name ?? "", p?.content ?? "", p?.is_error ?? false, p?.coverage, p?.event_count, p?.refs,
         );
       },
     );

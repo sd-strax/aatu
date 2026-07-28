@@ -264,12 +264,14 @@ func (s *service) handleCreateSession(ctx context.Context, raw json.RawMessage) 
 					SessionID: sessionID, Name: name, Content: clipRunes(content, toolResultClip), IsError: isError,
 				}
 				// Summarize from the FULL payload before clipping — the client
-				// renders coverage + event count from these fields, never by
-				// parsing Content (which may be clipped mid-JSON). Absent when
-				// the result is not a capability envelope (e.g. list_actions).
-				if cov, n, ok := summarizeEnvelope(content); ok && !isError {
+				// renders coverage + event count + citation refs from these
+				// fields, never by parsing Content (which may be clipped
+				// mid-JSON). Absent when the result is not a capability
+				// envelope (e.g. list_actions).
+				if cov, n, refs, ok := summarizeEnvelope(content); ok && !isError {
 					note.Coverage = cov
 					note.EventCount = &n
+					note.Refs = refs
 				}
 				s.conn.Notify("turn/tool_result", note)
 			},
@@ -360,21 +362,31 @@ type turnToolResultNote struct {
 	// events") is distinguishable from not-an-envelope.
 	Coverage   string `json:"coverage,omitempty"`
 	EventCount *int   `json:"event_count,omitempty"`
+	// Refs are the envelope's citation ids (observed-data, entities, raw
+	// events) — what the client's pin-from-result and citation-open surfaces
+	// act on (design/ui 02 §2.8), extracted pre-clip like the ticker fields.
+	Refs []string `json:"refs,omitempty"`
 }
 
 // summarizeEnvelope distills a capability-envelope result into the ticker
-// fields: its coverage classification and event count. ok=false when the
-// payload is not an envelope (a plain error string, or a non-capability tool
-// result like list_actions).
-func summarizeEnvelope(content string) (coverage string, eventCount int, ok bool) {
+// fields: its coverage classification, event count, and citation refs.
+// ok=false when the payload is not an envelope (a plain error string, or a
+// non-capability tool result like list_actions).
+func summarizeEnvelope(content string) (coverage string, eventCount int, refs []string, ok bool) {
 	var env struct {
-		Coverage string            `json:"coverage"`
-		Events   []json.RawMessage `json:"events"`
+		Coverage         string            `json:"coverage"`
+		Events           []json.RawMessage `json:"events"`
+		ObservedDataRefs []string          `json:"observed_data_refs"`
+		EntityRefs       []string          `json:"entity_refs"`
+		OcsfEventRefs    []string          `json:"ocsf_event_refs"`
 	}
 	if err := json.Unmarshal([]byte(content), &env); err != nil || env.Coverage == "" {
-		return "", 0, false
+		return "", 0, nil, false
 	}
-	return env.Coverage, len(env.Events), true
+	refs = append(refs, env.ObservedDataRefs...)
+	refs = append(refs, env.EntityRefs...)
+	refs = append(refs, env.OcsfEventRefs...)
+	return env.Coverage, len(env.Events), refs, true
 }
 
 func (s *service) handleTurn(ctx context.Context, raw json.RawMessage) (any, error) {
