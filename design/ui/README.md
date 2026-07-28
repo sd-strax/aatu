@@ -1,29 +1,55 @@
-# design/ui — workbench UI specifications
+# design/ui — Workbench UI Specification
 
-The visual and interaction specs for the analyst workbench: multiple documents
-describing the UI surfaces under a top-down architecture model. Entry point is
-`00-architecture.md` (the shared vocabulary and the model the per-surface docs
-hang off), then one numbered document per surface.
+The complete UX/design specification for the **reckon VS Code workbench**: an AI-native SOC
+investigation environment. It covers the full lifecycle — alert → investigation → federated
+enrichment → verdict → remediation → coordination → closure.
 
-## How this subtree relates to the rest of `design/`
+**Read `00-backend-binding.md` first.** It is the authority layer over this package: the
+sheets specify how surfaces look and behave; the binding specifies what feeds every element
+and which engine vocabulary it speaks. Where a sheet and the binding disagree, the binding
+wins — the engine's data model wins in all respects in the UI.
 
-- **`design/13-workbench.md` stays authoritative for *what exists*.** The
-  surface inventory and phasing (`13 §4`), the workbench discipline (`13 §3`),
-  and the substrate decision (`13 §2`) are owned there. Documents here own
-  *how surfaces look and behave*. A surface described here that is not in
-  `13 §4`'s inventory is a scope change to make in `13` first, not a silent
-  fork.
-- **Cross-references point out of this subtree, never into it.** UI docs cite
-  engine specs by section (`03 §6.3` capability health, `04 §5` approvals,
-  `01` reasoning primitives) and name the endpoints that feed each element.
-  Engine specs never depend on UI docs.
-- **Every rendered element names its data source.** An element with no serving
-  endpoint or spec section is a flagged gap, not an implication that one
-  exists — gaps go in the doc's "Open questions" section.
+The package originated as a high-fidelity standalone prototype (since removed — the specs
+are the distillation and stand alone). Fidelity is final: colors, typography, spacing,
+radii, motion, and component states are specified exactly in `01-design-system.md`,
+expressed through VS Code theme variables where noted.
 
-## Conventions
+## Read in this order
 
-Same as the top-level specs: framing/scope → out-of-scope → numbered sections
-→ end-of-spec marker; cross-reference by section number. Same public-OSS
-posture as everything in this repo: architectural and design facts only — no
-team-shape framing, no design-review provenance (see `CLAUDE.md`).
+| File | Contents |
+|---|---|
+| `00-backend-binding.md` | **The authority layer** — engine bindings, vocabularies, gaps, open questions |
+| `01-design-system.md` | Tokens: color, type, spacing, radius, motion, entity palette, theming |
+| `02-investigation-core.md` | Investigation document rendering, Investigation Panel, tool calls, entities, slash commands, lifecycle |
+| `03-remediation.md` | Action cards, trust tiers, approval flows, plan block, closure |
+| `04-comms.md` | Comms cards, replies, follow-ups, escalation, incident channel (Phase F — binding §4) |
+| `05-data-model.md` | State shapes and the reference scenario (data authority: binding §2) |
+| `06-vscode-surface-map.md` | Which surface is webview vs native API; commands, keybindings, contributions |
+| `07-build-order.md` | Implementation sequence with acceptance criteria |
+| `impl-spec/` | Engineering layer: process boundaries, state ownership, event contracts |
+
+## Non-negotiables (the design fails without these)
+
+1. **The record is the engine's.** The event-sourced aggregate is the source of truth; every
+   surface renders it. The portable markdown artifact is a backend-rendered export
+   (binding §1).
+2. **Everything streams.** Tokens, tool-call status transitions, and document growth render
+   incrementally. p50 to first token < 3s. Never a spinner over a blank panel.
+3. **Tool calls are never a black box.** Tool name, exact query, normalized summary, coverage
+   signal, and raw JSON are always one click away.
+4. **Nothing executes without explicit approval.** T2 requires confirm; T3 requires the typed
+   challenge; two-party is a policy-assigned mode (binding §2.5). Comms require a mandatory
+   pre-send preview.
+5. **Analyst contributions are sacred.** Analyst-authored acts enter the record as attributed
+   events and are never overwritten by the AI.
+6. **Verdict is the midpoint, not the end.** The investigation stays open through remediation
+   and coordination until every action and comms thread reaches a terminal state.
+
+## Seam rules
+
+- `design/13-workbench.md` stays authoritative for *what exists* (surface inventory, phasing,
+  workbench discipline). Sheets here own how surfaces look and behave; a surface not in
+  `13 §4` is a scope change to make there first.
+- Cross-references point out of this subtree (engine specs, endpoints), never into it.
+- Every rendered element names its data source; an element with none is a flagged gap in
+  `00-backend-binding.md §6`, not an implication that one exists.
