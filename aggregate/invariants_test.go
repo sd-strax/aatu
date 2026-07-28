@@ -39,7 +39,12 @@ func TestApplyCommand_LifecyclePairing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newTestEnvelope("alice")
-			events, err := applyCommand(env, tc.cmd, pairedState(env, tc.fromStatus, 3))
+			st := pairedState(env, tc.fromStatus, 3)
+			if tc.name == "conclude" {
+				// The conclude gate requires a verdict of record (01).
+				st.Verdicts = []verdictEntry{{InterpID: uuid.New(), Disposition: VerdictMalicious}}
+			}
+			events, err := applyCommand(env, tc.cmd, st)
 			if err != nil {
 				t.Fatalf("applyCommand: %v", err)
 			}

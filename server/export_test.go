@@ -47,14 +47,30 @@ func postExport(t *testing.T, b *Backend, token, id string) (*http.Response, Exp
 	return resp, out
 }
 
-// concludeInvestigation drives an already-ACTIVE investigation to CONCLUDED.
+// concludeInvestigation drives an already-ACTIVE investigation to CONCLUDED,
+// satisfying the conclude gate on the way (pin → verdict → conclude, 01).
 func concludeInvestigation(t *testing.T, invID uuid.UUID) {
 	t.Helper()
-	env := aggregate.Envelope{
-		AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
-		Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
+	env := func() aggregate.Envelope {
+		return aggregate.Envelope{
+			AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
+			Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
 	}
-	if _, err := testHandler.Handle(context.Background(), env, aggregate.ConcludeInvestigation{
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationEvidencePin,
+		InputRefs: []string{"observed-data--x"}, Rationale: "load-bearing finding",
+	}); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationVerdict,
+		Verdict:   &aggregate.VerdictNode{Disposition: aggregate.VerdictMalicious},
+		InputRefs: []string{"observed-data--x"}, Rationale: "confirmed",
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.ConcludeInvestigation{
 		ReportRef: "report--1", Summary: "done",
 	}); err != nil {
 		t.Fatalf("conclude: %v", err)

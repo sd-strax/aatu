@@ -34,11 +34,13 @@ const (
 const (
 	InterpretationExtraction   = "extraction"
 	InterpretationSighting     = "sighting"
+	InterpretationEvidencePin  = "evidence-pin"
 	InterpretationHypothesis   = "hypothesis"
 	InterpretationSupport      = "support"
 	InterpretationRefutation   = "refutation"
 	InterpretationInconclusive = "inconclusive"
 	InterpretationPrediction   = "prediction"
+	InterpretationVerdict      = "verdict"
 	InterpretationPivot        = "pivot"
 	InterpretationOther        = "other"
 )
@@ -50,11 +52,13 @@ const (
 var reasoningTypes = map[string]bool{
 	InterpretationExtraction:   true,
 	InterpretationSighting:     true,
+	InterpretationEvidencePin:  true,
 	InterpretationHypothesis:   true,
 	InterpretationSupport:      true,
 	InterpretationRefutation:   true,
 	InterpretationInconclusive: true,
 	InterpretationPrediction:   true,
+	InterpretationVerdict:      true,
 	InterpretationPivot:        true,
 	InterpretationOther:        true,
 }
@@ -134,6 +138,11 @@ type InterpretationRecorded struct {
 	HypothesisTransition *HypothesisTransitionRecorded `json:"hypothesis_transition,omitempty"`
 	Prediction           *PredictionRecorded           `json:"prediction,omitempty"`
 	PredictionTransition *PredictionTransitionRecorded `json:"prediction_transition,omitempty"`
+
+	// Verdict content on a type=verdict act (01 §Verdict): the disposition of
+	// record, folded (latest non-superseded wins) and projected onto
+	// investigation_current.
+	Verdict *VerdictRecorded `json:"verdict,omitempty"`
 }
 
 // interpretationEvent builds an InterpretationRecorded event for env at seqNo,
@@ -213,6 +222,14 @@ type RecordInterpretation struct {
 	PredictionRef    string          `json:"prediction_ref,omitempty"`
 	PredictionStatus string          `json:"prediction_status,omitempty"`
 	TestResultRefs   []string        `json:"test_result_refs,omitempty"`
+
+	// Verdict payload for type=verdict (01 §Verdict). AIVerdictConfigRef is
+	// the AI-verdict dial's stamp: the SERVER sets it — exclusively when the
+	// tenant configuration enables AI verdicts — and the aggregate rejects an
+	// AI-delegated verdict without it (structural default-deny; the ref rides
+	// the event so the audit trail shows what authorized the delegate).
+	Verdict            *VerdictNode `json:"verdict,omitempty"`
+	AIVerdictConfigRef string       `json:"ai_verdict_config_ref,omitempty"`
 }
 
 // Kind returns "RecordInterpretation".
@@ -267,6 +284,9 @@ func (c RecordInterpretation) Validate(env Envelope) error {
 			return fmt.Errorf("RecordInterpretation: tool call %q has no tool_name", c.ToolCalls[i].CallID)
 		}
 	}
+	if err := validateVerdictShape(c); err != nil {
+		return err
+	}
 	return validateReasoningNodeShape(c)
 }
 
@@ -318,6 +338,11 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 	// validate against folded node state and enrich the event with the node
 	// content the projector materializes (D.2).
 	if err := applyReasoningNodes(env, state, c, &rec); err != nil {
+		return nil, err
+	}
+	// Verdict guards (01 §Verdict): pinned evidence required; AI-delegated
+	// verdicts denied without the tenant-dial stamp.
+	if err := applyVerdictAct(env, state, c, &rec); err != nil {
 		return nil, err
 	}
 

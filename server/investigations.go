@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,6 +19,18 @@ type InvestigationView struct {
 	Title             string `json:"title"`
 	Status            string `json:"status"`
 	LastEventSequence int64  `json:"last_event_sequence"`
+
+	// Verdict is the disposition of record (01 §Verdict), absent when none —
+	// the honest zero: no stored "pending".
+	Verdict *VerdictView `json:"verdict,omitempty"`
+}
+
+// VerdictView is the verdict fold as served.
+type VerdictView struct {
+	Disposition      string    `json:"disposition"`
+	Rationale        string    `json:"rationale,omitempty"`
+	VerdictAt        time.Time `json:"verdict_at"`
+	InterpretationID string    `json:"interpretation_id,omitempty"`
 }
 
 // CreateInvestigationRequest is the body of POST /api/investigations.
@@ -84,12 +97,21 @@ func (b *Backend) getInvestigation(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, InvestigationView{
+	view := InvestigationView{
 		AggregateID:       ic.AggregateID.String(),
 		Title:             ic.Title,
 		Status:            ic.Status,
 		LastEventSequence: ic.LastEventSequence,
-	})
+	}
+	if ic.VerdictDisposition != "" {
+		view.Verdict = &VerdictView{
+			Disposition:      ic.VerdictDisposition,
+			Rationale:        ic.VerdictRationale,
+			VerdictAt:        ic.VerdictAt.Time,
+			InterpretationID: ic.VerdictInterpretationID.String(),
+		}
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // createInvestigation dispatches a CreateInvestigation command via the

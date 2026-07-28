@@ -22,7 +22,19 @@ type Config struct {
 	Telemetry  Telemetry  `yaml:"telemetry"`
 	Capability Capability `yaml:"capability"`
 	Export     Export     `yaml:"export"`
+	Trust      Trust      `yaml:"trust"`
 	Paid       Paid       `yaml:"paid"`
+}
+
+// Trust holds the tenant trust-posture dials (01-domain-model.md: trust
+// posture is configuration, not a fixed property of the model).
+type Trust struct {
+	// AIVerdict opens the AI-verdict dial (01 §Verdict): when true, an
+	// AI-delegated actor may record the investigation's disposition of record.
+	// Default false — AI verdicts are denied by default; the door opens by
+	// configuration, never by code change, and the enabling ref is recorded on
+	// the verdict event.
+	AIVerdict bool `yaml:"ai_verdict"`
 }
 
 // Export configures the post-conclusion export bundle (design 07). Tenant

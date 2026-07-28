@@ -116,6 +116,7 @@ func TestMembership_RejectedWhenConcluded(t *testing.T) {
 	aggID := uuid.New()
 	mustHandle(t, h, cmdEnv(aggID), CreateInvestigation{Title: "INV-MC"})
 	mustHandle(t, h, cmdEnv(aggID), ActivateInvestigation{})
+	recordVerdictFixture(t, h, aggID)
 	mustHandle(t, h, cmdEnv(aggID), ConcludeInvestigation{ReportRef: "report--c"})
 
 	if _, err := h.Handle(ctx, cmdEnv(aggID), AddMember{StixObjectRef: "url--1"}); err == nil {

@@ -100,6 +100,15 @@ type aggregateState struct {
 	Actions       map[uuid.UUID]actionState  // per-x-action folded state (C.1)
 	Hypotheses    map[string]hypothesisState // per-x-hypothesis folded state, keyed by STIX id (D.2)
 	Predictions   map[string]predictionState // per-x-prediction folded state, keyed by STIX id (D.2)
+
+	// Interpretation bookkeeping for supersession + the pin/verdict folds
+	// (01 §Pinned evidence / §Verdict): every recorded interpretation's type
+	// (supersede targets must exist and be free-standing), the active-pin set,
+	// the superseded set, and the ordered verdict acts.
+	Interpretations   map[uuid.UUID]string // interpretation id → type
+	SupersededInterps map[uuid.UUID]bool
+	Pins              map[uuid.UUID]bool // evidence-pin id → still active
+	Verdicts          []verdictEntry     // in fold order; last non-superseded wins
 }
 
 // foldState replays an event stream into the current aggregateState. Only
@@ -111,9 +120,12 @@ type aggregateState struct {
 // authoritative state.
 func foldState(events []Event) (aggregateState, error) {
 	s := aggregateState{
-		Actions:     make(map[uuid.UUID]actionState),
-		Hypotheses:  make(map[string]hypothesisState),
-		Predictions: make(map[string]predictionState),
+		Actions:           make(map[uuid.UUID]actionState),
+		Hypotheses:        make(map[string]hypothesisState),
+		Predictions:       make(map[string]predictionState),
+		Interpretations:   make(map[uuid.UUID]string),
+		SupersededInterps: make(map[uuid.UUID]bool),
+		Pins:              make(map[uuid.UUID]bool),
 	}
 	for _, e := range events {
 		s.Seq = e.SequenceNo
@@ -157,6 +169,23 @@ func foldState(events []Event) (aggregateState, error) {
 				return aggregateState{}, fmt.Errorf("fold interpretation.recorded seq %d: %w", e.SequenceNo, err)
 			}
 			foldReasoningEvent(&s, rec)
+			s.Interpretations[rec.InterpretationID] = rec.InterpretationType
+			switch rec.InterpretationType {
+			case InterpretationEvidencePin:
+				s.Pins[rec.InterpretationID] = true
+			case InterpretationVerdict:
+				if rec.Verdict != nil {
+					s.Verdicts = append(s.Verdicts, verdictEntry{
+						InterpID: rec.InterpretationID, Disposition: rec.Verdict.Disposition,
+					})
+				}
+			}
+		case EventTypeInterpretationSuperseded:
+			var p InterpretationSupersededPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				return aggregateState{}, fmt.Errorf("fold interpretation.superseded seq %d: %w", e.SequenceNo, err)
+			}
+			foldSupersession(&s, p)
 		}
 	}
 	return s, nil
@@ -270,6 +299,8 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return applyReversalAttempt(env, state, c)
 	case RecordInterpretation:
 		return applyRecordInterpretation(env, state, c)
+	case SupersedeInterpretation:
+		return applySupersedeInterpretation(env, state, c)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd.Kind())
 	}
@@ -288,8 +319,12 @@ func aiAllowed(cmd Command) bool {
 	case CreateInvestigation,
 		ActivateInvestigation, PauseInvestigation, ResumeInvestigation,
 		AddMember, RemoveMember, AttachEvidence,
-		RecordInterpretation,
+		RecordInterpretation, SupersedeInterpretation,
 		RequestAction:
+		// RecordInterpretation admission does NOT make every act AI-legal: the
+		// per-act guards inside it still apply (human-only hypothesis ack; the
+		// AI-verdict dial's default-deny). SupersedeInterpretation is reasoning
+		// correction — annotate-tier, same footing as recording.
 		return true
 	default:
 		return false

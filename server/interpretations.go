@@ -40,6 +40,16 @@ type RecordInterpretationBody struct {
 	PredictionRef    string          `json:"prediction_ref,omitempty"` // prediction outcome
 	PredictionStatus string          `json:"prediction_status,omitempty"`
 	TestResultRefs   []string        `json:"test_result_refs,omitempty"`
+
+	// Verdict payload for type=verdict (01 §Verdict): the disposition of
+	// record. The AI-verdict dial is applied SERVER-side from tenant config —
+	// there is deliberately no client field for it.
+	Verdict *VerdictBody `json:"verdict,omitempty"`
+}
+
+// VerdictBody is the client shape of a verdict act.
+type VerdictBody struct {
+	Disposition string `json:"disposition"` // BENIGN | SUSPICIOUS | MALICIOUS
 }
 
 // HypothesisBody is the client shape of a new hypothesis.
@@ -145,6 +155,21 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		PredictionRef:      body.PredictionRef,
 		PredictionStatus:   body.PredictionStatus,
 		TestResultRefs:     body.TestResultRefs,
+	}
+	if body.Verdict != nil {
+		cmd.Verdict = &aggregate.VerdictNode{Disposition: body.Verdict.Disposition}
+	}
+	// The AI-verdict dial (01 §Verdict): an AI-delegated verdict is refused
+	// unless tenant config enables it; when enabled, the enabling config ref is
+	// stamped onto the command — the aggregate rejects an AI verdict without
+	// the stamp (structural default-deny), and the ref rides the audit event.
+	if body.InterpretationType == aggregate.InterpretationVerdict && actor.IsAIDelegated() {
+		if !b.cfg.AllowAIVerdict {
+			writeJSONError(w, http.StatusForbidden,
+				"AI-delegated verdicts are denied by default: the tenant trust dial (trust.ai_verdict) is not enabled — record the verdict as the analyst, or enable the dial")
+			return
+		}
+		cmd.AIVerdictConfigRef = "trust.ai_verdict"
 	}
 
 	// Node creations: mint the id server-side and report it back as node_id.

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 // InvestigationCurrent is the materialized basic state of an investigation:
@@ -17,6 +19,14 @@ type InvestigationCurrent struct {
 	Status            string
 	ConclusionRef     string // empty unless concluded
 	LastEventSequence int64
+
+	// The verdict of record (01 §Verdict) — the fold over verdict-typed
+	// interpretation acts, maintained by VerdictPinProjector. All empty when
+	// the investigation has no verdict (the honest zero).
+	VerdictDisposition     string
+	VerdictRationale       string
+	VerdictAt              sql.NullTime
+	VerdictInterpretationID uuid.UUID
 }
 
 // InvestigationCurrentProjector populates the investigation_current table.
@@ -71,7 +81,7 @@ func (InvestigationCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt 
 	case EventTypeArchived:
 		return setStatus(ctx, tx, evt, StatusArchived)
 
-	case EventTypeInterpretationRecorded,
+	case EventTypeInterpretationRecorded, EventTypeInterpretationSuperseded,
 		EventTypeMemberAdded, EventTypeMemberRemoved, EventTypeEvidenceAttached:
 		// These don't change basic state (the reasoning thread and membership
 		// projections land separately); advance the cursor so
@@ -136,12 +146,17 @@ func (InvestigationCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) erro
 // aggregate, or sql.ErrNoRows if no event has yet been projected.
 func LoadInvestigationCurrent(ctx context.Context, db *sql.DB, aggID AggregateID) (InvestigationCurrent, error) {
 	var ic InvestigationCurrent
-	var conclusionRef sql.NullString
+	var conclusionRef, vDisp, vRat sql.NullString
+	var vID uuid.NullUUID
 	err := db.QueryRowContext(ctx, `
-		SELECT aggregate_id, title, status, conclusion_ref, last_event_sequence
+		SELECT aggregate_id, title, status, conclusion_ref, last_event_sequence,
+		       verdict_disposition, verdict_rationale, verdict_at, verdict_interpretation_id
 		FROM investigation_current
 		WHERE aggregate_id = $1
-	`, aggID).Scan(&ic.AggregateID, &ic.Title, &ic.Status, &conclusionRef, &ic.LastEventSequence)
+	`, aggID).Scan(&ic.AggregateID, &ic.Title, &ic.Status, &conclusionRef, &ic.LastEventSequence,
+		&vDisp, &vRat, &ic.VerdictAt, &vID)
 	ic.ConclusionRef = conclusionRef.String
+	ic.VerdictDisposition, ic.VerdictRationale = vDisp.String, vRat.String
+	ic.VerdictInterpretationID = vID.UUID
 	return ic, err
 }

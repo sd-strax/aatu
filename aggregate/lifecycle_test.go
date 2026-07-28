@@ -30,6 +30,26 @@ func mustHandle(t *testing.T, h *Handler, env Envelope, cmd Command) Result {
 	return res
 }
 
+// recordVerdictFixture satisfies the conclude gate: pin one evidence item,
+// then record a verdict citing it (01 §Verdict — no conclude without a
+// verdict, no verdict without a pin).
+func recordVerdictFixture(t *testing.T, h *Handler, aggID uuid.UUID) {
+	t.Helper()
+	mustHandle(t, h, cmdEnv(aggID), RecordInterpretation{
+		InterpretationID:   uuid.New(),
+		InterpretationType: InterpretationEvidencePin,
+		InputRefs:          []string{"observed-data--fixture"},
+		Rationale:          "load-bearing finding",
+	})
+	mustHandle(t, h, cmdEnv(aggID), RecordInterpretation{
+		InterpretationID:   uuid.New(),
+		InterpretationType: InterpretationVerdict,
+		Verdict:            &VerdictNode{Disposition: VerdictMalicious},
+		InputRefs:          []string{"observed-data--fixture"},
+		Rationale:          "confirmed by the pinned finding",
+	})
+}
+
 func assertProjection(t *testing.T, aggID uuid.UUID, wantStatus, wantConclusion string) {
 	t.Helper()
 	ic, err := LoadInvestigationCurrent(context.Background(), testDB, aggID)
@@ -67,6 +87,7 @@ func TestLifecycle_HappyPath(t *testing.T) {
 	mustHandle(t, h, cmdEnv(aggID), ResumeInvestigation{})
 	assertProjection(t, aggID, StatusActive, "")
 
+	recordVerdictFixture(t, h, aggID)
 	mustHandle(t, h, cmdEnv(aggID), ConcludeInvestigation{ReportRef: "report--a", Summary: "true positive"})
 	assertProjection(t, aggID, StatusConcluded, "report--a")
 
@@ -174,6 +195,7 @@ func TestLifecycle_ArchivedIsTerminal(t *testing.T) {
 	aggID := uuid.New()
 	mustHandle(t, h, cmdEnv(aggID), CreateInvestigation{Title: "INV-4"})
 	mustHandle(t, h, cmdEnv(aggID), ActivateInvestigation{})
+	recordVerdictFixture(t, h, aggID)
 	mustHandle(t, h, cmdEnv(aggID), ConcludeInvestigation{ReportRef: "report--x"})
 	mustHandle(t, h, cmdEnv(aggID), ArchiveInvestigation{})
 
@@ -199,6 +221,7 @@ func TestLifecycle_ReplayIdentical(t *testing.T) {
 	aggID := uuid.New()
 	mustHandle(t, h, cmdEnv(aggID), CreateInvestigation{Title: "INV-5"})
 	mustHandle(t, h, cmdEnv(aggID), ActivateInvestigation{})
+	recordVerdictFixture(t, h, aggID)
 	mustHandle(t, h, cmdEnv(aggID), ConcludeInvestigation{ReportRef: "report--z", Summary: "s"})
 
 	before, err := LoadInvestigationCurrent(ctx, testDB, aggID)

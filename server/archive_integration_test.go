@@ -86,7 +86,20 @@ func TestArchiveBundle_EndToEnd(t *testing.T) {
 	// A succeeded action (exercises the action summary + more events).
 	succeededAction(t, invID)
 
-	// Conclude.
+	// Conclude (via pin + verdict — the conclude gate, 01).
+	if _, err := testHandler.Handle(ctx, env(""), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationEvidencePin,
+		InputRefs: []string{"observed-data--x"}, Rationale: "beaconing evidence",
+	}); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if _, err := testHandler.Handle(ctx, env(""), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationVerdict,
+		Verdict:   &aggregate.VerdictNode{Disposition: aggregate.VerdictMalicious},
+		InputRefs: []string{"observed-data--x"}, Rationale: "confirmed C2",
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
 	if _, err := testHandler.Handle(ctx, env(""), aggregate.ConcludeInvestigation{
 		ReportRef: "report--1", Summary: "Confirmed C2; host isolated.",
 	}); err != nil {

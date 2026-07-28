@@ -131,6 +131,12 @@ type BackendConfig struct {
 	// ExportAutoOnConclude fires the post-conclusion export automatically when an
 	// investigation concludes (07 §2.3). When false, export is on-demand only.
 	ExportAutoOnConclude bool
+
+	// AllowAIVerdict is the AI-verdict trust dial (01 §Verdict; config
+	// trust.ai_verdict). Default false: an AI-delegated verdict is refused
+	// here AND at the aggregate (the command carries the enabling config ref
+	// only when this is true — structural default-deny).
+	AllowAIVerdict bool
 }
 
 // Backend is the in-process HTTP server.
@@ -359,6 +365,12 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.interpretationsCollection),
 	))
 
+	// POST /api/interpretations/{id}/supersede — retraction/un-pin
+	// (01 §Interpretation lifecycle and correction). Analyst role.
+	api.Handle("/interpretations/", authz.RequireAuth(verifier)(
+		http.HandlerFunc(b.interpretationsItem),
+	))
+
 	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval.
 	if b.cfg.Knowledge != nil {
 		api.Handle("/knowledge/recall_sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSOPs)))
@@ -533,6 +545,15 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationThread)
+		default:
+			methodNotAllowed(w, "GET")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/pins") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationPins)
 		default:
 			methodNotAllowed(w, "GET")
 		}

@@ -217,6 +217,7 @@ func serve(cfg config.Config) error {
 		aggregate.InvestigationCurrentProjector{},
 		aggregate.ActionCurrentProjector{},
 		aggregate.ReasoningNodeProjector{},
+		aggregate.VerdictPinProjector{},
 	).WithSideStore(aggregate.NewSideStore(aggDB))
 
 	// The knowledge service uses its own database (reckon_knowledge); open it
@@ -308,6 +309,7 @@ func serve(cfg config.Config) error {
 		TenantNamespace:         cfg.Capability.TenantNamespace,
 		ExportIncludeSideStores: cfg.Export.IncludeSideStores,
 		ExportAutoOnConclude:    cfg.Export.AutoOnConclude,
+		AllowAIVerdict:          cfg.Trust.AIVerdict,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()

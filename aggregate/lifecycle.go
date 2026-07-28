@@ -192,6 +192,12 @@ func concludeEvents(env Envelope, state aggregateState, c ConcludeInvestigation)
 	if state.Status != StatusActive {
 		return nil, fmt.Errorf("cannot conclude investigation %s: it is %s, not %s", env.AggregateID, state.Status, StatusActive)
 	}
+	// The conclusion consumes the verdict of record (01 §Extension 2
+	// invariants): concluding an investigation that was never judged is
+	// refused. Verdict is the midpoint; conclude is the end that requires it.
+	if state.CurrentVerdict() == "" {
+		return nil, fmt.Errorf("cannot conclude investigation %s: no verdict of record — record a verdict (with pinned evidence) first", env.AggregateID)
+	}
 	interpID := uuid.New()
 	payload, err := json.Marshal(InvestigationConcluded{
 		ReportRef: c.ReportRef, Summary: c.Summary, LifecycleInterpretationRef: interpID,

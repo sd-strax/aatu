@@ -281,6 +281,20 @@ func TestRecordInterpretation_RejectedWhenConcluded(t *testing.T) {
 			Actor: Actor{PrincipalID: "analyst-1"}, OccurredAt: newTestEnvelope("").OccurredAt,
 		}
 	}
+	// The conclude gate needs a verdict (which needs a pin).
+	if _, err := h.Handle(context.Background(), env(), RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: InterpretationEvidencePin,
+		InputRefs: []string{"observed-data--x"}, Rationale: "finding",
+	}); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if _, err := h.Handle(context.Background(), env(), RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: InterpretationVerdict,
+		Verdict:   &VerdictNode{Disposition: VerdictBenign},
+		InputRefs: []string{"observed-data--x"}, Rationale: "nothing further",
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
 	if _, err := h.Handle(context.Background(), env(), ConcludeInvestigation{ReportRef: "report--1"}); err != nil {
 		t.Fatalf("conclude: %v", err)
 	}

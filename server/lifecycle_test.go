@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/module"
 )
 
 // draftInvestigation creates a fresh investigation (DRAFT) through the shared
@@ -62,6 +64,31 @@ func TestLifecycle_ActivateDraft(t *testing.T) {
 	}
 }
 
+// verdictFixture satisfies the conclude gate on an ACTIVE investigation:
+// pin one evidence item, then record a verdict citing it (01 §Verdict).
+func verdictFixture(t *testing.T, invID uuid.UUID) {
+	t.Helper()
+	env := func() aggregate.Envelope {
+		return aggregate.Envelope{
+			AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
+			Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationEvidencePin,
+		InputRefs: []string{"observed-data--x"}, Rationale: "load-bearing finding",
+	}); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationVerdict,
+		Verdict:   &aggregate.VerdictNode{Disposition: aggregate.VerdictMalicious},
+		InputRefs: []string{"observed-data--x"}, Rationale: "confirmed",
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+}
+
 // TestLifecycle_ConcludeFiresExport: concluding an ACTIVE investigation returns
 // 200 and, with auto-on-conclude enabled, fires the post-conclusion pipeline.
 func TestLifecycle_ConcludeFiresExport(t *testing.T) {
@@ -70,6 +97,7 @@ func TestLifecycle_ConcludeFiresExport(t *testing.T) {
 	}
 	resetInvestigations(t)
 	invID := activeInvestigation(t)
+	verdictFixture(t, invID)
 
 	b := newTestBackend(t)
 	b.cfg.TenantNamespace = uuid.NewString()
@@ -104,6 +132,7 @@ func TestLifecycle_ConcludeNoAutoExport(t *testing.T) {
 	}
 	resetInvestigations(t)
 	invID := activeInvestigation(t)
+	verdictFixture(t, invID)
 
 	b := newTestBackend(t) // ExportAutoOnConclude defaults false
 	fake := &fakePipelineStarter{}
