@@ -219,11 +219,17 @@ and flow in the comms sheet carries forward; only the phase and the data authori
 
 1. **Cross-investigation entity appearances** — endpoint over `stix_objects` + grouping
    membership; powers the popover's "appears in N other investigations."
-2. **Evidence pinning** — pin-as-interpretation (`sighting`/`support` with `input_refs`);
-   feeds the verdict gate and pin-from-anywhere.
-3. **Verdict act** — a revisable `conclusion`-typed interpretation (disposition, rationale,
-   evidence refs), with verdict/conclude preconditions enforced engine-side (no verdict
-   without evidence; no conclude with non-terminal actions).
+2. **Evidence pinning** — specified: the `evidence-pin` interpretation type (`01`
+   INTERPRETATION → Pinned evidence). The pinned list is a fold over non-superseded pins;
+   un-pin = supersession. Remaining work is implementation (aggregate + projection +
+   endpoint + surfaces).
+3. **Verdict act** — specified: the `verdict` interpretation type (`01` INTERPRETATION →
+   Verdict). Disposition of record, revisable by appending; requires cited evidence + ≥1
+   pin; conclude requires a verdict (`01` Lifecycle invariants). AI-delegated verdicts are
+   **denied by default behind a tenant configuration dial** (default-deny + configurable
+   opening, the `04 §4` family; same posture as hypothesis adjudication mode) — the door to
+   AI verdicts stays open by config, never by code change, and the enabling config ref rides
+   the audit event. Remaining work is implementation.
 4. **Per-round `step` markers** on the sidecar notification channel (additive; no protocol
    break).
 5. **Live markdown export** — generalize the `design/07` export from post-conclusion to

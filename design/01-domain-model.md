@@ -288,6 +288,9 @@ CONCLUDED  →  ARCHIVED
 **Invariants:**
 
 - `CONCLUDED` requires `conclusion_ref` populated.
+- `ACTIVE → CONCLUDED` requires a **verdict of record** (see the Verdict section under
+  INTERPRETATION): the conclusion consumes the disposition; concluding an investigation that
+  was never judged is refused with the reason.
 - **Reopen** (`CONCLUDED → ACTIVE`) clears `conclusion_ref`; the prior Report is preserved and referenced from the reasoning thread.
 - Each transition emits an Interpretation of type `lifecycle` — **except** the conclude transition (`ACTIVE → CONCLUDED`), which emits its Interpretation as type `conclusion`; the conclusion record doubles as the transition record. The lifecycle event and the Interpretation are written in the **same aggregate transaction** (02-persistence.md §3) with a shared `correlation_id`.
 - `CONCLUDED` accepts new Interpretations **only** when they are (a) `action-*` lifecycle entries for **reversal actions** (see 04-action-authorization.md §9.1 — un-isolating a host weeks after closing the case without reopening), (b) `post_conclusion` entries from the post-conclusion pipeline (07-post-conclusion-outputs.md §9), or (c) `linkage` entries recording cross-investigation relationships discovered after closure. `conclusion_ref` stays set; the reasoning thread continues to grow with the reversal / post-conclusion / linkage trace; the investigation does **NOT** auto-reopen. Any other Interpretation against a `CONCLUDED` investigation requires an explicit reopen. `CONCLUDED` likewise freezes membership and evidence mutations — `MemberAdded` / `MemberRemoved` / `EvidenceAttached` (02-persistence.md §3) are rejected against a `CONCLUDED` investigation; reopen first.
@@ -372,11 +375,13 @@ Referenced by all components.
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `extraction`      | Entity lifted from an OcsfEvent.                                                                                                     |
 | `sighting`        | Sighting created from ObservedData.                                                                                                  |
+| `evidence-pin`    | Analyst curation: the cited `input_refs` are pinned to the investigation's evidence surface (see "Pinned evidence" below).            |
 | `hypothesis`      | `x-hypothesis` proposed (creation; includes AI-PROPOSED → OPEN acknowledgment and non-status field updates).                         |
 | `support`         | `x-hypothesis` status changed to SUPPORTED.                                                                                          |
 | `refutation`      | `x-hypothesis` status changed to REFUTED.                                                                                            |
 | `inconclusive`    | `x-hypothesis` status changed to INCONCLUSIVE or ABANDONED (rationale carries the distinction).                                      |
 | `prediction`      | `x-prediction` proposed.                                                                                                             |
+| `verdict`         | Disposition of record set or revised — benign / suspicious / malicious (see "Verdict" below). Distinct from `conclusion`.            |
 | `conclusion`      | Investigation concluded; final Report referenced from `ConclusionSlot`.                                                              |
 | `pivot`           | Reasoning departed from one entity to pursue a related lead. Underlying telemetry queries are T0; this captures the analytical move. |
 | `lifecycle`       | Investigation state transition (DRAFT / ACTIVE / PAUSED / CONCLUDED / ARCHIVED).                                                     |
@@ -395,6 +400,46 @@ Referenced by all components.
 
 - **Append-only by default.** An Interpretation, once recorded, is the immutable record of one reasoning act.
 - **Supersession (correction)** is supported via the `InterpretationSuperseded` event (02-persistence.md §3): the new Interpretation becomes the current view in the thread, and the superseded one remains visible. There is **no destructive deletion**.
+
+### Pinned evidence
+
+Pinning is **curation, not reasoning**: the analyst (or the agent) marks specific evidence as
+load-bearing for the investigation — "this finding matters." A pin is an Interpretation of
+type `evidence-pin`: `input_refs` cite the pinned evidence (`EvidenceRef` — STIX node or raw
+OcsfEvent), `rationale` carries the finding text as the pinner stated it. No new primitive:
+the pin *is* the reasoning act of citing, and the investigation's pinned-evidence surface is
+a projection over non-superseded `evidence-pin` Interpretations. Un-pinning is supersession,
+never deletion — what was once considered load-bearing remains visible in the thread.
+
+Pins are annotate-tier acts, legal for both actor kinds under the standard delegate model.
+
+### Verdict
+
+The investigation's **disposition of record**: `benign | suspicious | malicious`. Recorded as
+an Interpretation of type `verdict` — `rationale` required, `input_refs` must cite evidence,
+`confidence` optional. There is no stored "pending": an investigation with no verdict act
+simply has no verdict (absence is the honest zero, not an enum value).
+
+- **Verdict is the midpoint, not the end.** Reaching a verdict does not conclude the
+  investigation; remediation and coordination continue against it. The `conclusion`
+  Interpretation and the final Report **consume** the verdict of record at conclude time.
+- **Revisable by appending.** A later `verdict` Interpretation becomes the disposition of
+  record (the fold takes the latest non-superseded act); the prior verdict remains visible in
+  the thread. Verdicts change on new evidence; history is never rewritten.
+- **Precondition — no verdict without evidence.** A `verdict` Interpretation is rejected
+  unless its `input_refs` are non-empty and the investigation has at least one pinned
+  evidence item. Enforced at the aggregate command boundary like every other guard, so no
+  alternate path bypasses it.
+- **Authorship is a trust dial, not a fixed property** — the same posture as hypothesis
+  adjudication mode (see Open Questions). Structurally the act admits both actor kinds; an
+  **AI-delegated verdict is denied by default** and legal only under explicit tenant
+  configuration, enforced at the same aggregate boundary. This is the default-deny +
+  configurable-opening family of 04-action-authorization.md §4 (baseline DENY): the door is
+  not shut — opening it is configuration, recorded in the audit trail (the enabling config
+  ref rides the event), and the human principal remains accountable either way. v0 ships the
+  boolean tenant config, default off; graduation to the versioned-policy family is deferred
+  until field feedback demands finer grain. Deliberately decoupled from action containment:
+  Gate 2 and human approval are identical in both settings.
 
 
 CUSTOM STIX OBJECTS
@@ -607,6 +652,7 @@ ADOPTED VS INVENTED
 - **Custom STIX SCOs:** `x-host`, `x-registry-key`, `x-scheduled-task`, `x-group` — entity types not covered by STIX 2.1 native; identity rules in 03-capability-layer.md §7.2.
 - **Custom STIX relationship types:** `x-supports`, `x-refutes`, `reverses`; plus the normalizer-emitted observation relationships `parent-process-of`, `x-authenticated-to`, `loads`, `member-of-group`, `clicked` (03-capability-layer.md §4.1, §4.2, §4.8, §4.9, §4.11).
 - **Investigation extension structure** — `Seed`, `Lifecycle`, `ReasoningThread`, `ConclusionSlot` layered on top of `Grouping`.
+- **Deliberately NOT invented:** pinned evidence and the verdict are *not* new primitives — both are Interpretation acts (`evidence-pin`, `verdict`) whose investigation-level surfaces (the pinned-evidence list, the disposition of record) are folds over the thread. Making them first-class objects would duplicate what the reasoning thread already records.
 
 
 OPEN QUESTIONS DELIBERATELY LEFT TO IMPLEMENTATION

@@ -154,6 +154,8 @@ fixture-scenario walking skeleton; **v1** = live-tenant hardening; **SaaS** = te
 | Surface | What it is | Semantics | Phase |
 |---|---|---|---|
 | Conversation + reasoning thread | The turn loop; interpretations chronological, branching, foldable, with rationale and cited evidence | `05 §3.4`, `09`, `01` | v0 |
+| Pinned evidence | Curated evidence surface: pin from tool results/thread, pinned list with counts; un-pin = supersession | `01` (evidence-pin) | v0 |
+| Verdict flow | Record/revise the disposition of record (rationale + cited evidence required); gates conclude; AI authorship behind the default-off tenant dial | `01` (Verdict) | v0 |
 | Inline approval flow | T2 single-confirm (verb + targets + evidence + approve/reject); T3 typed challenge; two-party | `04 §5` | v0 (T2/T3), SaaS (two-party) |
 | Enablement widgets | Schema-derived config forms, secret-backend chooser, gap-closure hints | `11 §5.1`, `§4.3` | v0 |
 | Evidence graph | Two-layer view: interpretation objects joined to telemetry, typed edges explicit | `01` | v0 (minimal), v1 (rich) |

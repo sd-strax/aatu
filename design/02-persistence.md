@@ -146,6 +146,7 @@ Total: ~20 event types at v0+. Named after analyst verbs. No derived-fact events
 ### Why these and not others
 
 - No event for "EntityPromotedFromObservation" or "HypothesisContradicted" — both derivable from `InterpretationRecorded`. Don't make derived facts first-class.
+- No `VerdictRecorded` or `EvidencePinned` events — both are `InterpretationRecorded` acts (types `verdict` / `evidence-pin`, 01-domain-model.md INTERPRETATION → Verdict / Pinned evidence). The disposition of record and the pinned-evidence list are folds over the thread (latest non-superseded verdict; non-superseded pins), projected — not stored — state. An AI-delegated `verdict` act additionally carries the enabling tenant-config ref in its payload (the default-deny dial, 01), so the audit trail shows *what authorized* the delegate to judge.
 - No event for STIX object creation. Entities, Sightings, etc. are created in the STIX object store independently. The investigation references them via `MemberAdded` / `EvidenceAttached`. This keeps entities reusable across investigations without forcing replay of every investigation that ever touched them. (x-actions are an exception — they are aggregate-internal and created by `ActionRequested` events, not in the external store.)
 - No separate `MemberAdded` event for aggregate-internal nodes (Interpretations, x-actions). Membership is implicit at creation time; a separate event would be bookkeeping that doubles event volume during action lifecycles for no information gain.
 - No `InvestigationForked` event at v0. Forking-as-branching has not shown enough demand. Replay-as-reading (walking the event stream in order) is a v0 feature; replay-as-re-execution and forking are v1+.
@@ -205,7 +206,7 @@ Not at v0. Investigations are bounded in event count (estimated 20–100 events 
 
 Two read models at v0. Both updated in the same transaction as the event append.
 
-`investigation_current` — one row per investigation, denormalized for the workspace view (status, seed, conclusion_ref, member_refs summary, last_sequence_no for optimistic concurrency, etc.). Read by the VS Code extension's open-tab view. Hot path.
+`investigation_current` — one row per investigation, denormalized for the workspace view (status, seed, conclusion_ref, member_refs summary, last_sequence_no for optimistic concurrency, etc.). Read by the VS Code extension's open-tab view. Hot path. Grows the **verdict of record** (disposition, rationale, verdict_at, verdict_interpretation_id — the fold over `verdict`-typed Interpretations, 01) when the verdict act lands; surfaces derive presentation states (e.g. verdict-reached, remediating) from this row plus `action_current`, never from stored extra statuses.
 
 `investigation_thread` — one row per Interpretation, in stream order, with denormalized references. Read by the reasoning-thread UI and by replay / detection-authoring tools. Walked in order.
 
