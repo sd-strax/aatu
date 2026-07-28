@@ -233,3 +233,46 @@ func TestConclude_RequiresVerdict(t *testing.T) {
 		t.Fatalf("conclude with verdict: %v", err)
 	}
 }
+
+// TestSeed_Validation: the three seed shapes and their required fields (01
+// §Extension 1); an unknown type is rejected; seedless creation stays legal
+// at the engine layer (the surface obligation is the picker's).
+func TestSeed_Validation(t *testing.T) {
+	env := newTestEnvelope("alice")
+	cases := []struct {
+		name string
+		seed *Seed
+		ok   bool
+	}{
+		{"nil seed", nil, true},
+		{"alert", &Seed{Type: SeedAlert, AlertID: "EDR-7741", Source: "crowdstrike-edr"}, true},
+		{"alert missing source", &Seed{Type: SeedAlert, AlertID: "EDR-7741"}, false},
+		{"entity", &Seed{Type: SeedEntity, EntityRef: "x-host--00000000-0000-0000-0000-000000000001"}, true},
+		{"entity missing ref", &Seed{Type: SeedEntity}, false},
+		{"question", &Seed{Type: SeedQuestion, HypothesisStatement: "service accounts abused for RDP?"}, true},
+		{"question empty", &Seed{Type: SeedQuestion}, false},
+		{"unknown type", &Seed{Type: "vibes"}, false},
+	}
+	for _, tc := range cases {
+		err := (CreateInvestigation{Title: "t", Seed: tc.seed}).Validate(env)
+		if tc.ok && err != nil {
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%s: invalid seed accepted", tc.name)
+		}
+	}
+}
+
+// TestSeed_Summary: the triage line per shape.
+func TestSeed_Summary(t *testing.T) {
+	if got := (Seed{Type: SeedAlert, AlertID: "A-1", Source: "edr"}).Summary(); got != "edr: A-1" {
+		t.Errorf("alert summary = %q", got)
+	}
+	if got := (Seed{Type: SeedEntity, EntityRef: "x-host--1"}).Summary(); got != "x-host--1" {
+		t.Errorf("entity summary = %q", got)
+	}
+	if got := (Seed{Type: SeedQuestion, HypothesisStatement: "q?"}).Summary(); got != "q?" {
+		t.Errorf("question summary = %q", got)
+	}
+}

@@ -371,6 +371,18 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		http.HandlerFunc(b.interpretationsItem),
 	))
 
+	// GET /api/entities/{ref}/appearances — cross-investigation memory
+	// (binding §6.1): every investigation citing the ref. Any reader.
+	api.Handle("/entities/", authz.RequireAuth(verifier)(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				methodNotAllowed(w, "GET")
+				return
+			}
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listRefAppearances)
+		},
+	)))
+
 	// GET /api/evidence/{ref} — citation-open (design/ui 02 §2.8): any cited
 	// STIX object or raw OCSF telemetry record, read-only. Any reader.
 	api.Handle("/evidence/", authz.RequireAuth(verifier)(http.HandlerFunc(

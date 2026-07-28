@@ -34,28 +34,94 @@ type Command interface {
 	Validate(env Envelope) error
 }
 
-// CreateInvestigation is the first concrete command — sufficient for the
-// A.4 done bar. Persists one investigation.created event.
-//
-// Deliberately thinner than the spec's InvestigationCreated: the Seed
-// extension (01-domain-model.md §Extension 1 — AlertSeed/EntitySeed/
-// QuestionSeed, context, description) lands together with STIX object CRUD
-// in Phase B, when there are STIX objects for a seed to reference. Until
-// then Title is the whole creation payload.
+// Seed is the investigation's root (01-domain-model.md §Extension 1) —
+// adopted from IR methodology (NIST 800-61 precursor/indicator, TheHive):
+// every case begins from an alert, an entity, or a question. Immutable, set
+// at creation. reckon stores the POINTER to the thing in the external system
+// (the not-a-SIEM stance): an AlertSeed references the tool's alert, never a
+// copied queue row.
+type Seed struct {
+	Type string `json:"type"` // alert | entity | question
+
+	// AlertSeed
+	AlertID             string `json:"alert_id,omitempty"`
+	Source              string `json:"source,omitempty"`
+	DetectionFindingRef string `json:"detection_finding_ref,omitempty"`
+
+	// EntitySeed
+	EntityRef string `json:"entity_ref,omitempty"` // STIX SCO id
+
+	// QuestionSeed (the hunt entry: hypothesis-rooted)
+	HypothesisStatement string `json:"hypothesis_statement,omitempty"`
+}
+
+// Seed type tags.
+const (
+	SeedAlert    = "alert"
+	SeedEntity   = "entity"
+	SeedQuestion = "question"
+)
+
+// Summary renders the seed's one-line display form (the triage queue's
+// "what is this case about?" column).
+func (s Seed) Summary() string {
+	switch s.Type {
+	case SeedAlert:
+		if s.Source != "" {
+			return s.Source + ": " + s.AlertID
+		}
+		return s.AlertID
+	case SeedEntity:
+		return s.EntityRef
+	case SeedQuestion:
+		return s.HypothesisStatement
+	}
+	return ""
+}
+
+func (s Seed) validate() error {
+	switch s.Type {
+	case SeedAlert:
+		if s.AlertID == "" || s.Source == "" {
+			return errors.New("CreateInvestigation: an alert seed requires alert_id and source")
+		}
+	case SeedEntity:
+		if s.EntityRef == "" {
+			return errors.New("CreateInvestigation: an entity seed requires entity_ref")
+		}
+	case SeedQuestion:
+		if s.HypothesisStatement == "" {
+			return errors.New("CreateInvestigation: a question seed requires hypothesis_statement")
+		}
+	default:
+		return fmt.Errorf("CreateInvestigation: unknown seed type %q (alert | entity | question)", s.Type)
+	}
+	return nil
+}
+
+// CreateInvestigation persists one investigation.created event. Seed is the
+// investigation's root; optional at the engine layer (pre-seed investigations
+// exist, and drivers like the eval harness supply context conversationally),
+// but every product entry point supplies one — "never start from an empty
+// chat" is a surface obligation the engine records, not enforces.
 type CreateInvestigation struct {
 	Title string `json:"title"`
+	Seed  *Seed  `json:"seed,omitempty"`
 }
 
 // Kind returns "CreateInvestigation".
 func (CreateInvestigation) Kind() string { return "CreateInvestigation" }
 
-// Validate checks envelope completeness and title non-emptiness.
+// Validate checks envelope completeness, title non-emptiness, and seed shape.
 func (c CreateInvestigation) Validate(env Envelope) error {
 	if err := validateEnvelope(env); err != nil {
 		return err
 	}
 	if c.Title == "" {
 		return errors.New("CreateInvestigation: Title is empty")
+	}
+	if c.Seed != nil {
+		return c.Seed.validate()
 	}
 	return nil
 }

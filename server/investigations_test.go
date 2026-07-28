@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 		cleanupDir()
 		log.Fatalf("sql.Open: %v", err)
 	}
-	testHandler = aggregate.NewHandler(aggregate.NewStore(testDB), aggregate.InvestigationCurrentProjector{}, aggregate.ActionCurrentProjector{}, aggregate.ReasoningNodeProjector{}, aggregate.VerdictPinProjector{}).
+	testHandler = aggregate.NewHandler(aggregate.NewStore(testDB), aggregate.InvestigationCurrentProjector{}, aggregate.ActionCurrentProjector{}, aggregate.ReasoningNodeProjector{}, aggregate.VerdictPinProjector{}, aggregate.RefAppearanceProjector{}).
 		WithSideStore(aggregate.NewSideStore(testDB))
 
 	// Mock OIDC issuer that signs RS256 tokens. Used by every test that
@@ -130,7 +130,7 @@ func resetInvestigations(t *testing.T) {
 	if !testReady {
 		t.Skip("integration setup unavailable")
 	}
-	if _, err := testDB.Exec(`TRUNCATE events, investigation_current, action_current, hypothesis_current, prediction_current, stix_objects, evidence_pin_current`); err != nil {
+	if _, err := testDB.Exec(`TRUNCATE events, investigation_current, action_current, hypothesis_current, prediction_current, stix_objects, evidence_pin_current, ref_appearances`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

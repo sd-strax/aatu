@@ -149,6 +149,7 @@ type ActionRequested struct {
 	ExpiresAt                  time.Time       `json:"expires_at"`
 	IsReversal                 bool            `json:"is_reversal,omitempty"`
 	ReversalOfRef              uuid.UUID       `json:"reversal_of_ref,omitempty"`
+	RetryOf                    uuid.UUID       `json:"retry_of,omitempty"`
 	RequestingInterpretationID uuid.UUID       `json:"requesting_interpretation_id"`
 
 	// RequiredMode + SecondaryApproverPool freeze the Gate 2 authorization
@@ -345,6 +346,11 @@ type RequestAction struct {
 	// ReversalOfRef points at the original x-action this action reverses
 	// (04 §7). Set only when IsReversal; drives the ReversalSaga.
 	ReversalOfRef uuid.UUID `json:"reversal_of_ref,omitempty"`
+	// RetryOf points at a prior FAILED/EXPIRED x-action this request replaces.
+	// Lineage only (design/ui binding §2.3): the dispatch ledger makes
+	// re-dispatching one id impossible, so a retry IS a new action — this ref
+	// lets surfaces render the chain.
+	RetryOf uuid.UUID `json:"retry_of,omitempty"`
 
 	// RequiredMode + SecondaryApproverPool carry the Gate 2 authorization
 	// requirement (04 §4), frozen onto the action so the approval surface can
@@ -605,6 +611,7 @@ func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]
 		ExpiresAt:                  c.ExpiresAt,
 		IsReversal:                 c.IsReversal,
 		ReversalOfRef:              c.ReversalOfRef,
+		RetryOf:                    c.RetryOf,
 		RequiredMode:               c.RequiredMode,
 		SecondaryApproverPool:      c.SecondaryApproverPool,
 		RequestingInterpretationID: interpID,

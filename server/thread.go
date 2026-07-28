@@ -39,9 +39,13 @@ type ThreadEntryView struct {
 	OutputRefs         []string        `json:"output_refs,omitempty"`
 	// ToolCalls counts the act's recorded tool dispatches; HasTranscript
 	// reports a committed transcript in the side store. Presence indicators —
-	// the bodies stay in their stores.
+	// the bodies stay in their stores (GET .../transcript serves the body).
 	ToolCalls     int  `json:"tool_calls,omitempty"`
 	HasTranscript bool `json:"has_transcript,omitempty"`
+
+	// ConsultedSOPs is the act's knowledge-retrieval provenance
+	// (design/ui 02 §2.11 renders the chips).
+	ConsultedSOPs []aggregate.ConsultedSOP `json:"consulted_sops,omitempty"`
 }
 
 // listInvestigationThread serves the thread. Any authenticated reader
@@ -98,6 +102,7 @@ func (b *Backend) listInvestigationThread(w http.ResponseWriter, r *http.Request
 			OutputRefs:         rec.OutputRefs,
 			ToolCalls:          len(rec.ToolCallRefs),
 			HasTranscript:      rec.TranscriptRef != nil,
+			ConsultedSOPs:      rec.ConsultedSOPs,
 		}
 		out = append(out, v)
 	}

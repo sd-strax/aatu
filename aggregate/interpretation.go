@@ -109,6 +109,22 @@ const (
 	DerivationInferred = "INFERRED"
 )
 
+// ConsultedSOP records one SOP surfaced by knowledge-service retrieval during
+// a reasoning act (01 INTERPRETATION schema; 06 §6): retrieval provenance.
+// Used distinguishes cited from merely retrieved — set conservatively (the
+// caller marks Used only on positive evidence the act built on it; an
+// overclaimed "followed the SOP" is fabricated provenance).
+type ConsultedSOP struct {
+	SOPID          string  `json:"sop_id"`
+	Title          string  `json:"title,omitempty"`
+	RetrievalScore float64 `json:"retrieval_score,omitempty"`
+	Used           bool    `json:"used"`
+}
+
+// maxConsultedPerInterpretation bounds the consulted lists (refs are ids +
+// scores, not bulk; a runaway retrieval must not bloat the event).
+const maxConsultedPerInterpretation = 20
+
 // InterpretationRecorded is the payload of an EventTypeInterpretationRecorded
 // event: one recorded reasoning act. It is the event-log projection of the
 // x-interpretation primitive; the full STIX node is materialized into the
@@ -143,6 +159,10 @@ type InterpretationRecorded struct {
 	// record, folded (latest non-superseded wins) and projected onto
 	// investigation_current.
 	Verdict *VerdictRecorded `json:"verdict,omitempty"`
+
+	// ConsultedSOPs is the knowledge-retrieval provenance for this act
+	// (01 schema; design/ui 02 §2.11 renders it).
+	ConsultedSOPs []ConsultedSOP `json:"consulted_sops,omitempty"`
 }
 
 // interpretationEvent builds an InterpretationRecorded event for env at seqNo,
@@ -230,6 +250,11 @@ type RecordInterpretation struct {
 	// the event so the audit trail shows what authorized the delegate).
 	Verdict            *VerdictNode `json:"verdict,omitempty"`
 	AIVerdictConfigRef string       `json:"ai_verdict_config_ref,omitempty"`
+
+	// ConsultedSOPs carries the turn's knowledge-retrieval provenance onto the
+	// event (01 schema). The caller (the agent loop) supplies what it
+	// retrieved and what it actually built on.
+	ConsultedSOPs []ConsultedSOP `json:"consulted_sops,omitempty"`
 }
 
 // Kind returns "RecordInterpretation".
@@ -284,6 +309,14 @@ func (c RecordInterpretation) Validate(env Envelope) error {
 			return fmt.Errorf("RecordInterpretation: tool call %q has no tool_name", c.ToolCalls[i].CallID)
 		}
 	}
+	if len(c.ConsultedSOPs) > maxConsultedPerInterpretation {
+		return fmt.Errorf("RecordInterpretation: consulted_sops exceed %d", maxConsultedPerInterpretation)
+	}
+	for _, cs := range c.ConsultedSOPs {
+		if cs.SOPID == "" {
+			return errors.New("RecordInterpretation: consulted_sops entry has no sop_id")
+		}
+	}
 	if err := validateVerdictShape(c); err != nil {
 		return err
 	}
@@ -317,6 +350,7 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 		Summary:            c.Rationale,
 		OutputRefs:         c.OutputRefs,
 		Confidence:         c.Confidence,
+		ConsultedSOPs:      c.ConsultedSOPs,
 	}
 	if c.Transcript != nil {
 		rec.TranscriptRef = &TranscriptRef{

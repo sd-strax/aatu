@@ -27,6 +27,10 @@ type InvestigationCurrent struct {
 	VerdictRationale       string
 	VerdictAt              sql.NullTime
 	VerdictInterpretationID uuid.UUID
+
+	// The seed (01 §Extension 1). Nil for pre-seed investigations.
+	Seed        *Seed
+	SeedSummary string
 }
 
 // InvestigationCurrentProjector populates the investigation_current table.
@@ -46,16 +50,27 @@ func (InvestigationCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt 
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			return fmt.Errorf("unmarshal CreateInvestigation payload: %w", err)
 		}
+		var seedJSON []byte
+		var seedType, seedSummary sql.NullString
+		if p.Seed != nil {
+			var err error
+			if seedJSON, err = json.Marshal(p.Seed); err != nil {
+				return fmt.Errorf("marshal seed: %w", err)
+			}
+			seedType = sql.NullString{String: p.Seed.Type, Valid: true}
+			seedSummary = sql.NullString{String: p.Seed.Summary(), Valid: true}
+		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO investigation_current (
 				aggregate_id, tenant_id, title, status, created_at,
-				last_event_sequence, updated_at
-			) VALUES ($1, $2, $3, $6, $4, $5, $4)
+				last_event_sequence, updated_at, seed, seed_type, seed_summary
+			) VALUES ($1, $2, $3, $6, $4, $5, $4, $7, $8, $9)
 			ON CONFLICT (aggregate_id) DO UPDATE SET
 				title               = EXCLUDED.title,
 				last_event_sequence = EXCLUDED.last_event_sequence,
 				updated_at          = EXCLUDED.updated_at
-		`, evt.AggregateID, evt.TenantID, p.Title, evt.OccurredAt, evt.SequenceNo, StatusDraft)
+		`, evt.AggregateID, evt.TenantID, p.Title, evt.OccurredAt, evt.SequenceNo, StatusDraft,
+			seedJSON, seedType, seedSummary)
 		if err != nil {
 			return fmt.Errorf("upsert investigation_current: %w", err)
 		}
@@ -146,17 +161,26 @@ func (InvestigationCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) erro
 // aggregate, or sql.ErrNoRows if no event has yet been projected.
 func LoadInvestigationCurrent(ctx context.Context, db *sql.DB, aggID AggregateID) (InvestigationCurrent, error) {
 	var ic InvestigationCurrent
-	var conclusionRef, vDisp, vRat sql.NullString
+	var conclusionRef, vDisp, vRat, seedSummary sql.NullString
 	var vID uuid.NullUUID
+	var seedJSON []byte
 	err := db.QueryRowContext(ctx, `
 		SELECT aggregate_id, title, status, conclusion_ref, last_event_sequence,
-		       verdict_disposition, verdict_rationale, verdict_at, verdict_interpretation_id
+		       verdict_disposition, verdict_rationale, verdict_at, verdict_interpretation_id,
+		       seed, seed_summary
 		FROM investigation_current
 		WHERE aggregate_id = $1
 	`, aggID).Scan(&ic.AggregateID, &ic.Title, &ic.Status, &conclusionRef, &ic.LastEventSequence,
-		&vDisp, &vRat, &ic.VerdictAt, &vID)
+		&vDisp, &vRat, &ic.VerdictAt, &vID, &seedJSON, &seedSummary)
 	ic.ConclusionRef = conclusionRef.String
 	ic.VerdictDisposition, ic.VerdictRationale = vDisp.String, vRat.String
 	ic.VerdictInterpretationID = vID.UUID
+	ic.SeedSummary = seedSummary.String
+	if len(seedJSON) > 0 {
+		var s Seed
+		if json.Unmarshal(seedJSON, &s) == nil {
+			ic.Seed = &s
+		}
+	}
 	return ic, err
 }

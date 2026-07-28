@@ -394,6 +394,10 @@ func TestServe_FullFlow(t *testing.T) {
 	if n := c.notifications("turn/text"); len(n) < 1 {
 		t.Error("no turn/text notifications")
 	}
+	// Step markers: one per model↔tool round (scriptLLM runs two rounds).
+	if n := c.notifications("turn/step"); len(n) != 2 {
+		t.Errorf("turn/step notifications = %d; want 2", len(n))
+	}
 
 	// The token handoff asked for delegate tokens (the loop's calls).
 	c.mu.Lock()

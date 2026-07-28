@@ -72,24 +72,35 @@ type Window struct {
 	To   time.Time `json:"to"`
 }
 
+// ConsultedSOP is one SOP surfaced by recall_sops during the turn — the
+// knowledge-retrieval provenance the commit carries (01 schema). Used is set
+// conservatively: only when the turn's own text references the SOP.
+type ConsultedSOP struct {
+	SOPID          string  `json:"sop_id"`
+	Title          string  `json:"title,omitempty"`
+	RetrievalScore float64 `json:"retrieval_score,omitempty"`
+	Used           bool    `json:"used"`
+}
+
 // InterpretationRequest is the body of POST /api/interpretations (the loop's
 // write into the reasoning thread).
 type InterpretationRequest struct {
-	InvestigationRef   string      `json:"investigation_ref"`
-	InterpretationType string      `json:"interpretation_type"`
-	InputRefs          []string    `json:"input_refs,omitempty"`
-	OutputRefs         []string    `json:"output_refs,omitempty"`
-	Rationale          string      `json:"rationale"`
-	Confidence         string      `json:"confidence,omitempty"`
-	Transcript         *Transcript `json:"transcript,omitempty"`
-	ToolCalls          []ToolCall  `json:"tool_calls,omitempty"`
-	Hypothesis         *Hypothesis `json:"hypothesis,omitempty"`
-	HypothesisRef      string      `json:"hypothesis_ref,omitempty"`
-	Abandoned          bool        `json:"abandoned,omitempty"`
-	Prediction         *Prediction `json:"prediction,omitempty"`
-	PredictionRef      string      `json:"prediction_ref,omitempty"`
-	PredictionStatus   string      `json:"prediction_status,omitempty"`
-	TestResultRefs     []string    `json:"test_result_refs,omitempty"`
+	InvestigationRef   string         `json:"investigation_ref"`
+	InterpretationType string         `json:"interpretation_type"`
+	InputRefs          []string       `json:"input_refs,omitempty"`
+	OutputRefs         []string       `json:"output_refs,omitempty"`
+	Rationale          string         `json:"rationale"`
+	Confidence         string         `json:"confidence,omitempty"`
+	Transcript         *Transcript    `json:"transcript,omitempty"`
+	ToolCalls          []ToolCall     `json:"tool_calls,omitempty"`
+	Hypothesis         *Hypothesis    `json:"hypothesis,omitempty"`
+	HypothesisRef      string         `json:"hypothesis_ref,omitempty"`
+	Abandoned          bool           `json:"abandoned,omitempty"`
+	Prediction         *Prediction    `json:"prediction,omitempty"`
+	PredictionRef      string         `json:"prediction_ref,omitempty"`
+	PredictionStatus   string         `json:"prediction_status,omitempty"`
+	ConsultedSOPs      []ConsultedSOP `json:"consulted_sops,omitempty"`
+	TestResultRefs     []string       `json:"test_result_refs,omitempty"`
 }
 
 // Transcript carries a turn's raw transcript bytes for side-store hashing.
@@ -142,6 +153,9 @@ type ActionRequest struct {
 	EvidenceRefs     []string        `json:"evidence_refs,omitempty"`
 	Rationale        string          `json:"rationale"`
 	InvestigationRef string          `json:"investigation_ref"`
+	// RetryOf: the prior FAILED/EXPIRED action id this request replaces
+	// (lineage; a retry is always a new action).
+	RetryOf string `json:"retry_of,omitempty"`
 }
 
 // ActionTarget names one target of an action.

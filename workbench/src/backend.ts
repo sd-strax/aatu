@@ -56,6 +56,18 @@ export interface InvestigationSummary {
   id: string;
   title: string;
   state: string;
+  /** The triage line: what this case is about (01 §Extension 1). */
+  seedSummary?: string;
+}
+
+/** The investigation's root (mirrors server.SeedBody, 01 §Extension 1). */
+export interface Seed {
+  type: string; // alert | entity | question
+  alertId?: string;
+  source?: string;
+  detectionFindingRef?: string;
+  entityRef?: string;
+  hypothesisStatement?: string;
 }
 
 /** The verdict of record (mirrors server.VerdictView) — absent when none. */
@@ -72,6 +84,8 @@ export interface InvestigationDetail {
   state: string;
   lastEventSequence: number;
   verdict?: Verdict;
+  seed?: Seed;
+  seedSummary?: string;
 }
 
 /** One pinned-evidence row (mirrors server.PinView). */
@@ -165,6 +179,7 @@ export interface ThreadEntry {
   outputRefs: string[];
   toolCalls: number;
   hasTranscript: boolean;
+  consultedSops: { sopId: string; title?: string; used: boolean }[];
 }
 
 /** One row of the durable action queue (mirrors server.ActionView). */
@@ -195,6 +210,8 @@ export interface ActionRow {
   tierEscalated: boolean;
   /** Cited evidence — each ref opens (02 §2.8). */
   evidenceRefs: string[];
+  /** Lineage: the FAILED/EXPIRED action this request replaces. */
+  retryOf?: string;
 }
 
 /** Where an approve/reject left the action (mirrors server.ActionDecisionResponse). */
@@ -211,6 +228,11 @@ interface RawInvestigation {
   status: string;
   last_event_sequence?: number;
   verdict?: { disposition?: string; rationale?: string; verdict_at?: string };
+  seed?: {
+    type?: string; alert_id?: string; source?: string;
+    detection_finding_ref?: string; entity_ref?: string; hypothesis_statement?: string;
+  };
+  seed_summary?: string;
 }
 
 /** Raw server.HypothesisView, as served under {hypotheses: [...]}. */
@@ -401,6 +423,7 @@ export class BackendClient {
       id: r.aggregate_id,
       title: r.title || "(untitled)",
       state: r.status,
+      seedSummary: r.seed_summary,
     }));
   }
 
@@ -417,6 +440,15 @@ export class BackendClient {
         rationale: r.verdict.rationale,
         verdictAt: r.verdict.verdict_at ?? "",
       } : undefined,
+      seed: r.seed?.type ? {
+        type: r.seed.type,
+        alertId: r.seed.alert_id,
+        source: r.seed.source,
+        detectionFindingRef: r.seed.detection_finding_ref,
+        entityRef: r.seed.entity_ref,
+        hypothesisStatement: r.seed.hypothesis_statement,
+      } : undefined,
+      seedSummary: r.seed_summary,
     };
   }
 
@@ -463,6 +495,7 @@ export class BackendClient {
       output_refs?: string[];
       tool_calls?: number;
       has_transcript?: boolean;
+      consulted_sops?: { sop_id?: string; title?: string; used?: boolean }[];
     }
     const body = await this.authedGet<{ thread?: Raw[] }>(
       `/api/investigations/${encodeURIComponent(id)}/thread`,
@@ -483,6 +516,9 @@ export class BackendClient {
       outputRefs: e.output_refs ?? [],
       toolCalls: e.tool_calls ?? 0,
       hasTranscript: e.has_transcript ?? false,
+      consultedSops: (e.consulted_sops ?? []).map((c) => ({
+        sopId: c.sop_id ?? "", title: c.title, used: c.used ?? false,
+      })),
     }));
   }
 
@@ -503,6 +539,7 @@ export class BackendClient {
       reversibility?: string;
       tier_escalated?: boolean;
       evidence_refs?: string[];
+      retry_of?: string;
     }
     const body = await this.authedGet<{ actions?: Raw[] }>(
       `/api/investigations/${encodeURIComponent(investigationId)}/actions`,
@@ -532,6 +569,7 @@ export class BackendClient {
         reversibility: a.reversibility,
         tierEscalated: a.tier_escalated ?? false,
         evidenceRefs: a.evidence_refs ?? [],
+        retryOf: a.retry_of,
       };
     });
   }
@@ -596,6 +634,17 @@ export class BackendClient {
     );
   }
 
+  /**
+   * GET /api/interpretations/{id}/transcript — the committed turn record
+   * behind a thread step (the content-addressed side store).
+   */
+  async transcript(interpretationId: string): Promise<{ turnId?: string; body: string }> {
+    const r = await this.authedGet<{ turn_id?: string; body?: string }>(
+      `/api/interpretations/${encodeURIComponent(interpretationId)}/transcript`,
+    );
+    return { turnId: r.turn_id, body: r.body ?? "" };
+  }
+
   /** GET /api/evidence/{ref} — citation-open (02 §2.8). */
   async evidence(ref: string): Promise<EvidenceDoc> {
     interface Raw {
@@ -638,8 +687,19 @@ export class BackendClient {
   }
 
   /** POST /api/investigations — seed a new investigation. Analyst role. */
-  async createInvestigation(title: string): Promise<InvestigationDetail> {
-    const r = await this.authedPost<RawInvestigation>("/api/investigations", { title });
+  async createInvestigation(title: string, seed?: Seed): Promise<InvestigationDetail> {
+    const body: Record<string, unknown> = { title };
+    if (seed) {
+      body.seed = {
+        type: seed.type,
+        alert_id: seed.alertId,
+        source: seed.source,
+        detection_finding_ref: seed.detectionFindingRef,
+        entity_ref: seed.entityRef,
+        hypothesis_statement: seed.hypothesisStatement,
+      };
+    }
+    const r = await this.authedPost<RawInvestigation>("/api/investigations", body);
     return {
       id: r.aggregate_id,
       title: r.title || "(untitled)",

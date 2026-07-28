@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -35,6 +36,10 @@ type Hooks struct {
 	// the text twice). OnText still fires when the LLM cannot stream, so a
 	// surface sets both and renders whichever arrives.
 	OnTextDelta func(delta string)
+
+	// OnRoundStart fires as each model↔tool round begins (1-based) — the
+	// step marker surfaces group tool calls under (design/ui binding §2.6).
+	OnRoundStart func(round int)
 }
 
 // Config assembles a session.
@@ -62,6 +67,9 @@ type Session struct {
 	messages []Message
 
 	pendingActions []ActionResponse // actions proposed this turn, for the surface to offer approval
+	// consulted accumulates the turn's recall_sops retrievals (by sop_id,
+	// keeping the best score) — the knowledge provenance the commit carries.
+	consulted map[string]ConsultedSOP
 }
 
 // TurnResult is what one analyst turn produced.
@@ -154,6 +162,7 @@ func (s *Session) System() string { return s.system }
 // final commit fails; the error reports the commit failure.
 func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error) {
 	s.pendingActions = nil
+	s.consulted = map[string]ConsultedSOP{}
 	turnID := uuid.NewString()
 
 	var transcript strings.Builder
@@ -174,6 +183,9 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 
 	rounds := 0
 	for {
+		if s.hooks.OnRoundStart != nil {
+			s.hooks.OnRoundStart(rounds + 1)
+		}
 		resp, streamed, err := s.complete(ctx)
 		if err != nil {
 			// Return a partial result rather than nil: any action the model
@@ -236,6 +248,9 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 			}
 
 			content, isErr := s.dispatchTool(ctx, tu.ToolName, tu.Input)
+			if tu.ToolName == ToolRecallSOPs && !isErr {
+				s.trackConsulted(content)
+			}
 			fmt.Fprintf(&transcript, "[tool_result %s id=%s error=%v] %s\n",
 				sanitizeTranscript(tu.ToolName), sanitizeTranscript(tu.ToolUseID), isErr, sanitizeTranscript(content))
 			if s.hooks.OnToolResult != nil {
@@ -274,6 +289,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 		Rationale:          rationale,
 		Transcript:         &Transcript{TurnID: turnID, Body: transcript.String()},
 		ToolCalls:          toolLog,
+		ConsultedSOPs:      s.consultedList(finalText.String()),
 	})
 	if err != nil {
 		return res, fmt.Errorf("agent: commit turn: %w", err)
@@ -300,6 +316,50 @@ func (s *Session) complete(ctx context.Context) (resp CompleteResponse, streamed
 	}
 	resp, err = s.llm.Complete(ctx, req)
 	return resp, false, err
+}
+
+// trackConsulted accumulates one recall_sops result's retrievals into the
+// turn's knowledge provenance (dedup by sop_id, best score kept).
+func (s *Session) trackConsulted(content string) {
+	var res struct {
+		Results []struct {
+			SOPID string  `json:"sop_id"`
+			Title string  `json:"title"`
+			Score float64 `json:"score"`
+		} `json:"results"`
+	}
+	if json.Unmarshal([]byte(content), &res) != nil {
+		return
+	}
+	for _, r := range res.Results {
+		if r.SOPID == "" {
+			continue
+		}
+		if prev, ok := s.consulted[r.SOPID]; !ok || r.Score > prev.RetrievalScore {
+			s.consulted[r.SOPID] = ConsultedSOP{SOPID: r.SOPID, Title: r.Title, RetrievalScore: r.Score}
+		}
+	}
+}
+
+// consultedList finalizes the turn's knowledge provenance. Used is decided
+// CONSERVATIVELY: only when the model's own final text references the SOP (by
+// title or id) — retrieval alone is "consulted, not applied", and overclaiming
+// "followed the SOP" would be fabricated provenance (01 schema; the transcript
+// is deliberately not searched: it contains the retrieval results themselves,
+// which would mark everything used).
+func (s *Session) consultedList(finalText string) []ConsultedSOP {
+	if len(s.consulted) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(finalText)
+	out := make([]ConsultedSOP, 0, len(s.consulted))
+	for _, c := range s.consulted {
+		c.Used = (c.Title != "" && strings.Contains(lower, strings.ToLower(c.Title))) ||
+			strings.Contains(lower, strings.ToLower(c.SOPID))
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RetrievalScore > out[j].RetrievalScore })
+	return out
 }
 
 // refreshPending returns the investigation's actions still awaiting approval,

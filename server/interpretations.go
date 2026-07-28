@@ -45,6 +45,18 @@ type RecordInterpretationBody struct {
 	// record. The AI-verdict dial is applied SERVER-side from tenant config —
 	// there is deliberately no client field for it.
 	Verdict *VerdictBody `json:"verdict,omitempty"`
+
+	// ConsultedSOPs is the turn's knowledge-retrieval provenance (01 schema):
+	// what retrieval surfaced, and what the act actually built on.
+	ConsultedSOPs []ConsultedSOPBody `json:"consulted_sops,omitempty"`
+}
+
+// ConsultedSOPBody mirrors aggregate.ConsultedSOP on the wire.
+type ConsultedSOPBody struct {
+	SOPID          string  `json:"sop_id"`
+	Title          string  `json:"title,omitempty"`
+	RetrievalScore float64 `json:"retrieval_score,omitempty"`
+	Used           bool    `json:"used"`
 }
 
 // VerdictBody is the client shape of a verdict act.
@@ -158,6 +170,11 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Verdict != nil {
 		cmd.Verdict = &aggregate.VerdictNode{Disposition: body.Verdict.Disposition}
+	}
+	for _, cs := range body.ConsultedSOPs {
+		cmd.ConsultedSOPs = append(cmd.ConsultedSOPs, aggregate.ConsultedSOP{
+			SOPID: cs.SOPID, Title: cs.Title, RetrievalScore: cs.RetrievalScore, Used: cs.Used,
+		})
 	}
 	// The AI-verdict dial (01 §Verdict): an AI-delegated verdict is refused
 	// unless tenant config enables it; when enabled, the enabling config ref is

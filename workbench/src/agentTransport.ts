@@ -37,6 +37,8 @@ export interface TurnProgress {
    * text arrives ONLY as deltas. Renderers append both the same way.
    */
   onTextDelta(text: string): void;
+  /** A new model↔tool round began (1-based) — the step marker. */
+  onStep(round: number): void;
   onToolCall(name: string, input: unknown): void;
   /**
    * coverage/eventCount/refs are distilled sidecar-side from the FULL result
@@ -225,6 +227,9 @@ export class SidecarTransport implements AgentTransport {
     });
     connection.onNotification("turn/text_delta", (p: { session_id?: string; text?: string }) => {
       this.inFlight.get(p?.session_id ?? "")?.onTextDelta(p?.text ?? "");
+    });
+    connection.onNotification("turn/step", (p: { session_id?: string; round?: number }) => {
+      this.inFlight.get(p?.session_id ?? "")?.onStep(p?.round ?? 0);
     });
     connection.onNotification("turn/tool_call", (p: { session_id?: string; name?: string; input?: unknown }) => {
       this.inFlight.get(p?.session_id ?? "")?.onToolCall(p?.name ?? "", p?.input);

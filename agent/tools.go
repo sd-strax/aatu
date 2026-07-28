@@ -174,6 +174,7 @@ func intrinsicTools(actionTypes []ActionType) []ToolDef {
 				"parameters":    parametersSchema(actionTypes),
 				"evidence_refs": strList("refs grounding this action"),
 				"rationale":     str("why this action, now"),
+				"retry_of":      str("when re-requesting a FAILED or EXPIRED action: that action's id (records the retry lineage)"),
 			}, "action_type", "targets", "rationale"),
 		},
 		{
@@ -503,6 +504,7 @@ func (s *Session) dispatch(ctx context.Context, name string, input json.RawMessa
 			Parameters   json.RawMessage `json:"parameters"`
 			EvidenceRefs []string        `json:"evidence_refs"`
 			Rationale    string          `json:"rationale"`
+			RetryOf      string          `json:"retry_of"`
 		}
 		if err := json.Unmarshal(input, &in); err != nil {
 			return nil, fmt.Errorf("bad request_action input: %w", err)
@@ -514,6 +516,7 @@ func (s *Session) dispatch(ctx context.Context, name string, input json.RawMessa
 			EvidenceRefs:     in.EvidenceRefs,
 			Rationale:        in.Rationale,
 			InvestigationRef: s.investigationID,
+			RetryOf:          in.RetryOf,
 		})
 		if err != nil {
 			return nil, err

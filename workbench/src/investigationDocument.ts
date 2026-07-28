@@ -31,6 +31,7 @@ type RenderMessage =
   | { type: "turn.user"; text: string }
   | { type: "turn.reasoning"; delta: string }
   | { type: "turn.text"; delta: string }
+  | { type: "turn.step"; round: number }
   | { type: "turn.tool"; name: string; input: unknown }
   | { type: "turn.toolResult"; name: string; isError: boolean; coverage?: string; events?: number; refs?: string[] }
   | { type: "turn.committed"; interpretationId: string }
@@ -46,7 +47,8 @@ type InboundMessage =
   | { type: "pin.add"; refs: string[]; hint?: string }
   | { type: "pin.unpin"; interpretationId: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
-  | { type: "evidence.open"; ref: string };
+  | { type: "evidence.open"; ref: string }
+  | { type: "transcript.open"; interpretationId: string };
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
@@ -92,6 +94,8 @@ export class InvestigationDocuments {
         void this.submitVerdict(id, panel, msg);
       } else if (msg.type === "evidence.open") {
         void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
+      } else if (msg.type === "transcript.open") {
+        void this.openTranscript(msg.interpretationId);
       }
     });
     panel.onDidDispose(() => {
@@ -268,6 +272,20 @@ export class InvestigationDocuments {
     await this.postPending(id, panel);
   }
 
+  /** Open a thread step's full committed transcript in a read-only tab. */
+  private async openTranscript(interpretationId: string): Promise<void> {
+    try {
+      const t = await this.client.transcript(interpretationId);
+      const doc = await vscode.workspace.openTextDocument({
+        content: t.body,
+        language: "plaintext",
+      });
+      await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: transcript unavailable — ${errText(err)}`);
+    }
+  }
+
   /** Drive one analyst turn through the transport, streaming progress to the webview. */
   private async runTurn(id: string, panel: vscode.WebviewPanel, text: string): Promise<void> {
     void this.post(panel, { type: "turn.user", text });
@@ -280,6 +298,7 @@ export class InvestigationDocuments {
         // sidecar-side — never both for the same text).
         onText: (chunk) => void this.post(panel, { type: "turn.text", delta: chunk }),
         onTextDelta: (chunk) => void this.post(panel, { type: "turn.text", delta: chunk }),
+        onStep: (round) => void this.post(panel, { type: "turn.step", round }),
         onToolCall: (name, input) => void this.post(panel, { type: "turn.tool", name, input }),
         // coverage/events come distilled from the sidecar (from the full,
         // unclipped payload) — absent for non-envelope results, and the
@@ -449,6 +468,15 @@ export class InvestigationDocuments {
     }
 
     .committed, .usage { font-size: 0.74rem; opacity: 0.5; margin: 0.35rem 0; }
+    .stepmark { font-size: 0.7rem; opacity: 0.4; margin: 0.5rem 0 0.1rem; letter-spacing: 0.08em; }
+    .sopchip {
+      display: inline-block; font-size: 0.7rem; padding: 0.02rem 0.4rem;
+      margin: 0.1rem 0.2rem 0 0; border: 1px solid var(--vscode-charts-blue, #4e94ce);
+      border-radius: 0.5rem; opacity: 0.85;
+    }
+    .sopchip.consulted { border-style: dashed; opacity: 0.55; }
+    .translink { cursor: pointer; text-decoration: underline; opacity: 0.7; font-size: 0.72rem; }
+    .translink:hover { opacity: 1; }
     .error { color: var(--vscode-errorForeground); margin: 0.4rem 0; max-width: 78ch; }
 
     /* ---- reasoning history (the thread, 13 §4) ---- */
@@ -903,6 +931,28 @@ export class InvestigationDocuments {
         body.innerHTML = md(e.summary);
 
         step.append(head, body);
+
+        // Knowledge provenance chips (02 §2.11): followed vs consulted.
+        if (e.consultedSops && e.consultedSops.length) {
+          const sops = document.createElement("div");
+          for (const c of e.consultedSops) {
+            const chip = document.createElement("span");
+            chip.className = "sopchip" + (c.used ? "" : " consulted");
+            chip.textContent = (c.used ? "followed SOP: " : "consulted: ") + (c.title || c.sopId);
+            chip.title = c.used ? "the turn's text references this SOP" : "retrieved, not applied";
+            sops.appendChild(chip);
+          }
+          step.appendChild(sops);
+        }
+        // The full committed turn record, one click away (02 §2.9's data).
+        if (e.hasTranscript) {
+          const tl = document.createElement("span");
+          tl.className = "translink";
+          tl.textContent = "open transcript";
+          tl.addEventListener("click", () =>
+            vscode.postMessage({ type: "transcript.open", interpretationId: e.interpretationId }));
+          step.appendChild(tl);
+        }
         box.appendChild(step);
       }
     }
@@ -1026,6 +1076,12 @@ export class InvestigationDocuments {
         row.append(head, targets);
 
         // Decision-grade rows (03 §3.3): the card answers the decision.
+        if (a.retryOf) {
+          const rl = document.createElement("div");
+          rl.className = "cardmeta";
+          rl.textContent = "↻ retry of " + a.retryOf.slice(0, 8) + "… (the original can never re-dispatch)";
+          row.append(rl);
+        }
         if (a.tierEscalated) {
           const esc2 = document.createElement("div");
           esc2.className = "cardmeta";
@@ -1232,6 +1288,16 @@ export class InvestigationDocuments {
           break;
         case "turn.text":
           appendText(msg.delta);
+          break;
+        case "turn.step":
+          // A subtle step divider from round 2 on (round 1 is the turn start).
+          if (turn && msg.round > 1) {
+            turn.seg = null;
+            const d = document.createElement("div");
+            d.className = "stepmark";
+            d.textContent = "· step " + msg.round + " ·";
+            turn.wrap.appendChild(d);
+          }
           break;
         case "turn.tool":
           addToolRow(msg.name, msg.input);

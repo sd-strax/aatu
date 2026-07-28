@@ -69,17 +69,27 @@ type SupersedeBody struct {
 	Reason           string `json:"reason"`
 }
 
-// interpretationsItem routes /api/interpretations/{id}/supersede — the
-// un-pin/retraction path (01 §Interpretation lifecycle and correction).
-// Analyst role; both actor kinds (correction is annotate-tier, same footing
-// as recording).
+// interpretationsItem routes the /api/interpretations/{id}/* sub-resources:
+// POST .../supersede (un-pin/retraction — analyst role, both actor kinds:
+// correction is annotate-tier) and GET .../transcript (the committed turn
+// record — any reader; the transcript is the audit record).
 func (b *Backend) interpretationsItem(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/supersede") {
+	trimmed := strings.TrimSuffix(r.URL.Path, "/")
+	if strings.HasSuffix(trimmed, "/supersede") {
 		switch r.Method {
 		case http.MethodPost:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.supersedeInterpretation)
 		default:
 			methodNotAllowed(w, "POST")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/transcript") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.getInterpretationTranscript)
+		default:
+			methodNotAllowed(w, "GET")
 		}
 		return
 	}
@@ -96,7 +106,7 @@ func (b *Backend) supersedeInterpretation(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusInternalServerError, "auth context missing")
 		return
 	}
-	interpID, ok := interpretationSupersedeID(r.URL.Path)
+	interpID, ok := interpretationSubresourceID(r.URL.Path, "supersede")
 	if !ok {
 		writeJSONError(w, http.StatusBadRequest, "invalid interpretation id in path")
 		return
@@ -128,14 +138,15 @@ func (b *Backend) supersedeInterpretation(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// interpretationSupersedeID parses `/interpretations/{id}/supersede`.
-func interpretationSupersedeID(p string) (uuid.UUID, bool) {
+// interpretationSubresourceID parses `/interpretations/{id}/<sub>` — the one
+// parser for every interpretation sub-resource, so path handling cannot drift.
+func interpretationSubresourceID(p, sub string) (uuid.UUID, bool) {
 	const prefix = "/interpretations/"
 	tail, ok := strings.CutPrefix(p, prefix)
 	if !ok {
 		return uuid.UUID{}, false
 	}
-	tail = strings.TrimSuffix(strings.TrimSuffix(tail, "/"), "/supersede")
+	tail = strings.TrimSuffix(strings.TrimSuffix(tail, "/"), "/"+sub)
 	id, err := uuid.Parse(tail)
 	if err != nil {
 		return uuid.UUID{}, false

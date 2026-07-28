@@ -215,35 +215,34 @@ and flow in the comms sheet carries forward; only the phase and the data authori
 
 ---
 
-## 6. Engine gaps this package motivates (build list)
+## 6. Engine gaps this package motivates (build ledger)
 
-1. **Cross-investigation entity appearances** — endpoint over `stix_objects` + grouping
-   membership; powers the popover's "appears in N other investigations."
-2. **Evidence pinning** — specified: the `evidence-pin` interpretation type (`01`
-   INTERPRETATION → Pinned evidence). The pinned list is a fold over non-superseded pins;
-   un-pin = supersession. Remaining work is implementation (aggregate + projection +
-   endpoint + surfaces).
-3. **Verdict act** — specified: the `verdict` interpretation type (`01` INTERPRETATION →
-   Verdict). Disposition of record, revisable by appending; requires cited evidence + ≥1
-   pin; conclude requires a verdict (`01` Lifecycle invariants). AI-delegated verdicts are
-   **denied by default behind a tenant configuration dial** (default-deny + configurable
-   opening, the `04 §4` family; same posture as hypothesis adjudication mode) — the door to
-   AI verdicts stays open by config, never by code change, and the enabling config ref rides
-   the audit event. Remaining work is implementation.
-4. **Per-round `step` markers** on the sidecar notification channel (additive; no protocol
-   break).
-5. **Live markdown export** — generalize the `design/07` export from post-conclusion to
-   any-time. This is what makes the portable investigation artifact real; the package's file
-   schema is repurposed as the export format specification.
-6. **`retry_of` lineage** on action requests (renders the retry chain per §2.3).
-7. **Raw evidence in reach** — read-only OCSF JSON via reckon URIs from cited refs
-   (`13 §7` step 6; `02 §2.8` is its UI — every citation opens).
-8. **Real seeds** — `CreateInvestigation` currently takes a title only; the Seed extension
-   (`01` Extension 1: alert / entity / hypothesis seeds) is unimplemented, so the seed
-   picker (`02 §2.7`) has nothing to bind to and "never start from an empty chat" is not
-   yet true on either side. Entity-rooted seeds are load-bearing: the entity dossier,
-   cross-investigation joins, and alert→investigation ingestion all depend on them.
-9. Phase F: comms descriptors, timers, ingestion (§4).
+Built (endpoint + surface live):
+
+1. **Evidence pinning** — `evidence-pin` acts, `GET .../pins`, un-pin as supersession.
+2. **Verdict act** — `verdict` acts with the pin gate and the conclude gate; AI verdicts
+   behind the default-off `trust.ai_verdict` dial (the enabling ref rides the event).
+3. **Raw evidence in reach** — eager promotion at ingest (`ocsf_events` + `stix_objects`
+   persistence in the invoke path), `GET /api/evidence/{ref}`, read-only editor tabs.
+4. **Cross-investigation appearances** — the `ref_appearances` fold (seeds + citations +
+   action targets), `GET /api/entities/{ref}/appearances`.
+5. **Real seeds** — the Seed extension on `CreateInvestigation` (alert / entity /
+   question), the projected `seed_summary` triage line, the workbench seed picker.
+6. **`retry_of` lineage** — command → event → projection → view → the agent's
+   `request_action` parameter; the card renders the chain.
+7. **Per-round step markers** — `turn/step` sidecar notifications (additive).
+8. **Transcript-open** — `GET /api/interpretations/{id}/transcript` from the
+   content-addressed side store.
+9. **`consulted_*` provenance** — on the command/event/thread; the agent loop attaches its
+   `recall_sops` retrievals per turn, `used` decided conservatively (only when the model's
+   own final text references the SOP — the transcript is deliberately not searched, since
+   it contains the retrieval results themselves).
+
+Remaining:
+
+10. **Live markdown export** — generalize the `design/07` export from post-conclusion to
+    any-time; the package's file schema is the export format specification.
+11. Phase F: comms descriptors, timers, ingestion (§4).
 
 ---
 

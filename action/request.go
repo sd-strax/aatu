@@ -28,6 +28,10 @@ type ActionRequest struct {
 	// (04 §7): IsReversal is implied, and the endpoint triggers the ReversalSaga
 	// instead of a plain ActionLifecycle on auto-approval.
 	ReversalOfRef uuid.UUID `json:"reversal_of_ref,omitempty"`
+	// RetryOf, when set, records lineage to the prior FAILED/EXPIRED x-action
+	// this request replaces (a retry IS a new action — the dispatch ledger
+	// forbids re-dispatching one id).
+	RetryOf uuid.UUID `json:"retry_of,omitempty"`
 	// TTL bounds how long the request stays pending before ActionExpired; 0
 	// applies DefaultRequestTTL.
 	TTL time.Duration `json:"-"`
@@ -79,6 +83,7 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 		Rationale:     req.Rationale,
 		IsReversal:    req.ReversalOfRef != uuid.Nil,
 		ReversalOfRef: req.ReversalOfRef,
+		RetryOf:       req.RetryOf,
 	}, nil
 }
 

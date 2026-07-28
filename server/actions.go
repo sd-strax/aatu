@@ -27,6 +27,9 @@ type RequestActionBody struct {
 	// action (04 §7): action_type should be the inverse, and auto-approval
 	// triggers the ReversalSaga instead of a plain dispatch.
 	ReversalOfRef string `json:"reversal_of_ref,omitempty"`
+	// RetryOf records lineage to the prior FAILED/EXPIRED action this request
+	// replaces (design/ui binding §2.3).
+	RetryOf string `json:"retry_of,omitempty"`
 }
 
 // RequestActionResponse reports the created x-action and how authorization
@@ -63,6 +66,8 @@ type ActionView struct {
 	// TierEscalated: the blast-radius escalator raised this above the type's
 	// default tier (04 §1) — the card says why it is T3.
 	TierEscalated bool `json:"tier_escalated,omitempty"`
+	// RetryOf: lineage to the action this one replaces (zero when not a retry).
+	RetryOf string `json:"retry_of,omitempty"`
 }
 
 // listInvestigationActions serves GET /api/investigations/{id}/actions: every
@@ -98,6 +103,9 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 			Targets:       a.Targets,
 			EvidenceRefs:  a.EvidenceRefs,
 			Reversibility: a.Reversibility,
+		}
+		if a.RetryOf != (uuid.UUID{}) {
+			v.RetryOf = a.RetryOf.String()
 		}
 		if !a.ExpiresAt.IsZero() {
 			t := a.ExpiresAt
@@ -239,6 +247,13 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 
 	// Build the x-action command (validates against the catalog, applies the
 	// blast-radius escalator).
+	var retryOf uuid.UUID
+	if body.RetryOf != "" {
+		if retryOf, err = uuid.Parse(body.RetryOf); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "retry_of is not a valid id")
+			return
+		}
+	}
 	cmd, err := action.BuildRequestCommand(b.cfg.ActionCatalog, action.ActionRequest{
 		ActionType:       body.ActionType,
 		Targets:          body.Targets,
@@ -247,6 +262,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 		Rationale:        body.Rationale,
 		InvestigationRef: investigationID,
 		ReversalOfRef:    reversalOf,
+		RetryOf:          retryOf,
 	}, now)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())

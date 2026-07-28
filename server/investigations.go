@@ -23,6 +23,22 @@ type InvestigationView struct {
 	// Verdict is the disposition of record (01 §Verdict), absent when none —
 	// the honest zero: no stored "pending".
 	Verdict *VerdictView `json:"verdict,omitempty"`
+
+	// Seed is the investigation's root (01 §Extension 1); absent on pre-seed
+	// investigations. SeedSummary is the triage-queue display line.
+	Seed        *SeedBody `json:"seed,omitempty"`
+	SeedSummary string    `json:"seed_summary,omitempty"`
+}
+
+func seedBody(s *aggregate.Seed) *SeedBody {
+	if s == nil {
+		return nil
+	}
+	return &SeedBody{
+		Type: s.Type, AlertID: s.AlertID, Source: s.Source,
+		DetectionFindingRef: s.DetectionFindingRef, EntityRef: s.EntityRef,
+		HypothesisStatement: s.HypothesisStatement,
+	}
 }
 
 // VerdictView is the verdict fold as served.
@@ -33,9 +49,20 @@ type VerdictView struct {
 	InterpretationID string    `json:"interpretation_id,omitempty"`
 }
 
+// SeedBody is the client shape of the investigation's root (01 §Extension 1).
+type SeedBody struct {
+	Type                string `json:"type"` // alert | entity | question
+	AlertID             string `json:"alert_id,omitempty"`
+	Source              string `json:"source,omitempty"`
+	DetectionFindingRef string `json:"detection_finding_ref,omitempty"`
+	EntityRef           string `json:"entity_ref,omitempty"`
+	HypothesisStatement string `json:"hypothesis_statement,omitempty"`
+}
+
 // CreateInvestigationRequest is the body of POST /api/investigations.
 type CreateInvestigationRequest struct {
-	Title string `json:"title"`
+	Title string    `json:"title"`
+	Seed  *SeedBody `json:"seed,omitempty"`
 }
 
 // CreateInvestigationResponse is the body of a successful POST.
@@ -52,7 +79,7 @@ func (b *Backend) listInvestigations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := b.cfg.Handler.DB().QueryContext(r.Context(),
-		`SELECT aggregate_id, title, status, last_event_sequence
+		`SELECT aggregate_id, title, status, last_event_sequence, COALESCE(seed_summary, '')
 		 FROM investigation_current
 		 ORDER BY updated_at DESC LIMIT 200`)
 	if err != nil {
@@ -64,7 +91,7 @@ func (b *Backend) listInvestigations(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var v InvestigationView
 		var id uuid.UUID
-		if err := rows.Scan(&id, &v.Title, &v.Status, &v.LastEventSequence); err != nil {
+		if err := rows.Scan(&id, &v.Title, &v.Status, &v.LastEventSequence, &v.SeedSummary); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "scan: "+err.Error())
 			return
 		}
@@ -102,6 +129,8 @@ func (b *Backend) getInvestigation(w http.ResponseWriter, r *http.Request) {
 		Title:             ic.Title,
 		Status:            ic.Status,
 		LastEventSequence: ic.LastEventSequence,
+		Seed:              seedBody(ic.Seed),
+		SeedSummary:       ic.SeedSummary,
 	}
 	if ic.VerdictDisposition != "" {
 		view.Verdict = &VerdictView{
@@ -138,8 +167,16 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cmd := aggregate.CreateInvestigation{Title: req.Title}
+	if req.Seed != nil {
+		cmd.Seed = &aggregate.Seed{
+			Type: req.Seed.Type, AlertID: req.Seed.AlertID, Source: req.Seed.Source,
+			DetectionFindingRef: req.Seed.DetectionFindingRef, EntityRef: req.Seed.EntityRef,
+			HypothesisStatement: req.Seed.HypothesisStatement,
+		}
+	}
 	env := newEnvelope(uuid.New(), aggregate.Actor{PrincipalID: claims.Subject}, commandNow())
-	res, err := b.cfg.Handler.Handle(r.Context(), env, aggregate.CreateInvestigation{Title: req.Title})
+	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
 		writeCommandError(w, "create investigation", err)
 		return

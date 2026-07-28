@@ -44,6 +44,10 @@ type ActionCurrent struct {
 	// harness's G1 grader) can read grounding without walking the event log.
 	EvidenceRefs      []string
 	ExpiresAt         time.Time // approval deadline frozen at request time; zero = none
+	// RetryOf is the prior FAILED/EXPIRED action this one replaces — lineage
+	// only (a retry is always a new action; the dispatch ledger forbids
+	// re-dispatching one id). Zero when not a retry.
+	RetryOf uuid.UUID
 	LastEventSequence int64
 }
 
@@ -87,13 +91,13 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO action_current (
 				action_id, aggregate_id, tenant_id, action_type, tier, status,
-				is_reversal, reversal_of_ref, reversibility, required_mode,
+				is_reversal, reversal_of_ref, retry_of, reversibility, required_mode,
 				secondary_approver_pool, parameters, targets, evidence_refs, expires_at,
 				created_at, updated_at, last_event_sequence
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, $18)
 			ON CONFLICT (action_id) DO NOTHING
 		`, p.ActionID, evt.AggregateID, evt.TenantID, p.ActionType, p.Tier, ActionStatusRequested,
-			p.IsReversal, nullUUID(p.ReversalOfRef), nullString(p.Reversibility), nullString(p.RequiredMode),
+			p.IsReversal, nullUUID(p.ReversalOfRef), nullUUID(p.RetryOf), nullString(p.Reversibility), nullString(p.RequiredMode),
 			pool, params, targets, evidence, nullTime(p.ExpiresAt), evt.OccurredAt, evt.SequenceNo)
 		if err != nil {
 			return fmt.Errorf("insert action_current: %w", err)
@@ -230,7 +234,7 @@ func (ActionCurrentProjector) Reset(ctx context.Context, tx *sql.Tx) error {
 // actionCurrentColumns is the SELECT list scanActionCurrent expects, shared by
 // every action_current reader so the column order cannot drift per-query.
 const actionCurrentColumns = `action_id, aggregate_id, action_type, tier, status, mode,
-	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref,
+	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref, retry_of,
 	       reversibility, reversed_by_ref, reversal_attempted_by_ref,
 	       required_mode, secondary_approver_pool, parameters, targets, evidence_refs,
 	       expires_at, last_event_sequence`
@@ -240,10 +244,10 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	var a ActionCurrent
 	var mode, approver, requiredMode, reversibility sql.NullString
 	var primaryAt, expiresAt sql.NullTime
-	var reversalOf, reversedBy, attemptedBy uuid.NullUUID
+	var reversalOf, retryOf, reversedBy, attemptedBy uuid.NullUUID
 	var targets, pool, params, evidence []byte
 	err := scan(&a.ActionID, &a.AggregateID, &a.ActionType, &a.Tier, &a.Status,
-		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf,
+		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf, &retryOf,
 		&reversibility, &reversedBy, &attemptedBy,
 		&requiredMode, &pool, &params, &targets, &evidence, &expiresAt,
 		&a.LastEventSequence)
@@ -258,6 +262,9 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 	a.Reversibility = reversibility.String
 	if reversalOf.Valid {
 		a.ReversalOfRef = reversalOf.UUID
+	}
+	if retryOf.Valid {
+		a.RetryOf = retryOf.UUID
 	}
 	if reversedBy.Valid {
 		a.ReversedByRef = reversedBy.UUID

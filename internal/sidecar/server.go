@@ -256,6 +256,11 @@ func (s *service) handleCreateSession(ctx context.Context, raw json.RawMessage) 
 			OnTextDelta: func(delta string) {
 				s.conn.Notify("turn/text_delta", turnTextNote{SessionID: sessionID, Text: delta})
 			},
+			OnRoundStart: func(round int) {
+				// The per-round step marker (binding §2.6) — additive, groups
+				// the round's tool calls under one reasoning step client-side.
+				s.conn.Notify("turn/step", turnStepNote{SessionID: sessionID, Round: round})
+			},
 			OnToolCall: func(name string, input json.RawMessage) {
 				s.conn.Notify("turn/tool_call", turnToolCallNote{SessionID: sessionID, Name: name, Input: input})
 			},
@@ -348,6 +353,12 @@ type turnToolCallNote struct {
 	SessionID string          `json:"session_id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
+}
+
+// turnStepNote marks the start of one model↔tool round (1-based).
+type turnStepNote struct {
+	SessionID string `json:"session_id"`
+	Round     int    `json:"round"`
 }
 
 type turnToolResultNote struct {
