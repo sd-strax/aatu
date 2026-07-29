@@ -556,7 +556,14 @@ export class InvestigationDocuments {
     .countdown.warn { color: var(--vscode-charts-yellow, #f5b53d); font-weight: 600; }
     .countdown.due { color: var(--vscode-errorForeground); font-weight: 600; }
     .toolrefs { padding: 0.35rem 0.6rem 0.5rem; border-top: 1px solid var(--vscode-panel-border); font-family: var(--vscode-font-family); }
-    .toolrefs button { font-size: 0.72rem; padding: 0.05rem 0.45rem; margin-left: 0.3rem; }
+    .toolactions { margin-top: 0.4rem; }
+    .pincta {
+      font-size: 0.76rem; padding: 0.15rem 0.6rem;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      border-radius: 0.3rem;
+    }
+    .pincta:hover { background: var(--vscode-button-hoverBackground); }
 
     #verdictDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
@@ -870,18 +877,24 @@ export class InvestigationDocuments {
 
       // Citations + pin-from-result (02 §2.8, 01 §Pinned evidence): the
       // result's refs open, and the whole result can be pinned in one motion.
+      // The pin CTA sits in its OWN action row, visually a button — never in
+      // the chip flow where it reads as one more ref.
       if (msg.refs && msg.refs.length) {
         const box = document.createElement("div");
         box.className = "toolrefs";
+        for (const r of msg.refs) box.appendChild(refChip(r));
+        const actions = document.createElement("div");
+        actions.className = "toolactions";
         const pin = document.createElement("button");
-        pin.textContent = "Pin as evidence…";
-        pin.title = "Pin this result's findings (cites " + msg.refs.length + " refs)";
+        pin.className = "pincta";
+        pin.textContent = "📌 Pin as evidence…";
+        pin.title = "Mark this result's findings load-bearing (cites all " + msg.refs.length + " refs)";
         pin.addEventListener("click", (e) => {
           e.stopPropagation();
           vscode.postMessage({ type: "pin.add", refs: msg.refs, hint: "" });
         });
-        for (const r of msg.refs) box.appendChild(refChip(r));
-        box.appendChild(pin);
+        actions.appendChild(pin);
+        box.appendChild(actions);
         row.appendChild(box);
       }
     }
