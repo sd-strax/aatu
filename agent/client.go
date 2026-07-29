@@ -415,6 +415,36 @@ func (c *Client) ListHypotheses(ctx context.Context, id string) (json.RawMessage
 	return out, err
 }
 
+// ThreadEntry is one committed reasoning act (subset of server.ThreadEntryView)
+// — enough to rehydrate a session's conversation on reconnect.
+type ThreadEntry struct {
+	SequenceNo       int64  `json:"sequence_no"`
+	InterpretationID string `json:"interpretation_id"`
+	HasTranscript    bool   `json:"has_transcript"`
+}
+
+// Thread returns the investigation's committed reasoning thread in sequence
+// order (agent token — a read).
+func (c *Client) Thread(ctx context.Context, id string) ([]ThreadEntry, error) {
+	var out struct {
+		Thread []ThreadEntry `json:"thread"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/investigations/"+id+"/thread", c.agentSrc, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Thread, nil
+}
+
+// Transcript returns the committed turn transcript behind one interpretation
+// (agent token — a read). The line-framed body is what the loop rehydrates.
+func (c *Client) Transcript(ctx context.Context, interpretationID string) (string, error) {
+	var out struct {
+		Body string `json:"body"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/interpretations/"+interpretationID+"/transcript", c.agentSrc, nil, &out)
+	return out.Body, err
+}
+
 // ListActions returns the investigation's x-actions with their current status
 // (agent token — a read). The durable source of the pending-approval queue.
 func (c *Client) ListActions(ctx context.Context, id string) ([]ActionStatus, error) {

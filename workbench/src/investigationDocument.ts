@@ -27,6 +27,10 @@ type RenderMessage =
   | { type: "error"; message: string }
   | { type: "pending"; actions: ActionRow[] }
   | { type: "pins"; pins: PinRow[] }
+  // The committed conversation, reconstructed: one entry per transcript-
+  // bearing thread act, in sequence order. The webview parses the line-framed
+  // transcript bodies back into the conversation rendering (cold restore).
+  | { type: "history.turns"; turns: { sequenceNo: number; occurredAt: string; body: string }[] }
   | { type: "turn.start" }
   | { type: "turn.user"; text: string }
   | { type: "turn.reasoning"; delta: string }
@@ -125,6 +129,23 @@ export class InvestigationDocuments {
       ]);
       panel.title = `⚖ ${investigation.title}`;
       void this.post(panel, { type: "data", investigation, hypotheses, capabilities, thread });
+
+      // Cold restore (07 cross-cutting acceptance): fetch the committed
+      // transcripts and let the webview reconstruct the conversation. Bounded
+      // to the most recent turns; failures skip silently (the compact thread
+      // remains the fallback lens).
+      const withTranscript = (thread ?? []).filter((e) => e.hasTranscript).slice(-30);
+      if (withTranscript.length) {
+        const turns = (await Promise.all(withTranscript.map(async (e) => {
+          try {
+            const t = await this.client.transcript(e.interpretationId);
+            return { sequenceNo: e.sequenceNo, occurredAt: e.occurredAt, body: t.body };
+          } catch {
+            return null;
+          }
+        }))).filter((t): t is { sequenceNo: number; occurredAt: string; body: string } => t !== null);
+        void this.post(panel, { type: "history.turns", turns });
+      }
     } catch (err) {
       const message = errText(err);
       this.log.error(`load investigation ${id}: ${message}`);
@@ -619,10 +640,11 @@ export class InvestigationDocuments {
 
     <div id="scroll">
       <div id="banner"></div>
-      <details id="historyWrap" open style="display:none">
+      <details id="historyWrap" style="display:none">
         <summary id="historySummary">How this investigation got here</summary>
         <div id="history"></div>
       </details>
+      <div id="restored"></div>
       <div id="conversation"></div>
     </div>
 
@@ -1008,6 +1030,136 @@ export class InvestigationDocuments {
       }
     }
 
+    // ---- cold restore: the committed conversation --------------------------
+    // Transcripts are line-framed ([user]/[assistant]/[tool_use]/[tool_result]
+    // records, one per line, content newlines escaped) and results carry the
+    // FULL payloads — so reconstruction renders real coverage, refs, and
+    // pinnable chips, not a summary. Rebuilt idempotently on every load;
+    // entries past the first-load cutoff arrive as live turns instead.
+    function unescapeT(s) {
+      return String(s ?? "").replace(/\\\\n/g, "\\n").replace(/\\\\r/g, "\\r");
+    }
+
+    function renderRestored(turns) {
+      if (historyCutoff === null) return;
+      const box = $("restored");
+      box.textContent = "";
+      const shown = (turns || [])
+        .filter((t) => t.sequenceNo <= historyCutoff)
+        .sort((a, b) => a.sequenceNo - b.sequenceNo);
+      for (const t of shown) box.appendChild(restoredTurn(t));
+    }
+
+    function restoredTurn(t) {
+      const wrap = document.createElement("div");
+      const hdr = document.createElement("div");
+      hdr.className = "usage";
+      hdr.textContent = (t.occurredAt ? new Date(t.occurredAt).toLocaleString() + " · " : "") + "committed turn";
+      wrap.appendChild(hdr);
+
+      const rows = new Map(); // tool call id → row, for result matching
+      for (const line of String(t.body).split("\\n")) {
+        let m;
+        if ((m = line.match(/^\\[user\\] ([^]*)$/))) {
+          const u = document.createElement("div");
+          u.className = "msg user";
+          const b = document.createElement("span");
+          b.className = "bubble";
+          b.textContent = unescapeT(m[1]);
+          u.appendChild(b);
+          wrap.appendChild(u);
+        } else if ((m = line.match(/^\\[assistant\\] ([^]*)$/))) {
+          const seg = document.createElement("div");
+          seg.className = "msg assistant md";
+          seg.innerHTML = md(unescapeT(m[1]));
+          wrap.appendChild(seg);
+        } else if ((m = line.match(/^\\[tool_use ([^ \\]]+) id=([^\\]]+)\\] ([^]*)$/))) {
+          const row = staticToolRow(m[1], m[3]);
+          rows.set(m[2], row);
+          wrap.appendChild(row);
+        } else if ((m = line.match(/^\\[tool_result ([^ \\]]+) id=([^ \\]]+) error=(true|false)\\] ([^]*)$/))) {
+          settleStaticRow(rows.get(m[2]), m[3] === "true", unescapeT(m[4]));
+        } else if ((m = line.match(/^\\[loop\\] ([^]*)$/))) {
+          const d = document.createElement("div");
+          d.className = "committed";
+          d.textContent = m[1];
+          wrap.appendChild(d);
+        }
+      }
+      return wrap;
+    }
+
+    function staticToolRow(name, argsRaw) {
+      const row = document.createElement("details");
+      row.className = "tool";
+      const sum = document.createElement("summary");
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      mark.textContent = "→";
+      const verb = document.createElement("span");
+      verb.className = "verb";
+      verb.textContent = name;
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = argsRaw;
+      sum.append(mark, verb, hint);
+      const body = document.createElement("pre");
+      try {
+        body.textContent = JSON.stringify(JSON.parse(unescapeT(argsRaw)), null, 2);
+      } catch {
+        body.textContent = unescapeT(argsRaw);
+      }
+      row.append(sum, body);
+      return row;
+    }
+
+    function settleStaticRow(row, isErr, content) {
+      if (!row) return;
+      const mark = row.querySelector(".mark");
+      mark.textContent = isErr ? "✗" : "✓";
+      mark.classList.add(isErr ? "err" : "ok");
+
+      // Distill the envelope exactly as the sidecar does live — the FULL
+      // payload is in the committed record here, so nothing is guessed.
+      let detail = isErr ? "error" : "done";
+      const refs = [];
+      try {
+        const env2 = JSON.parse(content);
+        if (env2 && env2.coverage) {
+          detail = env2.coverage + " · " + (Array.isArray(env2.events) ? env2.events.length : 0) + " event(s)";
+          for (const k of ["observed_data_refs", "entity_refs", "ocsf_event_refs"]) {
+            for (const r of env2[k] || []) if (!refs.includes(r)) refs.push(r);
+          }
+        }
+      } catch { /* not an envelope — plain result */ }
+      const st = document.createElement("span");
+      st.className = "hint status";
+      st.textContent = detail;
+      row.querySelector("summary").appendChild(st);
+
+      const res = document.createElement("pre");
+      res.textContent = content.length > 4000 ? content.slice(0, 4000) + "…" : content;
+      row.appendChild(res);
+
+      if (refs.length) {
+        const box = document.createElement("div");
+        box.className = "toolrefs";
+        for (const r of refs.slice(0, 12)) box.appendChild(refChip(r));
+        const actions = document.createElement("div");
+        actions.className = "toolactions";
+        const pin = document.createElement("button");
+        pin.className = "pincta";
+        pin.textContent = "📌 Pin as evidence…";
+        pin.addEventListener("click", (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: "pin.add", refs, hint: "" });
+        });
+        actions.appendChild(pin);
+        box.appendChild(actions);
+        row.appendChild(box);
+      }
+    }
+
     // ---- rail --------------------------------------------------------------
     function renderHypotheses(hs) {
       const box = $("hyps");
@@ -1326,6 +1478,9 @@ export class InvestigationDocuments {
           break;
         case "pins":
           renderPins(msg.pins);
+          break;
+        case "history.turns":
+          renderRestored(msg.turns);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');

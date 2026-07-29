@@ -144,7 +144,95 @@ func NewSession(ctx context.Context, cfg Config) (*Session, error) {
 
 	s.tools = buildTools(caps, actionTypes)
 	s.system = systemPrompt(inv, caps, hyps)
+
+	// Rehydrate the conversation (05 §3.4; the workbench's cold-restore): a
+	// reconnecting session must be able to CONTINUE, not just re-read. The
+	// committed transcripts are the message history — replay each turn's
+	// analyst question and the model's own prose as a user/assistant pair, so
+	// the model resumes with genuine memory of the exchange. Tool detail is
+	// deliberately NOT replayed: collapsing to text keeps the reconstruction
+	// robust (no dangling tool_use the provider would reject) and the model
+	// re-queries tools for fresh data when it needs them. Best-effort — a
+	// rehydration failure leaves a fresh session (context still rides the
+	// system prompt), never blocks the session.
+	s.rehydrate(ctx)
 	return s, nil
+}
+
+// maxRehydratedTurns bounds how many prior turns seed the conversation on
+// reconnect — recent context matters most, and the whole history need not
+// ride every resumed turn's prompt.
+const maxRehydratedTurns = 20
+
+// rehydrate seeds s.messages from the committed thread so a reconnected
+// session continues the conversation. Best-effort and side-effect-free on
+// failure.
+func (s *Session) rehydrate(ctx context.Context) {
+	thread, err := s.backend.Thread(ctx, s.investigationID)
+	if err != nil {
+		return
+	}
+	var withTranscript []ThreadEntry
+	for _, e := range thread {
+		if e.HasTranscript {
+			withTranscript = append(withTranscript, e)
+		}
+	}
+	if len(withTranscript) > maxRehydratedTurns {
+		withTranscript = withTranscript[len(withTranscript)-maxRehydratedTurns:]
+	}
+	var msgs []Message
+	for _, e := range withTranscript {
+		body, terr := s.backend.Transcript(ctx, e.InterpretationID)
+		if terr != nil {
+			continue
+		}
+		userMsg, assistantMsg := parseTranscriptTurn(body)
+		if userMsg != "" {
+			msgs = append(msgs, Message{Role: RoleUser, Content: []ContentBlock{TextBlock(userMsg)}})
+		}
+		if assistantMsg != "" {
+			msgs = append(msgs, Message{Role: RoleAssistant, Content: []ContentBlock{TextBlock(assistantMsg)}})
+		}
+	}
+	// Only adopt a well-formed history (ends on an assistant turn), so the next
+	// live user message extends a valid alternating conversation.
+	if n := len(msgs); n > 0 && msgs[n-1].Role == RoleAssistant {
+		s.messages = msgs
+	}
+}
+
+// parseTranscriptTurn extracts the analyst question and the model's joined
+// prose from one line-framed committed transcript (session.go's own format:
+// [user]/[assistant]/[tool_use]/[tool_result] records, content newlines
+// escaped). Tool lines are dropped — the conversational thread is what
+// continuation needs; tool detail is re-fetchable and lives in the transcript.
+func parseTranscriptTurn(body string) (userMsg, assistantMsg string) {
+	var user strings.Builder
+	var assistant strings.Builder
+	for _, line := range strings.Split(body, "\n") {
+		if rest, ok := strings.CutPrefix(line, "[user] "); ok {
+			if user.Len() > 0 {
+				user.WriteByte('\n')
+			}
+			user.WriteString(unsanitizeTranscript(rest))
+		} else if rest, ok := strings.CutPrefix(line, "[assistant] "); ok {
+			if assistant.Len() > 0 {
+				assistant.WriteByte('\n')
+			}
+			assistant.WriteString(unsanitizeTranscript(rest))
+		}
+	}
+	return strings.TrimSpace(user.String()), strings.TrimSpace(assistant.String())
+}
+
+// unsanitizeTranscript reverses sanitizeTranscript's newline escaping so a
+// rehydrated message reads as the model wrote it.
+func unsanitizeTranscript(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	return strings.NewReplacer("\\n", "\n", "\\r", "\r").Replace(s)
 }
 
 // Tools exposes the assembled tool set (for surfaces that display it).

@@ -428,6 +428,97 @@ func TestSession_Turn(t *testing.T) {
 	}
 }
 
+// TestSession_Rehydrates: a session created against an investigation that
+// already has committed turns resumes with the prior conversation in its
+// message history, so the NEXT turn's model call carries genuine memory of the
+// exchange (continuation, not just re-reading). Tool detail is collapsed to
+// text — no dangling tool_use — and the history ends on an assistant turn so
+// the new user message extends a valid alternating conversation.
+func TestSession_Rehydrates(t *testing.T) {
+	// A backend that serves a two-entry thread, both transcript-bearing, plus
+	// the transcript bodies (session.go's line-framed format).
+	transcripts := map[string]string{
+		"interp-1": "[user] any odd logons on WIN-FILE01?\n" +
+			"[assistant] Checking the logon history.\n" +
+			"[tool_use enumerate_logons id=t1] {\"entity\":{\"host\":{\"hostname\":\"WIN-FILE01\"}}}\n" +
+			"[tool_result enumerate_logons id=t1 error=false] {\"coverage\":\"COMPLETE\",\"events\":[]}\n" +
+			"[assistant] Two RemoteInteractive logons from svc_backup — worth a closer look.",
+		"interp-2": "[user] who is svc_backup?\n" +
+			"[assistant] A service account; the RDP source was 10.0.4.20.",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/thread"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"thread": []map[string]any{
+				{"sequence_no": 3, "interpretation_id": "interp-1", "has_transcript": true},
+				{"sequence_no": 5, "interpretation_id": "interp-2", "has_transcript": true},
+			}})
+		case strings.HasPrefix(r.URL.Path, "/api/interpretations/") && strings.HasSuffix(r.URL.Path, "/transcript"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/interpretations/"), "/transcript")
+			_ = json.NewEncoder(w).Encode(map[string]any{"body": transcripts[id]})
+		case strings.HasSuffix(r.URL.Path, "/hypotheses"):
+			_, _ = w.Write([]byte(`{"hypotheses":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/actions"):
+			_, _ = w.Write([]byte(`{"actions":[]}`))
+		case r.URL.Path == "/api/capabilities":
+			_, _ = w.Write([]byte(`{"capabilities":[]}`))
+		case r.URL.Path == "/api/action-types":
+			http.Error(w, "off", http.StatusServiceUnavailable)
+		case r.URL.Path == "/api/interpretations":
+			_, _ = w.Write([]byte(`{"interpretation_id":"interp-3"}`))
+		case strings.HasPrefix(r.URL.Path, "/api/investigations/"):
+			_ = json.NewEncoder(w).Encode(Investigation{AggregateID: "inv-1", Title: "INV", Status: "ACTIVE"})
+		default:
+			http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, StaticToken("AGENT"), StaticToken("HUMAN"))
+	llm := &scriptedLLM{script: []CompleteResponse{
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("As I noted, svc_backup's RDP came from 10.0.4.20.")}},
+	}}
+	s, err := NewSession(context.Background(), Config{Backend: client, LLM: llm, InvestigationID: "inv-1"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	// The session resumed with four messages (two turns, each user+assistant),
+	// ending on an assistant turn.
+	if len(s.messages) != 4 {
+		t.Fatalf("rehydrated messages = %d; want 4 (2 turns × user+assistant)", len(s.messages))
+	}
+	if s.messages[0].Role != RoleUser || !strings.Contains(s.messages[0].Content[0].Text, "odd logons") {
+		t.Errorf("first message = %+v; want the first analyst question", s.messages[0])
+	}
+	if s.messages[3].Role != RoleAssistant || !strings.Contains(s.messages[3].Content[0].Text, "10.0.4.20") {
+		t.Errorf("last message = %+v; want the model's last prose", s.messages[3])
+	}
+	// Tool lines were collapsed — no tool_use blocks in the rehydrated history.
+	for _, m := range s.messages {
+		for _, b := range m.Content {
+			if b.Type == BlockToolUse || b.Type == BlockToolResult {
+				t.Error("rehydration replayed tool blocks; want text-only (no dangling tool_use)")
+			}
+		}
+	}
+
+	// The next turn carries that history into the model call — continuation.
+	if _, err := s.Turn(context.Background(), "remind me where the RDP came from"); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	req := llm.requests[len(llm.requests)-1]
+	joined := ""
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			joined += b.Text + "\n"
+		}
+	}
+	if !strings.Contains(joined, "svc_backup") || !strings.Contains(joined, "remind me where") {
+		t.Error("resumed turn's model call lacks the prior conversation — continuation broken")
+	}
+}
+
 // TestSession_StreamingContract (E.4): with OnTextDelta set and a StreamingLLM,
 // text reaches the surface only as deltas — OnText stays silent (no double
 // render) — while the record (transcript, TurnResult.Text) still carries the
