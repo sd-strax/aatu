@@ -110,13 +110,18 @@ the same transaction, so the history is complete with no duplicates, ordered by
 confidence, and tool-call/evidence counts. The list freezes at the sequence seen on first
 load; later acts arrive through the live conversation, so re-fetches never duplicate them.
 
-The rail:
+The rail mirrors the epistemic workflow — what we believe, then what grounds it — with
+approvals as an *interrupt*, not a section:
 
-- **Needs your approval** — the durable action queue with the Approve/Reject buttons (and the
-  EXPIRED posture); always visible, honest empty state.
-- **Hypotheses** — the reasoning-thread state with prediction status badges.
-- **Capabilities** — the `03 §6.3` health view: per-verb available/degraded/unavailable dots
-  (a 503 renders "capability layer off", never an empty lie).
+- **Needs your approval** — hidden entirely when nothing waits; pinned above everything when
+  something does (an approval window's countdown outranks all standing state). The durable
+  action queue with decision-grade cards and the EXPIRED posture.
+- **Hypotheses** — the scoreboard leads the standing rail: statements with prediction status
+  badges, always present, always evolving.
+- **Pinned evidence** — the curation fold; superseded pins struck, never absent.
+- **Capabilities** — collapsed to a count (`Capabilities · 4/8 available`). Health detail is
+  operator information (`13 §4` homes it in the container view); coverage surfaces where it
+  bites — on tool-result rows and in the verdict residual — not as standing chrome.
 
 Conversation rendering: assistant text goes through a **minimal escape-first markdown
 renderer** (inline in the webview — the CSP forbids external libraries; every path escapes

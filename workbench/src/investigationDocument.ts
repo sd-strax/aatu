@@ -504,6 +504,11 @@ export class InvestigationDocuments {
       font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
       opacity: 0.6; margin: 0 0 0.45rem; font-weight: 600;
     }
+    .railfold { margin-bottom: 1.1rem; }
+    .railfold > summary {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+      opacity: 0.6; font-weight: 600; cursor: pointer; margin-bottom: 0.45rem;
+    }
     .card {
       border: 1px solid var(--vscode-panel-border); border-radius: 0.4rem;
       padding: 0.5rem 0.65rem; margin: 0.4rem 0; font-size: 0.84rem;
@@ -620,22 +625,29 @@ export class InvestigationDocuments {
   </div>
 
   <aside id="rail">
-    <section>
+    <!-- The rail mirrors the epistemic workflow: what we believe (hypotheses,
+         the scoreboard) → what grounds it (pinned evidence). Approvals are an
+         INTERRUPT, not a section: hidden when empty, pinned above everything
+         when something actually needs the analyst (a countdown outranks all).
+         Capability health is operator info (13 §4 puts it in the container) —
+         collapsed to a count here; coverage already surfaces where it bites
+         (tool-result rows, the verdict residual). -->
+    <section id="pendingSection" style="display:none">
       <h2>Needs your approval</h2>
-      <div id="pending"><div class="empty">Nothing waiting</div></div>
-    </section>
-    <section>
-      <h2 id="pinsHead">Pinned evidence</h2>
-      <div id="pinsBox"><div class="empty">Nothing pinned yet</div></div>
+      <div id="pending"></div>
     </section>
     <section>
       <h2>Hypotheses</h2>
       <div id="hyps"><div class="empty">None yet</div></div>
     </section>
     <section>
-      <h2>Capabilities</h2>
-      <div id="caps"><div class="empty">…</div></div>
+      <h2 id="pinsHead">Pinned evidence</h2>
+      <div id="pinsBox"><div class="empty">Nothing pinned yet</div></div>
     </section>
+    <details id="capsFold" class="railfold">
+      <summary id="capsHead">Capabilities</summary>
+      <div id="caps"><div class="empty">…</div></div>
+    </details>
   </aside>
 
   <div id="verdictDialog" style="display:none">
@@ -977,13 +989,17 @@ export class InvestigationDocuments {
     function renderCapabilities(caps) {
       const box = $("caps");
       if (caps === null) {
+        $("capsHead").textContent = "Capabilities · off";
         box.innerHTML = '<div class="empty">capability layer off</div>';
         return;
       }
       if (!caps.length) {
+        $("capsHead").textContent = "Capabilities";
         box.innerHTML = '<div class="empty">none configured</div>';
         return;
       }
+      const avail = caps.filter((c) => c.status === "available").length;
+      $("capsHead").textContent = "Capabilities · " + avail + "/" + caps.length + " available";
       const order = { available: 0, degraded: 1, unavailable: 2 };
       const sorted = caps.slice().sort((a, b) =>
         (order[a.status] ?? 3) - (order[b.status] ?? 3) || a.verb.localeCompare(b.verb));
@@ -1049,8 +1065,10 @@ export class InvestigationDocuments {
       const box = $("pending");
       const pend = lastPending.filter((a) => a.pending);
       box.textContent = "";
+      // The interrupt pattern: no section at all when nothing needs the
+      // analyst; pinned above everything when something does.
+      $("pendingSection").style.display = pend.length ? "" : "none";
       if (!pend.length) {
-        box.innerHTML = '<div class="empty">Nothing waiting</div>';
         return;
       }
       for (const a of pend) {
