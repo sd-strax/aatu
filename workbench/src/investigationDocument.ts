@@ -564,6 +564,7 @@ export class InvestigationDocuments {
       border-radius: 0.3rem;
     }
     .pincta:hover { background: var(--vscode-button-hoverBackground); }
+    .stepPin { font-size: 0.7rem; padding: 0.05rem 0.45rem; margin-left: 0.35rem; }
 
     #verdictDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
@@ -943,8 +944,6 @@ export class InvestigationDocuments {
         const extras = [];
         if (e.confidence) extras.push(e.confidence.toLowerCase() + " confidence");
         if (e.toolCalls) extras.push(e.toolCalls + " tool call" + (e.toolCalls === 1 ? "" : "s"));
-        const refs = (e.inputRefs?.length ?? 0) + (e.outputRefs?.length ?? 0);
-        if (refs) extras.push(refs + " evidence ref" + (refs === 1 ? "" : "s"));
         if (extras.length) {
           const ex = document.createElement("span");
           ex.textContent = extras.join(" · ");
@@ -956,6 +955,33 @@ export class InvestigationDocuments {
         body.innerHTML = md(e.summary);
 
         step.append(head, body);
+
+        // The step's citations, as CHIPS (02 §2.8 — every citation opens),
+        // not a count: after a reload, the thread is the only lens on the
+        // conversation, so its refs must stay clickable and pinnable.
+        const allRefs = [];
+        for (const r of (e.inputRefs || []).concat(e.outputRefs || [])) {
+          if (r && !allRefs.includes(r)) allRefs.push(r);
+        }
+        if (allRefs.length) {
+          const refsRow = document.createElement("div");
+          const shown = allRefs.slice(0, 8);
+          for (const r of shown) refsRow.appendChild(refChip(r));
+          if (allRefs.length > shown.length) {
+            const more = document.createElement("span");
+            more.className = "cardmeta";
+            more.textContent = "+" + (allRefs.length - shown.length) + " more";
+            refsRow.appendChild(more);
+          }
+          const pin = document.createElement("button");
+          pin.className = "pincta stepPin";
+          pin.textContent = "📌 Pin…";
+          pin.title = "Pin this step's cited evidence (" + allRefs.length + " refs)";
+          pin.addEventListener("click", () =>
+            vscode.postMessage({ type: "pin.add", refs: allRefs, hint: "" }));
+          refsRow.appendChild(pin);
+          step.appendChild(refsRow);
+        }
 
         // Knowledge provenance chips (02 §2.11): followed vs consulted.
         if (e.consultedSops && e.consultedSops.length) {
