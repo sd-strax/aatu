@@ -157,6 +157,90 @@ func succeededAction(t *testing.T, invID uuid.UUID) uuid.UUID {
 	return actionID
 }
 
+// TestRerequestAction: re-requesting an EXPIRED action creates a NEW action
+// with the original's frozen fields, retry_of lineage, and a fresh clock — the
+// analyst's re-affirmation, not a bypass of expiry. A live action can't be
+// re-requested.
+func TestRerequestAction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	b := actionBackend(t) // baseline only — lands PENDING_MANUAL
+
+	// Request an action, then expire it (SYSTEM-emitted, as the timer would).
+	_, orig := postAction(t, b, mintToken(t, nil), RequestActionBody{
+		ActionType:       "host.isolate",
+		Targets:          []aggregate.TargetSpec{{EntityRef: "x-host--9", ResolvedIdentifier: "WIN-9"}},
+		EvidenceRefs:     []string{"observed-data--od9"},
+		Rationale:        "original containment rationale",
+		InvestigationRef: invID.String(),
+	})
+	origID := uuid.MustParse(orig.ActionID)
+
+	srv := httptest.NewServer(b.buildRouter(b.verifier))
+	t.Cleanup(srv.Close)
+	rerequest := func(id, rationale string) (*http.Response, RequestActionResponse) {
+		raw, _ := json.Marshal(RerequestBody{Rationale: rationale})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/actions/"+id+"/rerequest", bytes.NewReader(raw))
+		req.Header.Set("Authorization", "Bearer "+mintToken(t, nil))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out RequestActionResponse
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		_ = resp.Body.Close()
+		return resp, out
+	}
+
+	// A live (PENDING_MANUAL) action is not re-requestable.
+	if resp, _ := rerequest(orig.ActionID, "too soon"); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("re-request of a live action = %d; want 422", resp.StatusCode)
+	}
+
+	// Expire it (SYSTEM actor, as the Temporal timer does).
+	expEnv := aggregate.Envelope{
+		AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
+		Actor: aggregate.Actor{PrincipalID: "system", Kind: aggregate.ActorSystem}, OccurredAt: time.Now().UTC(),
+	}
+	if _, err := testHandler.Handle(context.Background(), expEnv, aggregate.ExpireAction{ActionID: origID}); err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+
+	// Now re-request: a NEW action, PENDING_MANUAL, with retry_of lineage and
+	// the frozen fields carried faithfully.
+	resp, out := rerequest(orig.ActionID, "still warranted — host still shows the beacon")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("re-request = %d; want 201", resp.StatusCode)
+	}
+	if out.ActionID == orig.ActionID {
+		t.Fatal("re-request reused the original id; a retry must be a NEW action")
+	}
+	newID := uuid.MustParse(out.ActionID)
+	nc, err := aggregate.LoadActionCurrent(context.Background(), testDB, newID)
+	if err != nil {
+		t.Fatalf("load new action: %v", err)
+	}
+	if nc.Status != aggregate.ActionStatusRequested {
+		t.Errorf("new action status = %q; want REQUESTED (fresh, awaiting approval)", nc.Status)
+	}
+	if nc.RetryOf != origID {
+		t.Errorf("retry_of = %s; want the original %s", nc.RetryOf, origID)
+	}
+	if nc.ActionType != "host.isolate" || len(nc.Targets) != 1 || nc.Targets[0].ResolvedIdentifier != "WIN-9" {
+		t.Errorf("frozen fields not carried: %+v", nc)
+	}
+	if len(nc.EvidenceRefs) != 1 || nc.EvidenceRefs[0] != "observed-data--od9" {
+		t.Errorf("evidence not carried: %v", nc.EvidenceRefs)
+	}
+	// Fresh clock: the new window is in the future.
+	if !nc.ExpiresAt.After(time.Now()) {
+		t.Errorf("new expires_at = %v; want a fresh future window", nc.ExpiresAt)
+	}
+}
+
 // TestRequestAction_ReversalValidation: a reversal request must name a real,
 // SUCCEEDED original whose descriptor's reversible_by matches the requested
 // action_type (04 §7) — otherwise the eventual action.reversed would lie.

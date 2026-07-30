@@ -677,6 +677,15 @@ export class BackendClient {
     return { actionId: r.action_id ?? actionId, status: r.status ?? "", stage: r.stage };
   }
 
+  /**
+   * POST /api/actions/{id}/rerequest — re-request an expired action (human
+   * token). The backend rebuilds it from the original's frozen fields with a
+   * fresh window and retry_of lineage; the analyst then approves the new one.
+   */
+  async rerequestAction(actionId: string, rationale: string): Promise<void> {
+    await this.authedPost(`/api/actions/${encodeURIComponent(actionId)}/rerequest`, { rationale });
+  }
+
   /** POST /api/actions/{id}/reject — ditto, human token only. */
   async rejectAction(actionId: string, reason: string): Promise<ActionDecision> {
     const r = await this.authedPost<{ action_id?: string; status?: string; stage?: string }>(

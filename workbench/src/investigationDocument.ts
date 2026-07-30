@@ -51,6 +51,7 @@ type InboundMessage =
   | { type: "send"; text: string }
   | { type: "action.approve"; actionId: string; tier: string; actionType: string; challenge?: string }
   | { type: "action.reject"; actionId: string; actionType: string; reason: string }
+  | { type: "action.rerequest"; actionId: string; actionType: string; rationale: string }
   | { type: "pin.add"; refs: string[]; finding: string }
   | { type: "pin.unpin"; interpretationId: string; reason: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
@@ -97,6 +98,8 @@ export class InvestigationDocuments {
         void this.approve(id, panel, msg);
       } else if (msg.type === "action.reject") {
         void this.reject(id, panel, msg);
+      } else if (msg.type === "action.rerequest") {
+        void this.rerequest(id, panel, msg);
       } else if (msg.type === "pin.add") {
         void this.pinCommit(id, panel, msg.refs, msg.finding);
       } else if (msg.type === "pin.unpin") {
@@ -290,6 +293,25 @@ export class InvestigationDocuments {
       void vscode.window.showInformationMessage(`reckon: ${msg.actionType} → ${decision.status}`);
     } catch (err) {
       void vscode.window.showErrorMessage(`reckon: reject failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
+  }
+
+  /**
+   * Re-request an expired action — a fresh request (same targets & evidence,
+   * new window, retry_of lineage) the analyst then approves. Not a bypass of
+   * expiry: the conscious re-affirmation it exists to elicit.
+   */
+  private async rerequest(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { actionId: string; actionType: string; rationale: string },
+  ): Promise<void> {
+    try {
+      await this.client.rerequestAction(msg.actionId, msg.rationale);
+      void vscode.window.showInformationMessage(`reckon: ${msg.actionType} re-requested — approve the new request`);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: re-request failed — ${errText(err)}`);
     }
     await this.postPending(id, panel);
   }
@@ -1384,13 +1406,31 @@ export class InvestigationDocuments {
         }
 
         if (a.expired) {
-          // The approval deadline passed — the engine refuses an approve, so
-          // no buttons: an affordance that can only fail is a lie.
-          row.style.opacity = "0.55";
+          // The approval deadline passed — the engine refuses an APPROVE (no
+          // affordance that can only fail). But the analyst can RE-REQUEST: a
+          // new action, fresh window, retry_of lineage — a conscious
+          // re-affirmation, not a bypass.
+          row.style.opacity = "0.7";
           const note = document.createElement("div");
           note.className = "cardmeta";
-          note.textContent = "approval window elapsed — re-request the action if it is still needed";
+          note.textContent = "approval window elapsed — the world may have moved on";
           row.append(note);
+          const decide = document.createElement("div");
+          decide.className = "decide";
+          const again = document.createElement("button");
+          again.className = "primary";
+          again.textContent = "↻ Re-request";
+          again.title = "Create a fresh request (same targets + evidence, new approval window)";
+          again.addEventListener("click", () => openPrompt({
+            title: "Re-request " + a.actionType,
+            label: "Why is this still warranted?",
+            placeholder: "e.g. WIN-9 still shows the beaconing — containment still needed",
+            helper: "Creates a NEW action (same targets & evidence, fresh approval window) you then approve. The original stays expired, linked as lineage.",
+            confirm: "↻ Re-request",
+            onConfirm: (rationale) => vscode.postMessage({ type: "action.rerequest", actionId: a.actionId, actionType: a.actionType, rationale }),
+          }));
+          decide.append(again);
+          row.append(decide);
         } else {
           const decide = document.createElement("div");
           decide.className = "decide";

@@ -197,13 +197,20 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
 		return
 	}
+	b.dispatchActionRequest(w, r, actorFromClaims(claims), claims.Subject, body)
+}
+
+// dispatchActionRequest is the shared request path (fresh request_action and
+// re-request of an expired action both flow through it): build the x-action,
+// run Gate 2, record, and on auto-approval dispatch. body carries the frozen
+// request fields; the caller has already resolved the actor.
+func (b *Backend) dispatchActionRequest(w http.ResponseWriter, r *http.Request, actor aggregate.Actor, subject string, body RequestActionBody) {
 	investigationID, err := uuid.Parse(body.InvestigationRef)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "investigation_ref is not a valid id")
 		return
 	}
 
-	actor := actorFromClaims(claims)
 	now := commandNow()
 
 	// A reversal targets an original action id. Validate it BEFORE anything
@@ -276,7 +283,7 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Gate 2: evaluate policies over the (post-escalator) request.
-	decision, err := b.cfg.Gate2.Evaluate(action.EvalInputForCommand(cmd, actor.Kind, claims.Subject, now))
+	decision, err := b.cfg.Gate2.Evaluate(action.EvalInputForCommand(cmd, actor.Kind, subject, now))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "policy evaluation: "+err.Error())
 		return
@@ -313,6 +320,71 @@ func (b *Backend) requestAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// RerequestBody is the POST /api/actions/{id}/rerequest request — the
+// analyst's re-affirmation note (why the action is still warranted).
+type RerequestBody struct {
+	Rationale string `json:"rationale"`
+}
+
+// rerequestAction re-requests an EXPIRED action (design/ui: the re-request
+// affordance). Re-request is NOT a bypass of expiry — it creates a NEW action
+// (the dispatch ledger forbids re-using an id, 08 §6b) with the ORIGINAL's
+// frozen fields (same descriptor, targets, parameters, evidence), fresh Gate 2,
+// a fresh approval window, and retry_of lineage — which the analyst must then
+// separately approve. Expiry's freshness guarantee is honored: re-requesting is
+// the conscious re-affirmation it exists to elicit, and the new rationale is
+// the analyst's statement of why it still holds. Analyst role; the human is the
+// requester (a re-request is a human act even if the original was AI-proposed).
+func (b *Backend) rerequestAction(w http.ResponseWriter, r *http.Request, priorID uuid.UUID) {
+	if b.cfg.Handler == nil || b.cfg.Gate2 == nil || b.cfg.ActionCatalog == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "action layer not configured")
+		return
+	}
+	claims, ok := authz.FromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusInternalServerError, "auth context missing")
+		return
+	}
+	prior, err := aggregate.LoadActionCurrent(r.Context(), b.cfg.Handler.DB(), priorID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "action not found")
+		return
+	}
+	// Only a spent-but-unexecuted action is re-requestable: EXPIRED (window
+	// elapsed) or REJECTED (a reconsidered no). A live or executed action must
+	// not be duplicated by this path.
+	switch prior.Status {
+	case aggregate.ActionStatusExpired, aggregate.ActionStatusRejected:
+	default:
+		writeJSONError(w, http.StatusUnprocessableEntity,
+			"only an EXPIRED or REJECTED action can be re-requested; this one is "+prior.Status)
+		return
+	}
+
+	var body RerequestBody
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	rationale := body.Rationale
+	if rationale == "" {
+		rationale = "Re-requested after expiry — re-affirmed as still warranted."
+	}
+
+	// Reconstruct the request from the original's FROZEN fields — a faithful
+	// "same action, fresh clock", not a client reconstruction that could drift.
+	b.dispatchActionRequest(w, r,
+		aggregate.Actor{PrincipalID: claims.Subject, Kind: aggregate.ActorHuman}, claims.Subject,
+		RequestActionBody{
+			ActionType:       prior.ActionType,
+			Targets:          prior.Targets,
+			Parameters:       prior.Parameters,
+			EvidenceRefs:     prior.EvidenceRefs,
+			Rationale:        rationale,
+			InvestigationRef: prior.AggregateID.String(),
+			RetryOf:          priorID.String(),
+		})
 }
 
 // autoApproveAndDispatch records the AUTO_POLICY approval (attributed to the

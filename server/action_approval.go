@@ -65,6 +65,10 @@ func (b *Backend) actionsItem(w http.ResponseWriter, r *http.Request) {
 		b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, func(w http.ResponseWriter, r *http.Request) {
 			b.rejectAction(w, r, actionID)
 		})
+	case "rerequest":
+		b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, func(w http.ResponseWriter, r *http.Request) {
+			b.rerequestAction(w, r, actionID)
+		})
 	default:
 		writeJSONError(w, http.StatusNotFound, "not found")
 	}
