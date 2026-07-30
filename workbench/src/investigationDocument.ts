@@ -586,6 +586,9 @@ export class InvestigationDocuments {
     }
     .pincta:hover { background: var(--vscode-button-hoverBackground); }
     .stepPin { font-size: 0.7rem; padding: 0.05rem 0.45rem; margin-left: 0.35rem; }
+    /* The pin sits at the right end of the always-visible tool summary. */
+    .summaryPin { flex: none; margin-left: auto; font-size: 0.72rem; padding: 0.02rem 0.5rem; }
+    details.tool[open] .summaryPin { opacity: 0.9; }
 
     #verdictDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
@@ -898,28 +901,33 @@ export class InvestigationDocuments {
       st.textContent = detail;
       row.querySelector("summary").appendChild(st);
 
-      // Citations + pin-from-result (02 §2.8, 01 §Pinned evidence): the
-      // result's refs open, and the whole result can be pinned in one motion.
-      // The pin CTA sits in its OWN action row, visually a button — never in
-      // the chip flow where it reads as one more ref.
-      if (msg.refs && msg.refs.length) {
-        const box = document.createElement("div");
-        box.className = "toolrefs";
-        for (const r of msg.refs) box.appendChild(refChip(r));
-        const actions = document.createElement("div");
-        actions.className = "toolactions";
-        const pin = document.createElement("button");
-        pin.className = "pincta";
-        pin.textContent = "📌 Pin as evidence…";
-        pin.title = "Mark this result's findings load-bearing (cites all " + msg.refs.length + " refs)";
-        pin.addEventListener("click", (e) => {
-          e.stopPropagation();
-          vscode.postMessage({ type: "pin.add", refs: msg.refs, hint: "" });
-        });
-        actions.appendChild(pin);
-        box.appendChild(actions);
-        row.appendChild(box);
-      }
+      // Pin-from-result (02 §2.8, 01 §Pinned evidence): the pin lives on the
+      // always-visible SUMMARY line — pinning is the point of a result, not a
+      // detail to hunt for behind the disclosure. The ref chips (inspectable
+      // citations) stay in the expanded body.
+      attachResultRefs(row, msg.refs);
+    }
+
+    // attachResultRefs puts a pin button on the row's summary (always visible)
+    // and the citation chips in the expanded body. Shared by the live and the
+    // reconstructed tool rows.
+    function attachResultRefs(row, refs) {
+      if (!refs || !refs.length) return;
+      const pin = document.createElement("button");
+      pin.className = "pincta summaryPin";
+      pin.textContent = "📌 Pin";
+      pin.title = "Pin this result's findings as evidence (cites all " + refs.length + " refs)";
+      pin.addEventListener("click", (e) => {
+        e.stopPropagation();       // don't toggle the disclosure
+        e.preventDefault();
+        vscode.postMessage({ type: "pin.add", refs, hint: "" });
+      });
+      row.querySelector("summary").appendChild(pin);
+
+      const box = document.createElement("div");
+      box.className = "toolrefs";
+      for (const r of refs.slice(0, 12)) box.appendChild(refChip(r));
+      row.appendChild(box);
     }
 
     // ---- reasoning history -------------------------------------------------
@@ -1141,23 +1149,7 @@ export class InvestigationDocuments {
       res.textContent = content.length > 4000 ? content.slice(0, 4000) + "…" : content;
       row.appendChild(res);
 
-      if (refs.length) {
-        const box = document.createElement("div");
-        box.className = "toolrefs";
-        for (const r of refs.slice(0, 12)) box.appendChild(refChip(r));
-        const actions = document.createElement("div");
-        actions.className = "toolactions";
-        const pin = document.createElement("button");
-        pin.className = "pincta";
-        pin.textContent = "📌 Pin as evidence…";
-        pin.addEventListener("click", (e) => {
-          e.stopPropagation();
-          vscode.postMessage({ type: "pin.add", refs, hint: "" });
-        });
-        actions.appendChild(pin);
-        box.appendChild(actions);
-        row.appendChild(box);
-      }
+      attachResultRefs(row, refs);
     }
 
     // ---- rail --------------------------------------------------------------
