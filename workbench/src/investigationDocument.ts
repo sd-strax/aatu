@@ -48,7 +48,7 @@ type InboundMessage =
   | { type: "send"; text: string }
   | { type: "action.approve"; actionId: string; tier: string; actionType: string }
   | { type: "action.reject"; actionId: string; actionType: string }
-  | { type: "pin.add"; refs: string[]; hint?: string }
+  | { type: "pin.add"; refs: string[]; finding: string }
   | { type: "pin.unpin"; interpretationId: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "evidence.open"; ref: string }
@@ -91,7 +91,7 @@ export class InvestigationDocuments {
       } else if (msg.type === "action.reject") {
         void this.reject(id, panel, msg);
       } else if (msg.type === "pin.add") {
-        void this.pin(id, panel, msg.refs, msg.hint);
+        void this.pinCommit(id, panel, msg.refs, msg.finding);
       } else if (msg.type === "pin.unpin") {
         void this.unpin(id, panel, msg.interpretationId);
       } else if (msg.type === "verdict.submit") {
@@ -174,19 +174,12 @@ export class InvestigationDocuments {
     }
   }
 
-  /** Pin evidence — the analyst's curation act, on the human token. */
-  private async pin(id: string, panel: vscode.WebviewPanel, refs: string[], hint?: string): Promise<void> {
-    if (!refs.length) {
-      return;
-    }
-    const finding = await vscode.window.showInputBox({
-      title: "reckon — pin as evidence",
-      prompt: `What makes this load-bearing? (${refs.length} ref${refs.length === 1 ? "" : "s"} cited; recorded on the thread)`,
-      value: hint ?? "",
-      ignoreFocusOut: true,
-      validateInput: (v) => (v.trim() === "" ? "state the finding — the pin is the record" : undefined),
-    });
-    if (finding === undefined || finding.trim() === "") {
+  /**
+   * Pin evidence — the analyst's curation act, on the human token. The finding
+   * note is collected in-webview (the pin card), so this just records it.
+   */
+  private async pinCommit(id: string, panel: vscode.WebviewPanel, refs: string[], finding: string): Promise<void> {
+    if (!refs.length || finding.trim() === "") {
       return;
     }
     try {
@@ -201,7 +194,7 @@ export class InvestigationDocuments {
   private async unpin(id: string, panel: vscode.WebviewPanel, interpretationId: string): Promise<void> {
     const reason = await vscode.window.showInputBox({
       title: "reckon — un-pin evidence",
-      prompt: "Why is this no longer load-bearing? (recorded; the pin stays visible, struck)",
+      prompt: "Why remove this from the evidence? (recorded; the pin stays visible, struck)",
       ignoreFocusOut: true,
       validateInput: (v) => (v.trim() === "" ? "a reason is required" : undefined),
     });
@@ -590,11 +583,18 @@ export class InvestigationDocuments {
     .summaryPin { flex: none; margin-left: auto; font-size: 0.72rem; padding: 0.02rem 0.5rem; }
     details.tool[open] .summaryPin { opacity: 0.9; }
 
-    #verdictDialog {
+    #verdictDialog, #pinDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
       display: flex; align-items: center; justify-content: center; z-index: 10;
     }
-    #verdictDialog .dlg {
+    #pinDialog textarea {
+      width: 100%; box-sizing: border-box; font: inherit; resize: vertical;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 0.3rem; padding: 0.4rem 0.5rem;
+    }
+    .pinrefs { margin: 0.5rem 0 0.3rem; }
+    .pinhelp { font-size: 0.76rem; opacity: 0.6; margin-bottom: 0.2rem; }
+    #verdictDialog .dlg, #pinDialog .dlg {
       width: min(480px, 90vw); background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
       border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
       border-radius: 0.5rem; padding: 0.9rem 1.1rem 1rem;
@@ -682,6 +682,20 @@ export class InvestigationDocuments {
       <div id="caps"><div class="empty">…</div></div>
     </details>
   </aside>
+
+  <div id="pinDialog" style="display:none">
+    <div class="dlg">
+      <h3>Pin as evidence</h3>
+      <div class="dlglabel">What does this evidence show?</div>
+      <textarea id="pinFinding" rows="3" placeholder="e.g. First external egress from the svc_backup source host, 15s after the encoded PowerShell"></textarea>
+      <div id="pinRefs" class="pinrefs"></div>
+      <div class="pinhelp">Recorded on the investigation thread and cited by your verdict.</div>
+      <div class="decide">
+        <button class="primary" id="pinConfirm" disabled>📌 Pin evidence</button>
+        <button id="pinCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <div id="verdictDialog" style="display:none">
     <div class="dlg">
@@ -916,11 +930,11 @@ export class InvestigationDocuments {
       const pin = document.createElement("button");
       pin.className = "pincta summaryPin";
       pin.textContent = "📌 Pin";
-      pin.title = "Pin this result's findings as evidence (cites all " + refs.length + " refs)";
+      pin.title = "Pin this result as evidence (cites all " + refs.length + " refs)";
       pin.addEventListener("click", (e) => {
         e.stopPropagation();       // don't toggle the disclosure
         e.preventDefault();
-        vscode.postMessage({ type: "pin.add", refs, hint: "" });
+        openPinDialog(refs);
       });
       row.querySelector("summary").appendChild(pin);
 
@@ -1007,8 +1021,7 @@ export class InvestigationDocuments {
           pin.className = "pincta stepPin";
           pin.textContent = "📌 Pin…";
           pin.title = "Pin this step's cited evidence (" + allRefs.length + " refs)";
-          pin.addEventListener("click", () =>
-            vscode.postMessage({ type: "pin.add", refs: allRefs, hint: "" }));
+          pin.addEventListener("click", () => openPinDialog(allRefs));
           refsRow.appendChild(pin);
           step.appendChild(refsRow);
         }
@@ -1210,7 +1223,7 @@ export class InvestigationDocuments {
       $("pinsHead").textContent = "Pinned evidence" + (lastPins.length ? " · " + active : "");
       box.textContent = "";
       if (!lastPins.length) {
-        box.innerHTML = '<div class="empty">Nothing pinned yet — pin load-bearing findings from tool results</div>';
+        box.innerHTML = '<div class="empty">Nothing pinned yet — pin key findings from tool results</div>';
         return;
       }
       for (const p of lastPins) {
@@ -1368,6 +1381,41 @@ export class InvestigationDocuments {
     }
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
 
+    // ---- pin card: collect the finding in-context (not a top-of-window box) -
+    let pinRefs = [];
+    function openPinDialog(refs) {
+      pinRefs = refs || [];
+      $("pinFinding").value = "";
+      const box = $("pinRefs");
+      box.textContent = "";
+      for (const r of pinRefs.slice(0, 12)) box.appendChild(refChip(r));
+      if (pinRefs.length > 12) {
+        const more = document.createElement("span");
+        more.className = "cardmeta";
+        more.textContent = "+" + (pinRefs.length - 12) + " more";
+        box.appendChild(more);
+      }
+      $("pinConfirm").disabled = true;
+      $("pinDialog").style.display = "flex";
+      $("pinFinding").focus();
+    }
+    $("pinFinding").addEventListener("input", () => {
+      $("pinConfirm").disabled = $("pinFinding").value.trim() === "";
+    });
+    // ⌘/Ctrl+Enter confirms; Escape cancels.
+    $("pinFinding").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !$("pinConfirm").disabled) submitPin();
+      else if (e.key === "Escape") $("pinDialog").style.display = "none";
+    });
+    $("pinCancel").addEventListener("click", () => { $("pinDialog").style.display = "none"; });
+    $("pinConfirm").addEventListener("click", submitPin);
+    function submitPin() {
+      const finding = $("pinFinding").value.trim();
+      if (!finding || !pinRefs.length) return;
+      vscode.postMessage({ type: "pin.add", refs: pinRefs, finding });
+      $("pinDialog").style.display = "none";
+    }
+
     // ---- verdict dialog: preflight + residual (02 §2.10) -------------------
     // The engine's gates rendered BEFORE the attempt (non-negotiable #7): the
     // rejection message is the fallback, never the first thing seen.
@@ -1383,7 +1431,7 @@ export class InvestigationDocuments {
       };
       item(activePins.length > 0, activePins.length > 0
         ? activePins.length + " evidence item(s) pinned"
-        : "no pinned evidence — pin the load-bearing findings first (the engine will refuse)");
+        : "no pinned evidence — pin the key findings first (the engine will refuse)");
       item(true, "cites the pinned evidence (attached automatically)");
       if (lastVerdict) {
         item(true, "revises the current verdict (" + lastVerdict.disposition + ") — history is preserved");
