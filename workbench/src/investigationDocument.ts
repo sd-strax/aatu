@@ -49,10 +49,10 @@ type RenderMessage =
 type InboundMessage =
   | { type: "refresh" | "ready" }
   | { type: "send"; text: string }
-  | { type: "action.approve"; actionId: string; tier: string; actionType: string }
-  | { type: "action.reject"; actionId: string; actionType: string }
+  | { type: "action.approve"; actionId: string; tier: string; actionType: string; challenge?: string }
+  | { type: "action.reject"; actionId: string; actionType: string; reason: string }
   | { type: "pin.add"; refs: string[]; finding: string }
-  | { type: "pin.unpin"; interpretationId: string }
+  | { type: "pin.unpin"; interpretationId: string; reason: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
@@ -100,7 +100,7 @@ export class InvestigationDocuments {
       } else if (msg.type === "pin.add") {
         void this.pinCommit(id, panel, msg.refs, msg.finding);
       } else if (msg.type === "pin.unpin") {
-        void this.unpin(id, panel, msg.interpretationId);
+        void this.unpin(id, panel, msg.interpretationId, msg.reason);
       } else if (msg.type === "verdict.submit") {
         void this.submitVerdict(id, panel, msg);
       } else if (msg.type === "evidence.open") {
@@ -219,15 +219,12 @@ export class InvestigationDocuments {
     }
   }
 
-  /** Un-pin = supersession with a reason; the pin stays visible, struck. */
-  private async unpin(id: string, panel: vscode.WebviewPanel, interpretationId: string): Promise<void> {
-    const reason = await vscode.window.showInputBox({
-      title: "reckon — un-pin evidence",
-      prompt: "Why remove this from the evidence? (recorded; the pin stays visible, struck)",
-      ignoreFocusOut: true,
-      validateInput: (v) => (v.trim() === "" ? "a reason is required" : undefined),
-    });
-    if (reason === undefined || reason.trim() === "") {
+  /**
+   * Un-pin = supersession with a reason; the pin stays visible, struck. The
+   * reason is collected in the webview prompt card, so this just records it.
+   */
+  private async unpin(id: string, panel: vscode.WebviewPanel, interpretationId: string, reason: string): Promise<void> {
+    if (reason.trim() === "") {
       return;
     }
     try {
@@ -256,28 +253,20 @@ export class InvestigationDocuments {
   /**
    * Approve one action — the analyst's own act, extension→backend on the
    * HUMAN token, never through the sidecar (implementation/agent-sidecar.md
-   * §5). A T3 approval demands the typed challenge (04 §5.5) via input box.
+   * §5). A T3 approval carries the typed challenge (04 §5.5), collected in the
+   * webview prompt card before this fires.
    */
   private async approve(
     id: string,
     panel: vscode.WebviewPanel,
-    msg: { actionId: string; tier: string; actionType: string },
+    msg: { actionId: string; tier: string; actionType: string; challenge?: string },
   ): Promise<void> {
-    let challenge: string | undefined;
-    if (msg.tier === "T3") {
-      challenge = await vscode.window.showInputBox({
-        title: `reckon — approve ${msg.actionType} (T3)`,
-        prompt: "Tier-3 approval requires the typed challenge. This action has high blast radius.",
-        ignoreFocusOut: true,
-        validateInput: (v) => (v.trim() === "" ? "the challenge text is required for T3" : undefined),
-      });
-      if (challenge === undefined || challenge.trim() === "") {
-        await this.postPending(id, panel); // cancelled — re-enable the buttons
-        return;
-      }
+    if (msg.tier === "T3" && (!msg.challenge || msg.challenge.trim() === "")) {
+      await this.postPending(id, panel); // no challenge — re-enable the buttons
+      return;
     }
     try {
-      const decision = await this.client.approveAction(msg.actionId, challenge);
+      const decision = await this.client.approveAction(msg.actionId, msg.challenge);
       void vscode.window.showInformationMessage(
         `reckon: ${msg.actionType} → ${decision.status}${decision.stage ? ` (${decision.stage})` : ""}`,
       );
@@ -287,26 +276,16 @@ export class InvestigationDocuments {
     await this.postPending(id, panel);
   }
 
-  /** Reject one action — ditto, human token only. */
+  /** Reject one action — human token only; reason from the webview prompt card. */
   private async reject(
     id: string,
     panel: vscode.WebviewPanel,
-    msg: { actionId: string; actionType: string },
+    msg: { actionId: string; actionType: string; reason: string },
   ): Promise<void> {
-    const reason = await vscode.window.showInputBox({
-      title: `reckon — reject ${msg.actionType}`,
-      prompt: "Why is this action rejected? (recorded on the audit trail)",
-      ignoreFocusOut: true,
-      placeHolder: "rejected from the workbench",
-    });
-    if (reason === undefined) {
-      await this.postPending(id, panel); // cancelled — re-enable the buttons
-      return;
-    }
     try {
       const decision = await this.client.rejectAction(
         msg.actionId,
-        reason.trim() === "" ? "rejected from the workbench" : reason.trim(),
+        msg.reason.trim() === "" ? "rejected from the workbench" : msg.reason.trim(),
       );
       void vscode.window.showInformationMessage(`reckon: ${msg.actionType} → ${decision.status}`);
     } catch (err) {
@@ -612,18 +591,19 @@ export class InvestigationDocuments {
     .summaryPin { flex: none; margin-left: auto; font-size: 0.72rem; padding: 0.02rem 0.5rem; }
     details.tool[open] .summaryPin { opacity: 0.9; }
 
-    #verdictDialog, #pinDialog {
+    #verdictDialog, #promptDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
       display: flex; align-items: center; justify-content: center; z-index: 10;
     }
-    #pinDialog textarea {
+    #promptInput {
       width: 100%; box-sizing: border-box; font: inherit; resize: vertical;
       color: var(--vscode-input-foreground); background: var(--vscode-input-background);
       border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 0.3rem; padding: 0.4rem 0.5rem;
     }
+    #promptLabel:empty, #promptHelper:empty, #promptRefs:empty { display: none; }
     .pinrefs { margin: 0.5rem 0 0.3rem; }
-    .pinhelp { font-size: 0.76rem; opacity: 0.6; margin-bottom: 0.2rem; }
-    #verdictDialog .dlg, #pinDialog .dlg {
+    .pinhelp { font-size: 0.76rem; opacity: 0.6; margin: 0.3rem 0 0.1rem; }
+    #verdictDialog .dlg, #promptDialog .dlg {
       width: min(480px, 90vw); background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
       border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
       border-radius: 0.5rem; padding: 0.9rem 1.1rem 1rem;
@@ -712,16 +692,19 @@ export class InvestigationDocuments {
     </details>
   </aside>
 
-  <div id="pinDialog" style="display:none">
+  <!-- One reusable prompt card for every text-input action (pin, un-pin,
+       reject, T3 challenge): an in-context modal over the document, never the
+       top-of-window quick input. -->
+  <div id="promptDialog" style="display:none">
     <div class="dlg">
-      <h3>Pin as evidence</h3>
-      <div class="dlglabel">What does this evidence show?</div>
-      <textarea id="pinFinding" rows="3" placeholder="e.g. First external egress from the svc_backup source host, 15s after the encoded PowerShell"></textarea>
-      <div id="pinRefs" class="pinrefs"></div>
-      <div class="pinhelp">Recorded on the investigation thread and cited by your verdict.</div>
+      <h3 id="promptTitle"></h3>
+      <div id="promptLabel" class="dlglabel"></div>
+      <textarea id="promptInput" rows="3"></textarea>
+      <div id="promptRefs" class="pinrefs"></div>
+      <div id="promptHelper" class="pinhelp"></div>
       <div class="decide">
-        <button class="primary" id="pinConfirm" disabled>📌 Pin evidence</button>
-        <button id="pinCancel">Cancel</button>
+        <button class="primary" id="promptConfirm"></button>
+        <button id="promptCancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -1303,8 +1286,14 @@ export class InvestigationDocuments {
           un.className = "unpin";
           un.textContent = "un-pin";
           un.title = "Supersede this pin (stays visible, struck)";
-          un.addEventListener("click", () =>
-            vscode.postMessage({ type: "pin.unpin", interpretationId: p.interpretationId }));
+          un.addEventListener("click", () => openPrompt({
+            title: "Remove from evidence",
+            label: "Why remove this?",
+            placeholder: "e.g. re-scoped — this logon was expected activity",
+            helper: "The pin stays visible on the thread, struck — nothing is deleted.",
+            confirm: "Remove",
+            onConfirm: (reason) => vscode.postMessage({ type: "pin.unpin", interpretationId: p.interpretationId, reason }),
+          }));
           row.appendChild(un);
         }
         const finding = document.createElement("div");
@@ -1409,15 +1398,36 @@ export class InvestigationDocuments {
           ok.className = "primary";
           ok.textContent = a.tier === "T3" ? "Approve (challenge)…" : "Approve";
           ok.addEventListener("click", () => {
-            setDecideEnabled(false);
-            vscode.postMessage({ type: "action.approve", actionId: a.actionId, tier: a.tier, actionType: a.actionType });
+            if (a.tier === "T3") {
+              // T3 (04 §5.5): the typed challenge, in the prompt card.
+              openPrompt({
+                title: "Approve " + a.actionType + " — Tier 3",
+                label: "Type the challenge to confirm",
+                helper: "High blast radius (" + (a.targets || []).length + " targets). This action is "
+                  + (a.reversibility === "REVERSIBLE" ? "reversible." : a.reversibility === "BEST_EFFORT"
+                    ? "best-effort reversal — treat as permanent." : "irreversible."),
+                confirm: "Approve",
+                onConfirm: (challenge) => vscode.postMessage({
+                  type: "action.approve", actionId: a.actionId, tier: a.tier, actionType: a.actionType, challenge,
+                }),
+              });
+            } else {
+              setDecideEnabled(false);
+              vscode.postMessage({ type: "action.approve", actionId: a.actionId, tier: a.tier, actionType: a.actionType });
+            }
           });
           const no = document.createElement("button");
           no.textContent = "Reject…";
-          no.addEventListener("click", () => {
-            setDecideEnabled(false);
-            vscode.postMessage({ type: "action.reject", actionId: a.actionId, actionType: a.actionType });
-          });
+          no.addEventListener("click", () => openPrompt({
+            title: "Reject " + a.actionType,
+            label: "Why is this rejected?",
+            placeholder: "recorded on the audit trail",
+            confirm: "Reject",
+            require: false,
+            onConfirm: (reason) => vscode.postMessage({
+              type: "action.reject", actionId: a.actionId, actionType: a.actionType, reason,
+            }),
+          }));
           decide.append(ok, no);
           row.append(decide);
         }
@@ -1450,39 +1460,65 @@ export class InvestigationDocuments {
     }
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
 
-    // ---- pin card: collect the finding in-context (not a top-of-window box) -
-    let pinRefs = [];
-    function openPinDialog(refs) {
-      pinRefs = refs || [];
-      $("pinFinding").value = "";
-      const box = $("pinRefs");
+    // ---- the reusable prompt card ------------------------------------------
+    // One in-context modal for every text-input action — never a top-of-window
+    // quick input. opts: { title, label, placeholder, helper, confirm, refs,
+    // require (default true), onConfirm(value) }.
+    let promptOnConfirm = null;
+    let promptRequire = true;
+    function openPrompt(opts) {
+      promptOnConfirm = opts.onConfirm;
+      promptRequire = opts.require !== false;
+      $("promptTitle").textContent = opts.title || "";
+      $("promptLabel").textContent = opts.label || "";
+      $("promptHelper").textContent = opts.helper || "";
+      const input = $("promptInput");
+      input.value = "";
+      input.placeholder = opts.placeholder || "";
+      const box = $("promptRefs");
       box.textContent = "";
-      for (const r of pinRefs.slice(0, 12)) box.appendChild(refChip(r));
-      if (pinRefs.length > 12) {
+      for (const r of (opts.refs || []).slice(0, 12)) box.appendChild(refChip(r));
+      if ((opts.refs || []).length > 12) {
         const more = document.createElement("span");
         more.className = "cardmeta";
-        more.textContent = "+" + (pinRefs.length - 12) + " more";
+        more.textContent = "+" + (opts.refs.length - 12) + " more";
         box.appendChild(more);
       }
-      $("pinConfirm").disabled = true;
-      $("pinDialog").style.display = "flex";
-      $("pinFinding").focus();
+      const confirm = $("promptConfirm");
+      confirm.textContent = opts.confirm || "Confirm";
+      confirm.disabled = promptRequire;
+      $("promptDialog").style.display = "flex";
+      input.focus();
     }
-    $("pinFinding").addEventListener("input", () => {
-      $("pinConfirm").disabled = $("pinFinding").value.trim() === "";
+    function closePrompt() { $("promptDialog").style.display = "none"; promptOnConfirm = null; }
+    function submitPrompt() {
+      const v = $("promptInput").value.trim();
+      if (promptRequire && !v) return;
+      const cb = promptOnConfirm;
+      closePrompt();
+      if (cb) cb(v);
+    }
+    $("promptInput").addEventListener("input", () => {
+      if (promptRequire) $("promptConfirm").disabled = $("promptInput").value.trim() === "";
     });
-    // ⌘/Ctrl+Enter confirms; Escape cancels.
-    $("pinFinding").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !$("pinConfirm").disabled) submitPin();
-      else if (e.key === "Escape") $("pinDialog").style.display = "none";
+    $("promptInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitPrompt();
+      else if (e.key === "Escape") closePrompt();
     });
-    $("pinCancel").addEventListener("click", () => { $("pinDialog").style.display = "none"; });
-    $("pinConfirm").addEventListener("click", submitPin);
-    function submitPin() {
-      const finding = $("pinFinding").value.trim();
-      if (!finding || !pinRefs.length) return;
-      vscode.postMessage({ type: "pin.add", refs: pinRefs, finding });
-      $("pinDialog").style.display = "none";
+    $("promptCancel").addEventListener("click", closePrompt);
+    $("promptConfirm").addEventListener("click", submitPrompt);
+
+    // Pin evidence: the finding note + cited refs, in the prompt card.
+    function openPinDialog(refs) {
+      openPrompt({
+        title: "Pin as evidence",
+        label: "What does this evidence show?",
+        placeholder: "e.g. First external egress from the svc_backup source host, 15s after the encoded PowerShell",
+        helper: "Recorded on the investigation thread and cited by your verdict.",
+        confirm: "📌 Pin evidence",
+        refs: refs || [],
+        onConfirm: (finding) => vscode.postMessage({ type: "pin.add", refs: refs || [], finding }),
+      });
     }
 
     // ---- verdict dialog: preflight + residual (02 §2.10) -------------------
