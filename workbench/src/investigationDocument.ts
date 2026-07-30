@@ -14,7 +14,7 @@
 // network from the page.
 
 import * as vscode from "vscode";
-import { ActionRow, BackendClient, Capability, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
+import { ActionRow, BackendClient, Capability, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
@@ -31,6 +31,9 @@ type RenderMessage =
   // bearing thread act, in sequence order. The webview parses the line-framed
   // transcript bodies back into the conversation rendering (cold restore).
   | { type: "history.turns"; turns: { sequenceNo: number; occurredAt: string; body: string }[] }
+  // A resolved human label for an evidence ref (e.g. "host · WIN-FILE01"),
+  // so the chips read as evidence instead of opaque STIX ids.
+  | { type: "evidence.label"; ref: string; label: string }
   | { type: "turn.start" }
   | { type: "turn.user"; text: string }
   | { type: "turn.reasoning"; delta: string }
@@ -52,10 +55,14 @@ type InboundMessage =
   | { type: "pin.unpin"; interpretationId: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "evidence.open"; ref: string }
+  | { type: "evidence.resolve"; ref: string }
   | { type: "transcript.open"; interpretationId: string };
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
+  // Resolved evidence-ref labels, shared across panels — deterministic ids
+  // mean a ref resolves to the same thing everywhere, so cache once.
+  private readonly labelCache = new Map<string, string>();
 
   constructor(
     private readonly client: BackendClient,
@@ -98,6 +105,8 @@ export class InvestigationDocuments {
         void this.submitVerdict(id, panel, msg);
       } else if (msg.type === "evidence.open") {
         void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
+      } else if (msg.type === "evidence.resolve") {
+        void this.resolveLabel(panel, msg.ref);
       } else if (msg.type === "transcript.open") {
         void this.openTranscript(msg.interpretationId);
       }
@@ -188,6 +197,26 @@ export class InvestigationDocuments {
       void vscode.window.showErrorMessage(`reckon: pin failed — ${errText(err)}`);
     }
     await this.postPending(id, panel);
+  }
+
+  /**
+   * Resolve a human label for an evidence ref (host · WIN-FILE01, account ·
+   * svc_backup) from the evidence endpoint, cached. Posts back only on a hit;
+   * a ref that can't be opened keeps its type-only label in the webview.
+   */
+  private async resolveLabel(panel: vscode.WebviewPanel, ref: string): Promise<void> {
+    let label = this.labelCache.get(ref);
+    if (label === undefined) {
+      try {
+        label = deriveEvidenceLabel(await this.client.evidence(ref));
+      } catch {
+        label = "";
+      }
+      this.labelCache.set(ref, label);
+    }
+    if (label) {
+      void this.post(panel, { type: "evidence.label", ref, label });
+    }
   }
 
   /** Un-pin = supersession with a reason; the pin stays visible, struck. */
@@ -734,16 +763,41 @@ export class InvestigationDocuments {
     // Rail state the verdict dialog + header badges derive from.
     let lastPins = [], lastHyps = [], lastCaps = null, lastVerdict = null, lastPending = [];
 
-    // A clickable citation (02 §2.8): every ref opens.
+    // A clickable citation (02 §2.8): every ref opens. The chip reads as
+    // evidence — a type label immediately (from the id prefix), enriched with
+    // the actual value ("host · WIN-FILE01") once the host resolves it. The
+    // full id is always in the tooltip.
+    const REF_TYPE_LABELS = {
+      "observed-data": "observed data", "x-host": "host", "ipv4-addr": "IP",
+      "ipv6-addr": "IP", "user-account": "account", "process": "process",
+      "file": "file", "domain-name": "domain", "email-addr": "email",
+      "url": "URL", "windows-registry-key": "registry", "indicator": "indicator",
+      "x-hypothesis": "hypothesis", "x-prediction": "prediction",
+      "identity": "vendor", "sighting": "sighting",
+    };
+    const resolvedLabels = {}; // ref → resolved value, webview-side cache
+    function refTypeLabel(ref) {
+      const t = ref.includes("--") ? ref.slice(0, ref.indexOf("--")) : "event";
+      return REF_TYPE_LABELS[t] || t;
+    }
+    function chipText(ref) {
+      const type = refTypeLabel(ref);
+      const val = resolvedLabels[ref];
+      return val ? type + " · " + val : type;
+    }
     function refChip(ref) {
       const c = document.createElement("span");
       c.className = "refchip";
-      c.textContent = ref;
+      c.dataset.ref = ref;
+      c.textContent = chipText(ref);
       c.title = "Open evidence: " + ref;
       c.addEventListener("click", (e) => {
         e.stopPropagation();
         vscode.postMessage({ type: "evidence.open", ref });
       });
+      if (resolvedLabels[ref] === undefined) {
+        vscode.postMessage({ type: "evidence.resolve", ref });
+      }
       return c;
     }
 
@@ -1158,9 +1212,24 @@ export class InvestigationDocuments {
       st.textContent = detail;
       row.querySelector("summary").appendChild(st);
 
-      const res = document.createElement("pre");
-      res.textContent = content.length > 4000 ? content.slice(0, 4000) + "…" : content;
-      row.appendChild(res);
+      // The result detail: for a capability envelope, coverage + refs are
+      // distilled into the summary + chips, so the raw envelope is noise —
+      // show the normalized objects (or nothing) instead of the JSON dump.
+      // For a non-envelope result, pretty-print what there is.
+      let detailBody = "";
+      try {
+        const env2 = JSON.parse(content);
+        if (!(env2 && env2.coverage)) {
+          detailBody = JSON.stringify(env2, null, 2);
+        }
+      } catch {
+        detailBody = content;
+      }
+      if (detailBody) {
+        const res = document.createElement("pre");
+        res.textContent = detailBody.length > 4000 ? detailBody.slice(0, 4000) + "…" : detailBody;
+        row.appendChild(res);
+      }
 
       attachResultRefs(row, refs);
     }
@@ -1522,6 +1591,14 @@ export class InvestigationDocuments {
         case "history.turns":
           renderRestored(msg.turns);
           break;
+        case "evidence.label":
+          // Enrich every chip for this ref, in place (chips added later read
+          // the cache on creation).
+          resolvedLabels[msg.ref] = msg.label;
+          for (const c of document.querySelectorAll(".refchip")) {
+            if (c.dataset.ref === msg.ref) c.textContent = chipText(msg.ref);
+          }
+          break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');
           break;
@@ -1604,4 +1681,36 @@ function makeNonce(): string {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * A short human label for an opened evidence ref — what it IS, not its id.
+ * OCSF records label by class; STIX objects by the salient property of their
+ * type (hostname, account, process+pid, address). Empty when nothing sensible
+ * can be read, leaving the chip its type-only label.
+ */
+function deriveEvidenceLabel(doc: EvidenceDoc): string {
+  if (doc.kind === "ocsf") {
+    return doc.type || "event";
+  }
+  const p = (doc.payload ?? {}) as Record<string, unknown>;
+  const props = (typeof p.properties === "object" && p.properties ? p.properties : p) as Record<string, unknown>;
+  const first = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = props[k];
+      if (typeof v === "string" && v !== "") return v;
+      if (typeof v === "number") return String(v);
+    }
+    return "";
+  };
+  const val = first("hostname", "value", "address", "name", "user_id", "account_login", "display_name", "path");
+  if (val) {
+    const pid = props.pid;
+    return typeof pid === "number" ? `${val} (pid ${pid})` : val;
+  }
+  if (doc.type === "observed-data" && Array.isArray(p.object_refs)) {
+    const n = p.object_refs.length;
+    return `${n} object${n === 1 ? "" : "s"}`;
+  }
+  return "";
 }
