@@ -2,8 +2,10 @@ package temporal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
 	"github.com/sd-strax/reckon/internal/branding"
@@ -67,6 +69,26 @@ func (c *Client) StartActionLifecycle(ctx context.Context, in ActionLifecycleInp
 		return "", fmt.Errorf("start ActionLifecycle for %s: %w", in.ActionID, err)
 	}
 	return run.GetID(), nil
+}
+
+// StartActionExpiryTimer starts (fire-and-forget) the durable expiry timer for
+// a pending action. The workflow id is derived from the action id, so starting
+// it twice (request path + the startup sweep) is idempotent — the duplicate is
+// rejected by Temporal and swallowed here. An already-elapsed deadline fires
+// the timer immediately.
+func (c *Client) StartActionExpiryTimer(ctx context.Context, in ActionExpiryTimerInput) error {
+	_, err := c.c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        "action-expiry-" + in.ActionID,
+		TaskQueue: c.taskQueue,
+	}, WorkflowActionExpiryTimer, in)
+	var already *serviceerror.WorkflowExecutionAlreadyStarted
+	if errors.As(err, &already) {
+		return nil // the timer is running — exactly what we wanted
+	}
+	if err != nil {
+		return fmt.Errorf("start ActionExpiryTimer for %s: %w", in.ActionID, err)
+	}
+	return nil
 }
 
 // StartReversalSaga starts (fire-and-forget) the ReversalSaga for a reversal

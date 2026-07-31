@@ -237,6 +237,13 @@ func (b *Backend) Start(ctx context.Context) error {
 		}
 	}()
 
+	// Expiry-timer reconciliation: ensure every pending action has its durable
+	// timer (covers actions requested before the timer existed, and any missed
+	// start). Idempotent per action; background — never blocks startup.
+	if b.cfg.Handler != nil {
+		go b.sweepExpiryTimers(context.Background())
+	}
+
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/module"
+	"github.com/sd-strax/reckon/temporal"
 )
 
 // activeInvestigation drives a fresh investigation to ACTIVE through the shared
@@ -284,15 +285,88 @@ func TestRerequestAction_LazyExpiry(t *testing.T) {
 		t.Fatalf("re-request of a lazily-expired action = %d; want 201", resp.StatusCode)
 	}
 
-	// The original was materialized to EXPIRED (honest status, out of the queue).
+	// The endpoint does NOT mutate the original — the durable expiry timer owns
+	// the REQUESTED→EXPIRED transition (timer = scheduling); the gate checked
+	// the deadline (the invariant) directly. With no Temporal in this harness
+	// the original simply remains REQUESTED.
 	oc, _ := aggregate.LoadActionCurrent(context.Background(), testDB, actionID)
-	if oc.Status != aggregate.ActionStatusExpired {
-		t.Errorf("original status = %q; want EXPIRED (lazy expiry materialized)", oc.Status)
+	if oc.Status != aggregate.ActionStatusRequested {
+		t.Errorf("original status = %q; the endpoint must not transition it (the timer owns expiry)", oc.Status)
 	}
 	// The new action links to it.
 	nc, _ := aggregate.LoadActionCurrent(context.Background(), testDB, uuid.MustParse(out.ActionID))
 	if nc.RetryOf != actionID || nc.Status != aggregate.ActionStatusRequested {
 		t.Errorf("new action = {status:%q retry_of:%s}; want REQUESTED linked to the original", nc.Status, nc.RetryOf)
+	}
+}
+
+// TestExpiryTimer_RaceResolvesForTheHuman: the EmitExpired activity against an
+// action a human already approved is a benign no-op — the aggregate rejects
+// ExpireAction on a non-pending action, the activity maps that rejection to
+// success, and the approved status stands. The timer never overrides a human
+// decision.
+func TestExpiryTimer_RaceResolvesForTheHuman(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+
+	// Request + approve (the human beat the timer).
+	actionID := uuid.New()
+	env := func() aggregate.Envelope {
+		return newEnvelope(invID, aggregate.Actor{PrincipalID: "test-subject"}, commandNow())
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RequestAction{
+		ActionID: actionID, ActionType: "host.isolate", Tier: aggregate.TierT2,
+		Targets:   []aggregate.TargetSpec{{EntityRef: "x-host--r", ResolvedIdentifier: "WIN-R"}},
+		ExpiresAt: time.Now().Add(time.Minute), Rationale: "contain",
+	}); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.ApproveAction{
+		ActionID: actionID,
+		Authorization: aggregate.Authorization{
+			Mode: aggregate.AuthModeManual, Stage: aggregate.AuthStageSolo,
+			PrimaryApproverRef: "test-subject", PrimaryApprovedAt: time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	// The timer fires late: benign no-op, approved status stands.
+	acts := temporal.NewActivities(testHandler, nil)
+	if err := acts.EmitExpired(context.Background(), temporal.EmitExpiredInput{
+		ActionID:    actionID.String(),
+		AggregateID: invID.String(),
+		TenantID:    module.SingleTenantUUID.String(),
+	}); err != nil {
+		t.Fatalf("EmitExpired on an approved action must be a benign no-op, got: %v", err)
+	}
+	ac, _ := aggregate.LoadActionCurrent(context.Background(), testDB, actionID)
+	if ac.Status != aggregate.ActionStatusApproved {
+		t.Errorf("status = %q; the human decision must stand", ac.Status)
+	}
+
+	// And on a genuinely pending action, EmitExpired transitions it.
+	pendingID := uuid.New()
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RequestAction{
+		ActionID: pendingID, ActionType: "host.isolate", Tier: aggregate.TierT2,
+		Targets:   []aggregate.TargetSpec{{EntityRef: "x-host--p", ResolvedIdentifier: "WIN-P"}},
+		ExpiresAt: time.Now().Add(-time.Minute), Rationale: "contain",
+	}); err != nil {
+		t.Fatalf("request pending: %v", err)
+	}
+	if err := acts.EmitExpired(context.Background(), temporal.EmitExpiredInput{
+		ActionID:    pendingID.String(),
+		AggregateID: invID.String(),
+		TenantID:    module.SingleTenantUUID.String(),
+	}); err != nil {
+		t.Fatalf("EmitExpired on a pending action: %v", err)
+	}
+	pc, _ := aggregate.LoadActionCurrent(context.Background(), testDB, pendingID)
+	if pc.Status != aggregate.ActionStatusExpired {
+		t.Errorf("pending action status = %q; want EXPIRED (the timer's transition)", pc.Status)
 	}
 }
 

@@ -319,6 +319,31 @@ func ListActionCurrents(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) 
 	return out, rows.Err()
 }
 
+// ListPendingActionCurrents returns every action still awaiting a decision
+// (REQUESTED / PENDING_SECONDARY) across ALL investigations — the expiry
+// timer's startup-sweep input: each pending action gets (or already has) a
+// durable timer for its frozen deadline.
+func ListPendingActionCurrents(ctx context.Context, db *sql.DB) ([]ActionCurrent, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT `+actionCurrentColumns+` FROM action_current
+		 WHERE status IN ($1, $2) ORDER BY created_at, action_id`,
+		ActionStatusRequested, ActionStatusPendingSecondary)
+	if err != nil {
+		return nil, fmt.Errorf("query pending action_current: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ActionCurrent
+	for rows.Next() {
+		a, err := scanActionCurrent(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan action_current: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // nullUUID maps the zero UUID to SQL NULL.
 func nullUUID(id uuid.UUID) uuid.NullUUID {
 	if id == (uuid.UUID{}) {

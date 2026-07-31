@@ -12,6 +12,7 @@ import (
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/module"
 	"github.com/sd-strax/reckon/temporal"
 )
 
@@ -319,7 +320,60 @@ func (b *Backend) dispatchActionRequest(w http.ResponseWriter, r *http.Request, 
 		resp.Status = "PENDING_TWO_PARTY"
 	}
 
+	// A pending action gets its durable expiry timer (02 §3: ActionExpired is
+	// system-emitted on expires_at). Best-effort: the deadline stays the
+	// invariant (the approve path refuses past it regardless), so a missed
+	// start only delays the stored-status transition — the startup sweep
+	// backstops it.
+	if resp.Status == "PENDING_MANUAL" || resp.Status == "PENDING_TWO_PARTY" {
+		b.startExpiryTimer(r.Context(), cmd.ActionID, env.AggregateID, env.TenantID, cmd.ExpiresAt)
+	}
+
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// startExpiryTimer starts the durable expiry timer for one pending action.
+// Best-effort and idempotent (the workflow id derives from the action id).
+func (b *Backend) startExpiryTimer(ctx context.Context, actionID, aggregateID, tenantID uuid.UUID, expiresAt time.Time) {
+	if expiresAt.IsZero() {
+		return
+	}
+	client := b.getDispatchClient()
+	if client == nil {
+		return
+	}
+	if err := client.StartActionExpiryTimer(ctx, temporal.ActionExpiryTimerInput{
+		ActionID:    actionID.String(),
+		AggregateID: aggregateID.String(),
+		TenantID:    tenantID.String(),
+		ExpiresAt:   expiresAt,
+	}); err != nil {
+		log.Printf("action %s: could not start expiry timer (the deadline still binds at approve; the startup sweep will retry): %v", actionID, err)
+	}
+}
+
+// sweepExpiryTimers ensures every pending action has its durable expiry timer —
+// the startup reconciliation covering actions requested before the timer
+// existed, or whose start was missed. Idempotent (per-action workflow ids);
+// already-elapsed deadlines fire immediately, converging stored statuses that
+// lazy expiry left behind.
+func (b *Backend) sweepExpiryTimers(ctx context.Context) {
+	pending, err := aggregate.ListPendingActionCurrents(ctx, b.cfg.Handler.DB())
+	if err != nil {
+		log.Printf("expiry sweep: list pending actions: %v", err)
+		return
+	}
+	started := 0
+	for _, a := range pending {
+		if a.ExpiresAt.IsZero() {
+			continue
+		}
+		b.startExpiryTimer(ctx, a.ActionID, a.AggregateID, module.SingleTenantUUID, a.ExpiresAt)
+		started++
+	}
+	if started > 0 {
+		log.Printf("expiry sweep: ensured timers for %d pending action(s)", started)
+	}
 }
 
 // RerequestBody is the POST /api/actions/{id}/rerequest request — the
@@ -354,38 +408,25 @@ func (b *Backend) rerequestAction(w http.ResponseWriter, r *http.Request, priorI
 	}
 	now := commandNow()
 
-	// Only a spent-but-unexecuted action is re-requestable. Two shapes:
-	//   - already terminal-unexecuted: EXPIRED or REJECTED.
-	//   - LAZILY expired: still REQUESTED/PENDING_SECONDARY in the store because
-	//     v0 has no expiry timer, but its frozen window has elapsed — the engine
-	//     would refuse an approve. This is the case the UI shows as "expired".
-	lazilyExpired := (prior.Status == aggregate.ActionStatusRequested ||
+	// Only a spent-but-unexecuted action is re-requestable: EXPIRED or REJECTED
+	// by stored status, or a pending action whose frozen deadline has elapsed.
+	// The deadline is the INVARIANT (the approve path refuses past it
+	// regardless); the stored EXPIRED status is scheduling, owned by the
+	// durable expiry timer — which may lag by moments, so the gate checks the
+	// invariant directly rather than waiting on the schedule. No status
+	// transition happens here: the timer owns that, and it fires on its own.
+	deadlineElapsed := (prior.Status == aggregate.ActionStatusRequested ||
 		prior.Status == aggregate.ActionStatusPendingSecondary) &&
 		!prior.ExpiresAt.IsZero() && prior.ExpiresAt.Before(now)
 	switch {
 	case prior.Status == aggregate.ActionStatusExpired,
 		prior.Status == aggregate.ActionStatusRejected,
-		lazilyExpired:
+		deadlineElapsed:
 		// re-requestable
 	default:
 		writeJSONError(w, http.StatusUnprocessableEntity,
 			"only an EXPIRED or REJECTED action can be re-requested; this one is "+prior.Status+" and its approval window has not elapsed")
 		return
-	}
-
-	// Materialize the lazy expiry on demand (the deferred timer firing at the
-	// moment we act on it): transition the original to EXPIRED so its stored
-	// status is honest and it drops out of the pending queue, before the fresh
-	// request links to it. SYSTEM-attributed — the deadline genuinely passed;
-	// this records that fact, it does not forge it.
-	if lazilyExpired {
-		expEnv := newEnvelope(prior.AggregateID,
-			aggregate.Actor{PrincipalID: "system", Kind: aggregate.ActorSystem}, now)
-		if expRes, expErr := b.cfg.Handler.Handle(r.Context(), expEnv, aggregate.ExpireAction{ActionID: priorID}); expErr == nil {
-			b.publishDeltas(expRes)
-		} else {
-			log.Printf("re-request %s: could not materialize expiry (%v); proceeding", priorID, expErr)
-		}
 	}
 
 	var body RerequestBody

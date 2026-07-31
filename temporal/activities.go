@@ -241,6 +241,37 @@ func (a *Activities) EmitReversalAttempted(ctx context.Context, in EmitReversedI
 	return err
 }
 
+// EmitExpiredInput identifies the action the expiry timer is closing out.
+type EmitExpiredInput struct {
+	ActionID    string
+	AggregateID string
+	TenantID    string
+}
+
+// EmitExpired records ActionExpired (the timer firing at the frozen deadline,
+// 02 §3). The race with a human decision resolves in the human's favor: the
+// aggregate rejects ExpireAction on anything no longer pending, and that
+// rejection is a benign no-op here — never an error to retry. Only
+// infrastructure failures (DB unreachable) propagate for retry.
+func (a *Activities) EmitExpired(ctx context.Context, in EmitExpiredInput) error {
+	env, err := systemEnvelope(in.AggregateID, in.TenantID, "system")
+	if err != nil {
+		return err
+	}
+	id, err := uuid.Parse(in.ActionID)
+	if err != nil {
+		return err
+	}
+	_, err = a.handler.Handle(ctx, env, aggregate.ExpireAction{ActionID: id})
+	var rejected *aggregate.RejectedError
+	if errors.As(err, &rejected) {
+		// Approved, rejected, or already expired before the timer fired — the
+		// deadline race resolved; nothing to record.
+		return nil
+	}
+	return err
+}
+
 // systemEnvelope builds the SYSTEM-actor envelope the workflow uses to emit
 // lifecycle events. The principal is the action's approver (a named human, per
 // the actor invariant); Kind is SYSTEM. uuid/time here are fine — activities are

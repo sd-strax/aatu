@@ -12,6 +12,7 @@ import (
 // pins each one explicitly (workflow.RegisterOptions.Name).
 const (
 	WorkflowActionLifecycle            = "ActionLifecycle"
+	WorkflowActionExpiryTimer          = "ActionExpiryTimer"
 	WorkflowReversalSaga               = "ReversalSaga"
 	WorkflowRenormalizePass            = "RenormalizePass"
 	WorkflowArchiveInvestigation       = "ArchiveInvestigation"
@@ -34,6 +35,7 @@ const (
 func registerWorkflows(w worker.Worker) {
 	w.RegisterWorkflowWithOptions(Ping, workflow.RegisterOptions{Name: WorkflowPing})
 	w.RegisterWorkflowWithOptions(ActionLifecycle, workflow.RegisterOptions{Name: WorkflowActionLifecycle})
+	w.RegisterWorkflowWithOptions(ActionExpiryTimer, workflow.RegisterOptions{Name: WorkflowActionExpiryTimer})
 	w.RegisterWorkflowWithOptions(ReversalSaga, workflow.RegisterOptions{Name: WorkflowReversalSaga})
 	w.RegisterWorkflowWithOptions(RenormalizePass, workflow.RegisterOptions{Name: WorkflowRenormalizePass})
 	w.RegisterWorkflowWithOptions(ArchiveInvestigation, workflow.RegisterOptions{Name: WorkflowArchiveInvestigation})
