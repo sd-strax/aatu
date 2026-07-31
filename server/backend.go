@@ -27,6 +27,7 @@ import (
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/authz"
 	"github.com/sd-strax/reckon/capability"
+	"github.com/sd-strax/reckon/comms"
 	"github.com/sd-strax/reckon/knowledge"
 	"github.com/sd-strax/reckon/supervisor"
 	"github.com/sd-strax/reckon/temporal"
@@ -125,6 +126,11 @@ type BackendConfig struct {
 	// Knowledge, when non-nil, enables the SOP corpus routes (/api/sops,
 	// /api/knowledge/recall_sops — Phase C.5). Nil leaves them unregistered.
 	Knowledge *knowledge.Store
+
+	// Comms, when non-nil, enables the comms-thread routes (Phase F, binding
+	// §4): GET /api/investigations/{id}/comms + /api/comms acts. Threads are
+	// opened by the action-result path, never by these routes.
+	Comms *comms.Store
 
 	// TenantNamespace is this install's identity namespace UUID (03 §7.1),
 	// stamped onto export bundles + their archive path (D.5).
@@ -424,6 +430,10 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		},
 	)))
 
+	// Comms acts (Phase F, binding §4): inbound-reply ingestion + the
+	// analyst's acknowledge/done/snooze on a thread.
+	api.Handle("/comms/", authz.RequireAuth(verifier)(http.HandlerFunc(b.commsRoute)))
+
 	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval.
 	if b.cfg.Knowledge != nil {
 		api.Handle("/knowledge/recall_sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSOPs)))
@@ -607,6 +617,15 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationPins)
+		default:
+			methodNotAllowed(w, "GET")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/comms") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.listInvestigationComms)
 		default:
 			methodNotAllowed(w, "GET")
 		}

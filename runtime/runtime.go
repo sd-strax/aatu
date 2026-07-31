@@ -21,6 +21,7 @@ import (
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/archive"
 	"github.com/sd-strax/reckon/capability"
+	"github.com/sd-strax/reckon/comms"
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/branding"
 	"github.com/sd-strax/reckon/internal/secrets"
@@ -243,8 +244,12 @@ func serve(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	// The comms-thread store (Phase F, binding §4) rides the main DB: the
+	// result path opens threads for SUCCEEDED notify.* dispatches, and the
+	// backend serves/acts on them.
+	commsStore := comms.NewStore(handler.DB())
 	if activities != nil {
-		worker.WithActivities(activities)
+		worker.WithActivities(activities.WithComms(commsStore))
 		log.Printf("%s: action-lifecycle activities registered on the worker", branding.CLI)
 	}
 	archiveActivities, err := buildArchiveActivities(cfg, handler)
@@ -299,17 +304,18 @@ func serve(cfg config.Config) error {
 		KeycloakLoginClientID: branding.CLI,
 		KeycloakAgentClientID: branding.CLI + "-agent",
 		Handler:               handler,
-		Middleware:         tel.HTTPMiddleware,
-		CapabilityResolver: capResolver,
-		CapabilityCatalog:  capCatalog,
+		Middleware:            tel.HTTPMiddleware,
+		CapabilityResolver:    capResolver,
+		CapabilityCatalog:     capCatalog,
 		// The enablement surface (11 §5.1) edits the same file the resolver
 		// was built from and rebuilds it in place.
 		CapabilityConfigPath:  cfg.Capability.ConfigPath,
 		CapabilityFixtureRoot: cfg.Capability.FixtureRoot,
-		Gate2:              gate2,
-		ActionCatalog:      actionCatalog,
-		ActionResolver:     actionResolver,
-		Knowledge:          knowledgeStore,
+		Gate2:                 gate2,
+		ActionCatalog:         actionCatalog,
+		ActionResolver:        actionResolver,
+		Knowledge:             knowledgeStore,
+		Comms:                 commsStore,
 
 		TenantNamespace:         cfg.Capability.TenantNamespace,
 		ExportIncludeSideStores: cfg.Export.IncludeSideStores,

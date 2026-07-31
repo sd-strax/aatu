@@ -226,6 +226,38 @@ func DefaultActionCatalog() *ActionCatalog {
 			DefaultTier:   aggregate.TierT2,
 			Reversibility: ReversibilityIrreversible,
 		},
+
+		// The comms family (Phase F, binding §4): an outbound message is an
+		// x-action like any external dispatch — T2, because there is no T1
+		// external action (04 §1: chat is named explicitly; low friction comes
+		// from the approval surface, never a lower tier). IRREVERSIBLE: a sent
+		// message is permanent. The mandatory pre-send preview IS the approval
+		// surface. A `thread_ref` parameter marks a follow-up on an existing
+		// comms thread; the thread state itself lives in the comms package.
+		{
+			ActionType: "notify.slack",
+			Intent:     "Send a Slack message from the investigation — coordination, hand-offs, notifications. Target the DESTINATION (resolved_identifier = #channel or @user). The analyst previews and approves before anything is sent; the message becomes a tracked comms thread with follow-up. Irreversible: a sent message is permanent.",
+			Inputs: []capability.InputParam{
+				{Name: "message", Type: "string", Required: true},
+				{Name: "subject", Type: "string"},
+				{Name: "follow_up_hours", Type: "int"},
+				{Name: "thread_ref", Type: "string"},
+			},
+			DefaultTier:   aggregate.TierT2,
+			Reversibility: ReversibilityIrreversible,
+		},
+		{
+			ActionType: "notify.email",
+			Intent:     "Send an email from the investigation — notifications with a formal record (compliance, management, external parties). Target the recipient (resolved_identifier = address). The analyst previews and approves before anything is sent; the message becomes a tracked comms thread with follow-up. Irreversible: a sent email is permanent.",
+			Inputs: []capability.InputParam{
+				{Name: "subject", Type: "string", Required: true},
+				{Name: "body", Type: "string", Required: true},
+				{Name: "follow_up_hours", Type: "int"},
+				{Name: "thread_ref", Type: "string"},
+			},
+			DefaultTier:   aggregate.TierT2,
+			Reversibility: ReversibilityIrreversible,
+		},
 	} {
 		c.Register(d)
 	}

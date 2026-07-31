@@ -59,6 +59,11 @@ type ActionView struct {
 	Targets      []aggregate.TargetSpec `json:"targets,omitempty"`
 	EvidenceRefs []string               `json:"evidence_refs,omitempty"`
 	ExpiresAt    *time.Time             `json:"expires_at,omitempty"`
+	// Parameters are the request's frozen parameters — the pre-send preview
+	// for notify.* actions renders the message body from here (binding §4:
+	// the preview IS the approval surface, so the approver must see exactly
+	// what will be sent).
+	Parameters json.RawMessage `json:"parameters,omitempty"`
 
 	// Reversibility is the classification frozen at request time (04 §7):
 	// REVERSIBLE | BEST_EFFORT | IRREVERSIBLE — the decision-grade card states
@@ -104,6 +109,7 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 			Targets:       a.Targets,
 			EvidenceRefs:  a.EvidenceRefs,
 			Reversibility: a.Reversibility,
+			Parameters:    a.Parameters,
 		}
 		if a.RetryOf != (uuid.UUID{}) {
 			v.RetryOf = a.RetryOf.String()

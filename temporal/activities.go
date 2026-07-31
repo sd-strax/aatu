@@ -3,8 +3,10 @@ package temporal
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/aggregate"
+	"github.com/sd-strax/reckon/comms"
 )
 
 // fatalErrorType is the non-retryable ApplicationError type a FATAL dispatch
@@ -26,11 +29,20 @@ const fatalErrorType = "FATAL_ERROR"
 type Activities struct {
 	handler  *aggregate.Handler
 	resolver *action.ActionResolver
+	comms    *comms.Store
 }
 
 // NewActivities constructs the activity set.
 func NewActivities(handler *aggregate.Handler, resolver *action.ActionResolver) *Activities {
 	return &Activities{handler: handler, resolver: resolver}
+}
+
+// WithComms attaches the comms-thread store (Phase F): a SUCCEEDED notify.*
+// result opens (or, via thread_ref, extends) its comms thread. Nil-safe —
+// without it, results record exactly as before.
+func (a *Activities) WithComms(store *comms.Store) *Activities {
+	a.comms = store
+	return a
 }
 
 // CheckDispatched is the dispatch-ledger guard (08 §6b): it reports whether the
@@ -181,7 +193,81 @@ func (a *Activities) EmitResulted(ctx context.Context, in EmitResultedInput) err
 		PerTargetResults: in.PerTargetResults,
 		Attempts:         in.Attempts,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// Phase F: a SUCCEEDED notify.* dispatch opens/extends its comms thread.
+	// Best-effort by design: the result event is committed; failing (and
+	// retrying) this activity for thread bookkeeping would attempt a second
+	// result on the aggregate and be refused. A miss logs and the analyst
+	// still has the action record.
+	a.recordCommsThread(ctx, id, in)
+	return nil
+}
+
+// recordCommsThread translates one successful notify.* result into comms
+// thread state (binding §4: the outbound message is the action; the thread is
+// the conversation that follows).
+func (a *Activities) recordCommsThread(ctx context.Context, actionID uuid.UUID, in EmitResultedInput) {
+	if a.comms == nil || in.FinalOutcome != aggregate.ActionStatusSucceeded {
+		return
+	}
+	ac, err := aggregate.LoadActionCurrent(ctx, a.handler.DB(), actionID)
+	if err != nil || !strings.HasPrefix(ac.ActionType, "notify.") {
+		return
+	}
+	var params struct {
+		Message       string  `json:"message"`
+		Subject       string  `json:"subject"`
+		Body          string  `json:"body"`
+		FollowUpHours float64 `json:"follow_up_hours"`
+		ThreadRef     string  `json:"thread_ref"`
+	}
+	_ = json.Unmarshal(ac.Parameters, &params)
+	body := params.Message
+	if body == "" {
+		body = params.Body
+	}
+	subject := params.Subject
+	if subject == "" {
+		subject = clip(body, 80)
+	}
+	target := ""
+	if len(ac.Targets) > 0 {
+		target = ac.Targets[0].ResolvedIdentifier
+		if target == "" {
+			target = ac.Targets[0].EntityRef
+		}
+	}
+	threadRef := uuid.Nil
+	if params.ThreadRef != "" {
+		threadRef, _ = uuid.Parse(params.ThreadRef)
+	}
+	tenantID, _ := uuid.Parse(in.TenantID)
+	aggID, _ := uuid.Parse(in.AggregateID)
+	if err := a.comms.Outbound(ctx, comms.OutboundMessage{
+		AggregateID:   aggID,
+		TenantID:      tenantID,
+		ActionID:      actionID,
+		ActionType:    ac.ActionType,
+		Target:        target,
+		Subject:       subject,
+		Body:          body,
+		Author:        in.ApproverID,
+		FollowUpHours: int(params.FollowUpHours),
+		At:            time.Now().UTC(),
+		ThreadRef:     threadRef,
+	}); err != nil {
+		activity.GetLogger(ctx).Warn("comms thread not recorded", "action_id", actionID, "error", err)
+	}
+}
+
+// clip shortens a string for use as a derived subject line.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
 }
 
 // EmitReversedInput carries what EmitReversed needs to mark the original

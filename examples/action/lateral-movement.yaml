@@ -93,3 +93,25 @@ action_bindings:
       priority: 100
       params:
         ticket: "${target.resolved_identifier}"
+
+  # Comms family (Phase F, binding §4) — the "fake Slack/SMTP". An outbound
+  # message is a T2 x-action; the pre-send preview is its approval surface.
+  # On SUCCEEDED the result path opens/extends the comms thread (comms/).
+  notify.slack:
+    - action_type: notify.slack
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        channel: "${target.resolved_identifier}"
+        message: "${parameters.message}"
+
+  notify.email:
+    - action_type: notify.email
+      adapter: fixture_write
+      operation: dispatch
+      priority: 100
+      params:
+        recipient: "${target.resolved_identifier}"
+        subject: "${parameters.subject}"
+        body: "${parameters.body}"

@@ -191,14 +191,22 @@ sublist; the flat open/supported/refuted list in the sheets is superseded.
 
 ## 4. Comms, follow-up, escalation — Phase F, on the action layer
 
-The comms subsystem has no engine today and re-phases onto the write path when its phase
-comes: an outbound message is a **T1 action** (`notify.*` descriptors + a comms write
-adapter) — the mandatory pre-send preview *is* the T1-weight approval surface; follow-up
-timers are Temporal timers (the expiry-emitter pattern); escalation policies join the Gate 2
-policy family (versioned, audited, surface-prompts-never-auto-fire); inbound replies are a
-new ingestion seam; open threads become a conclude-gate input alongside terminal actions.
-Policies are tenant configuration served by the backend, not a workspace file. Every card
-and flow in the comms sheet carries forward; only the phase and the data authority move.
+Built (first slice). An outbound message is a **T2 action** (`notify.*` descriptors +
+the fixture comms write adapter) — there is no T1 external action (`04 §1` names chat
+explicitly; tier is calibrated to harm, and low friction comes from the approval surface
+or an auto-approve policy, never a lower tier). The mandatory pre-send preview *is* that
+light-weight approval surface: the approval card renders the exact frozen message body,
+and Approve = Send. A SUCCEEDED `notify.*` result opens (or, via `thread_ref`, extends)
+a comms thread (`comms/` — CRUD + thin history; the audit record of every send is the
+action event log). Inbound replies land through `POST /api/comms/inbound` (the v0
+ingestion seam; vendor webhooks arrive with their adapters); acknowledge / mark-done /
+snooze are analyst acts on the thread. Follow-up dueness and the stale escalation policy
+(`external-work-stale-72h`) are DERIVED at read time — policies surface prompts and never
+auto-fire; a durable Temporal nudge (the expiry-emitter pattern) can layer on later
+without schema change, since nothing engine-side gates on dueness. Open threads are a
+conclude-gate *input* (decision support in the conclude dialog) at v0; the engine-side
+gate lands when Phase F completes. Every card and flow in the comms sheet carries
+forward; only the tier vocabulary moved (the engine wins, §0).
 
 ---
 
@@ -238,11 +246,13 @@ Built (endpoint + surface live):
    own final text references the SOP — the transcript is deliberately not searched, since
    it contains the retrieval results themselves).
 
-Remaining:
-
-10. **Live markdown export** — generalize the `design/07` export from post-conclusion to
-    any-time; the package's file schema is the export format specification.
-11. Phase F: comms descriptors, timers, ingestion (§4).
+10. **Live markdown export** — `GET /api/investigations/{id}/export.md`, the `design/07`
+    export generalized from post-conclusion to any-time; the package's file schema is the
+    format, rebound to engine vocabulary. The signed bundle stays the finalized artifact.
+11. **Phase F comms, first slice** — `notify.*` T2 descriptors + fixture comms adapter,
+    the comms-thread store, inbound ingestion, follow-up/escalation derivation, and the
+    workbench surfaces (§4). Remaining for full Phase F: real vendor comms adapters,
+    vendor webhook ingestion, the engine-side conclude gate, durable follow-up nudges.
 
 ---
 

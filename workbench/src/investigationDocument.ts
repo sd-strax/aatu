@@ -15,7 +15,7 @@
 
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
-import { ActionRow, Appearance, BackendClient, Capability, Enablement, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
+import { ActionRow, Appearance, BackendClient, Capability, CommsThread, Enablement, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
@@ -31,6 +31,8 @@ type RenderMessage =
   | { type: "error"; message: string }
   | { type: "pending"; actions: ActionRow[] }
   | { type: "pins"; pins: PinRow[] }
+  // The comms/external-work threads (Phase F, binding §4).
+  | { type: "comms"; threads: CommsThread[] }
   // The committed conversation, reconstructed: one entry per transcript-
   // bearing thread act, in sequence order. The webview parses the line-framed
   // transcript bodies back into the conversation rendering (cold restore).
@@ -77,6 +79,9 @@ type InboundMessage =
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "hyp.ack"; hypothesisRef: string }
   | { type: "enablement.apply"; adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] }
+  | { type: "comms.act"; threadId: string; verb: "ack" | "done" }
+  | { type: "comms.snooze"; threadId: string; hours: number }
+  | { type: "comms.followup"; threadId: string; actionType: string; target: string; subject: string; message: string; followUpHours: number }
   | { type: "lifecycle"; transition: string; reason?: string; summary?: string }
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
@@ -146,6 +151,12 @@ export class InvestigationDocuments {
         void this.ackHypothesis(id, panel, msg.hypothesisRef);
       } else if (msg.type === "enablement.apply") {
         void this.applyEnablement(id, panel, msg);
+      } else if (msg.type === "comms.act") {
+        void this.commsAct(id, panel, msg.threadId, msg.verb);
+      } else if (msg.type === "comms.snooze") {
+        void this.commsSnooze(id, panel, msg.threadId, msg.hours);
+      } else if (msg.type === "comms.followup") {
+        void this.commsFollowUp(id, panel, msg);
       } else if (msg.type === "lifecycle") {
         void this.lifecycleTransition(id, panel, msg);
       } else if (msg.type === "evidence.open") {
@@ -244,6 +255,71 @@ export class InvestigationDocuments {
     } catch (err) {
       this.log.debug(`list pins ${id}: ${errText(err)}`);
     }
+    try {
+      const threads = await this.client.comms(id);
+      void this.post(panel, { type: "comms", threads });
+    } catch (err) {
+      // A 503 just means the comms layer is off — not a broken panel.
+      this.log.debug(`list comms ${id}: ${errText(err)}`);
+    }
+  }
+
+  /** Acknowledge a reply or mark a thread done — recorded on the trail. */
+  private async commsAct(id: string, panel: vscode.WebviewPanel, threadId: string, verb: "ack" | "done"): Promise<void> {
+    try {
+      await this.client.commsAct(threadId, verb);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: comms ${verb} failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
+  }
+
+  /** Push a thread's follow-up clock. */
+  private async commsSnooze(id: string, panel: vscode.WebviewPanel, threadId: string, hours: number): Promise<void> {
+    try {
+      await this.client.commsSnooze(threadId, hours);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: snooze failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
+  }
+
+  /**
+   * Send a follow-up: a NEW notify.* action carrying thread_ref (binding §4 —
+   * every outbound message is an action through Gate 2), which lands in the
+   * approval queue as a preview card. On its SUCCEEDED dispatch the thread's
+   * counter increments and its clock restarts.
+   */
+  private async commsFollowUp(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { threadId: string; actionType: string; target: string; subject: string; message: string; followUpHours: number },
+  ): Promise<void> {
+    const parameters: Record<string, unknown> = {
+      thread_ref: msg.threadId,
+      follow_up_hours: msg.followUpHours,
+    };
+    if (msg.actionType === "notify.email") {
+      parameters.subject = msg.subject ? `Re: ${msg.subject}` : "Follow-up";
+      parameters.body = msg.message;
+    } else {
+      parameters.message = msg.message;
+    }
+    try {
+      const res = await this.client.requestAction({
+        investigationRef: id,
+        actionType: msg.actionType,
+        targets: [{ resolvedIdentifier: msg.target }],
+        parameters,
+        rationale: `follow-up on comms thread ${msg.threadId}`,
+      });
+      void vscode.window.showInformationMessage(
+        `reckon: follow-up requested (${res.status}) — approve to send`,
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: follow-up failed — ${errText(err)}`);
+    }
+    await this.postPending(id, panel);
   }
 
   /**
@@ -1087,6 +1163,27 @@ export class InvestigationDocuments {
     .pop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .pop-grid button { font-size: var(--fs-sm); padding: 4px 8px; }
 
+    /* ---- comms cards (ui/04): the external-work trail ---- */
+    .commscard.replied { border-color: var(--ok-border); }
+    .commscard .quote {
+      font-size: var(--fs-xs); color: var(--text-2); font-style: italic;
+      border-left: 2px solid var(--border); padding-left: 8px; margin: 5px 0;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .commscard .quote.inbound { border-left-color: var(--ok); }
+    .commscard .esc {
+      font-size: var(--fs-xs); color: var(--bad); background: var(--bad-bg);
+      border: 1px solid var(--bad-border); border-radius: var(--r-sm);
+      padding: 4px 8px; margin-top: 5px;
+    }
+    /* the pre-send preview body on a notify.* approval card (binding §4) */
+    .sendpreview {
+      font-size: var(--fs-sm); background: var(--fill);
+      border: 1px solid var(--border); border-radius: var(--r-sm);
+      padding: 6px 9px; margin: 6px 0; white-space: pre-wrap; word-break: break-word;
+    }
+    .sendpreview .subj { font-weight: 600; }
+
     .pinrow { border-left: 2px solid var(--pin); }
     .pinrow .finding { font-size: var(--fs-sm); }
     .pinrow.superseded { border-left-color: var(--border); }
@@ -1239,6 +1336,10 @@ export class InvestigationDocuments {
     <section>
       <h2 id="pinsHead">Pinned evidence</h2>
       <div id="pinsBox"><div class="empty">Nothing pinned yet</div></div>
+    </section>
+    <section id="commsSection" style="display:none">
+      <h2 id="commsHead">External work</h2>
+      <div id="commsBox"></div>
     </section>
     <details id="capsFold" class="railfold">
       <summary id="capsHead">Capabilities</summary>
@@ -1580,14 +1681,23 @@ export class InvestigationDocuments {
         case "ACTIVE":
           mk("Pause", "A reversible hold — resume any time", () => send("pause"));
           mk("Conclude…", "Close with the verdict of record and a summary",
-            () => openPrompt({
-              title: "Conclude investigation",
-              label: "Summary of record — what did this investigation determine?",
-              placeholder: "e.g. Confirmed C2 beaconing from WIN-9; host isolated, IOCs blocked.",
-              helper: "Concluding consumes the verdict of record (" + (lastVerdict ? lastVerdict.disposition : "none") + ") and files the final report reference. You can reopen later if the world disagrees.",
-              confirm: "Conclude",
-              onConfirm: (summary) => vscode.postMessage({ type: "lifecycle", transition: "conclude", summary }),
-            }),
+            () => {
+              // The comms conclude-gate input (binding §4, ui/04 §4.10):
+              // open external work is decision support at the moment of
+              // closing — surfaced, never silently ignored.
+              const openComms = lastComms.filter((t) => t.status === "awaiting_reply" || t.status === "followed_up").length;
+              const commsWarn = openComms
+                ? " ⚠ " + openComms + " comms thread(s) still await replies — mark them done or accept leaving them open."
+                : "";
+              openPrompt({
+                title: "Conclude investigation",
+                label: "Summary of record — what did this investigation determine?",
+                placeholder: "e.g. Confirmed C2 beaconing from WIN-9; host isolated, IOCs blocked.",
+                helper: "Concluding consumes the verdict of record (" + (lastVerdict ? lastVerdict.disposition : "none") + ") and files the final report reference. You can reopen later if the world disagrees." + commsWarn,
+                confirm: "Conclude",
+                onConfirm: (summary) => vscode.postMessage({ type: "lifecycle", transition: "conclude", summary }),
+              });
+            },
             lastVerdict ? "" : "Record a verdict first — a conclusion consumes the verdict of record");
           break;
         case "PAUSED":
@@ -2185,6 +2295,8 @@ export class InvestigationDocuments {
     const BADGE_TONE = {
       CONFIRMED: "ok", SUPPORTED: "ok", TESTED: "ok", SUCCEEDED: "ok",
       REFUTED: "bad", FAILED: "bad", EXPIRED: "warn",
+      // comms thread states (ui/04 §4.2)
+      AWAITING_REPLY: "warn", REPLIED: "ok", FOLLOWED_UP: "warn",
     };
     function badgeClass(status) {
       const tone = BADGE_TONE[String(status || "").toUpperCase()];
@@ -2465,6 +2577,109 @@ export class InvestigationDocuments {
       }
     }
 
+    // ---- comms threads (Phase F, ui/04) ------------------------------------
+    // Every card is conversation state that FOLLOWED an approved, dispatched
+    // notify.* action — nothing here sends anything; Follow up requests a new
+    // action that lands in the approval queue.
+    let lastComms = [];
+    function renderComms(threads) {
+      lastComms = threads || [];
+      const box = $("commsBox");
+      $("commsSection").style.display = lastComms.length ? "" : "none";
+      const open = lastComms.filter((t) => t.status === "awaiting_reply" || t.status === "followed_up").length;
+      $("commsHead").textContent = "External work" + (lastComms.length ? " · " + open + " open" : "");
+      box.textContent = "";
+      for (const t of lastComms) {
+        const card = document.createElement("div");
+        card.className = "card commscard" + (t.status === "replied" ? " replied" : "");
+        if (t.status === "closed") card.style.opacity = "0.7";
+
+        const head = document.createElement("div");
+        const target = document.createElement("span");
+        target.className = "statement";
+        target.textContent = (t.actionType === "notify.email" ? "✉ " : "# ") + t.target;
+        const st = document.createElement("span");
+        st.className = badgeClass(t.status.toUpperCase());
+        st.textContent = t.status.replace("_", " ");
+        head.append(target, st);
+        card.appendChild(head);
+
+        if (t.subject) {
+          const subj = document.createElement("div");
+          subj.className = "cardmeta";
+          subj.textContent = t.subject;
+          card.appendChild(subj);
+        }
+
+        // The last trail entry, quoted — inbound reads green (a reply).
+        const last = (t.trail || [])[t.trail.length - 1];
+        if (last) {
+          const q = document.createElement("div");
+          q.className = "quote" + (last.direction === "inbound" ? " inbound" : "");
+          q.textContent = (last.direction === "inbound" ? "↩ " : "") + last.author + ": " + last.body;
+          card.appendChild(q);
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "cardmeta";
+        const bits = ["sent " + new Date(t.sentAt).toLocaleString()];
+        if (t.followUpHours) bits.push("follow-up " + t.followUpHours + "h · " + t.followUps + " sent");
+        if (t.followUpDue) bits.push("⏰ follow-up due");
+        meta.textContent = bits.join(" · ");
+        card.appendChild(meta);
+
+        if (t.escalationTriggered) {
+          const esc3 = document.createElement("div");
+          esc3.className = "esc";
+          esc3.textContent = "⚠ Escalation policy triggered (" + (t.escalationPolicy || "") + ") — repeated follow-ups, no resolution. Consider escalating; nothing auto-fires.";
+          card.appendChild(esc3);
+        }
+
+        const acts = document.createElement("div");
+        acts.className = "decide";
+        const openThread = t.status === "awaiting_reply" || t.status === "followed_up" || t.status === "replied";
+        if (t.unackedReply) {
+          const ack = document.createElement("button");
+          ack.className = "primary";
+          ack.textContent = "Acknowledge";
+          ack.title = "Record that you saw the reply (kept on the trail)";
+          ack.addEventListener("click", () => vscode.postMessage({ type: "comms.act", threadId: t.threadId, verb: "ack" }));
+          acts.appendChild(ack);
+        }
+        if (openThread) {
+          const fu = document.createElement("button");
+          if (t.followUpDue && !t.unackedReply) fu.className = "primary";
+          fu.textContent = "Follow up…";
+          fu.title = "Drafts a follow-up message — it becomes a new action you approve before anything is sent";
+          fu.addEventListener("click", () => openPrompt({
+            title: "Follow up — " + t.target,
+            label: "The follow-up message (you approve before it sends)",
+            placeholder: "Any update on this? Still needed for the investigation.",
+            helper: "Requests a new " + t.actionType + " action carrying this thread's lineage; it lands in the approval queue as a preview.",
+            confirm: "Request follow-up",
+            onConfirm: (message) => vscode.postMessage({
+              type: "comms.followup", threadId: t.threadId, actionType: t.actionType,
+              target: t.target, subject: t.subject || "", message, followUpHours: t.followUpHours,
+            }),
+          }));
+          acts.appendChild(fu);
+          if (t.followUpDue) {
+            const sn = document.createElement("button");
+            sn.textContent = "Snooze 24h";
+            sn.addEventListener("click", () => vscode.postMessage({ type: "comms.snooze", threadId: t.threadId, hours: 24 }));
+            acts.appendChild(sn);
+          }
+          const done = document.createElement("button");
+          done.textContent = "Mark done";
+          done.title = "The external work is resolved — closes the thread";
+          done.addEventListener("click", () => vscode.postMessage({ type: "comms.act", threadId: t.threadId, verb: "done" }));
+          acts.appendChild(done);
+        }
+        if (acts.childElementCount) card.appendChild(acts);
+        box.appendChild(card);
+      }
+    }
+
     // The action queue: rows are DOM-built (action_type/targets are
     // model-influenced — no innerHTML for them), each with Approve/Reject
     // posting to the host, which does the real call on the human token.
@@ -2507,6 +2722,31 @@ export class InvestigationDocuments {
         targets.textContent = "→ " + (a.targets || []).join(", ");
 
         row.append(head, targets);
+
+        // The mandatory pre-send preview (binding §4): approving a notify.*
+        // action IS sending the message, so the approver sees exactly what
+        // will go out — subject and body verbatim from the frozen request.
+        if (a.actionType && a.actionType.indexOf("notify.") === 0 && a.parameters) {
+          const p = a.parameters;
+          const prev = document.createElement("div");
+          prev.className = "sendpreview";
+          if (typeof p.subject === "string" && p.subject) {
+            const s = document.createElement("div");
+            s.className = "subj";
+            s.textContent = p.subject;
+            prev.appendChild(s);
+          }
+          const bodyText = typeof p.message === "string" && p.message ? p.message
+            : typeof p.body === "string" ? p.body : "";
+          prev.appendChild(document.createTextNode(bodyText));
+          row.append(prev);
+          if (typeof p.thread_ref === "string" && p.thread_ref) {
+            const fu2 = document.createElement("div");
+            fu2.className = "cardmeta";
+            fu2.textContent = "↻ follow-up on an existing thread";
+            row.append(fu2);
+          }
+        }
 
         // Decision-grade rows (03 §3.3): the card answers the decision.
         if (a.retryOf) {
@@ -2573,9 +2813,10 @@ export class InvestigationDocuments {
         } else {
           const decide = document.createElement("div");
           decide.className = "decide";
+          const isNotify = a.actionType && a.actionType.indexOf("notify.") === 0;
           const ok = document.createElement("button");
           ok.className = "primary";
-          ok.textContent = a.tier === "T3" ? "Approve (challenge)…" : "Approve";
+          ok.textContent = a.tier === "T3" ? "Approve (challenge)…" : isNotify ? "Approve · Send" : "Approve";
           ok.addEventListener("click", () => {
             if (a.tier === "T3") {
               // T3 (04 §5.5): the typed challenge, in the prompt card.
@@ -2807,6 +3048,9 @@ export class InvestigationDocuments {
           break;
         case "pins":
           renderPins(msg.pins);
+          break;
+        case "comms":
+          renderComms(msg.threads);
           break;
         case "history.turns":
           renderRestored(msg.turns);

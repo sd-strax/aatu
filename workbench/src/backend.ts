@@ -274,6 +274,38 @@ export interface ActionRow {
   evidenceRefs: string[];
   /** Lineage: the FAILED/EXPIRED action this request replaces. */
   retryOf?: string;
+  /**
+   * The request's frozen parameters (raw JSON) — the pre-send preview for
+   * notify.* actions renders the exact message from here.
+   */
+  parameters?: Record<string, unknown>;
+}
+
+/** One comms trail entry (mirrors server.CommsTrailView). */
+export interface CommsTrailEntry {
+  direction: string; // outbound | inbound | note
+  author: string;
+  at: string;
+  body: string;
+}
+
+/** One comms/external-work thread (mirrors server.CommsThreadView). */
+export interface CommsThread {
+  threadId: string;
+  actionId: string;
+  actionType: string;
+  target: string;
+  subject?: string;
+  status: string; // awaiting_reply | replied | followed_up | closed
+  followUpHours: number;
+  followUps: number;
+  unackedReply: boolean;
+  sentAt: string;
+  nextFollowUpAt?: string;
+  trail: CommsTrailEntry[];
+  followUpDue: boolean;
+  escalationTriggered: boolean;
+  escalationPolicy?: string;
 }
 
 /** Where an approve/reject left the action (mirrors server.ActionDecisionResponse). */
@@ -676,6 +708,7 @@ export class BackendClient {
         : status === "REQUESTED" ? "PENDING_MANUAL"
         : status === "PENDING_SECONDARY" ? "PENDING_TWO_PARTY"
         : status;
+      const params = (a as { parameters?: Record<string, unknown> }).parameters;
       const expiry = a.expires_at ? Date.parse(a.expires_at) : NaN;
       return {
         actionId: a.action_id ?? "",
@@ -694,8 +727,82 @@ export class BackendClient {
         tierEscalated: a.tier_escalated ?? false,
         evidenceRefs: a.evidence_refs ?? [],
         retryOf: a.retry_of,
+        parameters: params,
       };
     });
+  }
+
+  /**
+   * GET /api/investigations/{id}/comms — the external-work threads (Phase F,
+   * binding §4): what was sent, who replied, what still awaits.
+   */
+  async comms(investigationId: string): Promise<CommsThread[]> {
+    interface Raw {
+      thread_id?: string; action_id?: string; action_type?: string; target?: string;
+      subject?: string; status?: string; follow_up_hours?: number; follow_ups?: number;
+      unacked_reply?: boolean; sent_at?: string; next_followup_at?: string;
+      trail?: { direction?: string; author?: string; at?: string; body?: string }[];
+      follow_up_due?: boolean; escalation_triggered?: boolean; escalation_policy?: string;
+    }
+    const body = await this.authedGet<{ threads?: Raw[] }>(
+      `/api/investigations/${encodeURIComponent(investigationId)}/comms`,
+    );
+    return (body.threads ?? []).map((t) => ({
+      threadId: t.thread_id ?? "",
+      actionId: t.action_id ?? "",
+      actionType: t.action_type ?? "",
+      target: t.target ?? "",
+      subject: t.subject,
+      status: t.status ?? "",
+      followUpHours: t.follow_up_hours ?? 0,
+      followUps: t.follow_ups ?? 0,
+      unackedReply: t.unacked_reply ?? false,
+      sentAt: t.sent_at ?? "",
+      nextFollowUpAt: t.next_followup_at,
+      trail: (t.trail ?? []).map((e) => ({
+        direction: e.direction ?? "", author: e.author ?? "", at: e.at ?? "", body: e.body ?? "",
+      })),
+      followUpDue: t.follow_up_due ?? false,
+      escalationTriggered: t.escalation_triggered ?? false,
+      escalationPolicy: t.escalation_policy,
+    }));
+  }
+
+  /** POST /api/comms/{id}/ack|done — the analyst's act on a thread. */
+  async commsAct(threadId: string, verb: "ack" | "done"): Promise<void> {
+    await this.authedPost(`/api/comms/${encodeURIComponent(threadId)}/${verb}`, {});
+  }
+
+  /** POST /api/comms/{id}/snooze — push the follow-up clock. */
+  async commsSnooze(threadId: string, hours: number): Promise<void> {
+    await this.authedPost(`/api/comms/${encodeURIComponent(threadId)}/snooze`, { hours });
+  }
+
+  /**
+   * POST /api/actions — request one action on the HUMAN token (the workbench's
+   * own write path — e.g. a comms follow-up). Same endpoint the agent uses via
+   * the sidecar; Gate 2 and the tiers apply identically.
+   */
+  async requestAction(body: {
+    investigationRef: string;
+    actionType: string;
+    targets: { resolvedIdentifier: string; entityRef?: string }[];
+    parameters?: Record<string, unknown>;
+    evidenceRefs?: string[];
+    rationale: string;
+  }): Promise<{ actionId: string; status: string }> {
+    const r = await this.authedPost<{ action_id?: string; status?: string }>("/api/actions", {
+      investigation_ref: body.investigationRef,
+      action_type: body.actionType,
+      targets: body.targets.map((t) => ({
+        resolved_identifier: t.resolvedIdentifier,
+        entity_ref: t.entityRef,
+      })),
+      parameters: body.parameters,
+      evidence_refs: body.evidenceRefs,
+      rationale: body.rationale,
+    });
+    return { actionId: r.action_id ?? "", status: r.status ?? "" };
   }
 
   /** GET /api/investigations/{id}/pins — the pinned-evidence fold. */
