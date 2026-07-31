@@ -195,7 +195,7 @@ func TestRerequestAction(t *testing.T) {
 		return resp, out
 	}
 
-	// A live (PENDING_MANUAL) action is not re-requestable.
+	// A live (PENDING_MANUAL, window not elapsed) action is not re-requestable.
 	if resp, _ := rerequest(orig.ActionID, "too soon"); resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("re-request of a live action = %d; want 422", resp.StatusCode)
 	}
@@ -238,6 +238,61 @@ func TestRerequestAction(t *testing.T) {
 	// Fresh clock: the new window is in the future.
 	if !nc.ExpiresAt.After(time.Now()) {
 		t.Errorf("new expires_at = %v; want a fresh future window", nc.ExpiresAt)
+	}
+}
+
+// TestRerequestAction_LazyExpiry: an action whose window has elapsed but whose
+// STORED status is still REQUESTED (v0 has no expiry timer — the UI shows it
+// expired via a derived flag) is re-requestable. The re-request materializes
+// the lazy expiry (original → EXPIRED) before creating the fresh one.
+func TestRerequestAction_LazyExpiry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	b := actionBackend(t)
+
+	// Request an action with an ALREADY-elapsed window (frozen in the past) —
+	// exactly the lazily-expired shape: status REQUESTED, deadline passed.
+	actionID := uuid.New()
+	env := aggregate.Envelope{
+		AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
+		Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC(),
+	}
+	if _, err := testHandler.Handle(context.Background(), env, aggregate.RequestAction{
+		ActionID: actionID, ActionType: "host.isolate", Tier: aggregate.TierT2,
+		Targets:   []aggregate.TargetSpec{{EntityRef: "x-host--l", ResolvedIdentifier: "WIN-L"}},
+		ExpiresAt: time.Now().Add(-time.Minute), Rationale: "contain",
+	}); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	srv := httptest.NewServer(b.buildRouter(b.verifier))
+	t.Cleanup(srv.Close)
+	raw, _ := json.Marshal(RerequestBody{Rationale: "still beaconing"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/actions/"+actionID.String()+"/rerequest", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+mintToken(t, nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out RequestActionResponse
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("re-request of a lazily-expired action = %d; want 201", resp.StatusCode)
+	}
+
+	// The original was materialized to EXPIRED (honest status, out of the queue).
+	oc, _ := aggregate.LoadActionCurrent(context.Background(), testDB, actionID)
+	if oc.Status != aggregate.ActionStatusExpired {
+		t.Errorf("original status = %q; want EXPIRED (lazy expiry materialized)", oc.Status)
+	}
+	// The new action links to it.
+	nc, _ := aggregate.LoadActionCurrent(context.Background(), testDB, uuid.MustParse(out.ActionID))
+	if nc.RetryOf != actionID || nc.Status != aggregate.ActionStatusRequested {
+		t.Errorf("new action = {status:%q retry_of:%s}; want REQUESTED linked to the original", nc.Status, nc.RetryOf)
 	}
 }
 

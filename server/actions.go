@@ -352,15 +352,40 @@ func (b *Backend) rerequestAction(w http.ResponseWriter, r *http.Request, priorI
 		writeJSONError(w, http.StatusNotFound, "action not found")
 		return
 	}
-	// Only a spent-but-unexecuted action is re-requestable: EXPIRED (window
-	// elapsed) or REJECTED (a reconsidered no). A live or executed action must
-	// not be duplicated by this path.
-	switch prior.Status {
-	case aggregate.ActionStatusExpired, aggregate.ActionStatusRejected:
+	now := commandNow()
+
+	// Only a spent-but-unexecuted action is re-requestable. Two shapes:
+	//   - already terminal-unexecuted: EXPIRED or REJECTED.
+	//   - LAZILY expired: still REQUESTED/PENDING_SECONDARY in the store because
+	//     v0 has no expiry timer, but its frozen window has elapsed — the engine
+	//     would refuse an approve. This is the case the UI shows as "expired".
+	lazilyExpired := (prior.Status == aggregate.ActionStatusRequested ||
+		prior.Status == aggregate.ActionStatusPendingSecondary) &&
+		!prior.ExpiresAt.IsZero() && prior.ExpiresAt.Before(now)
+	switch {
+	case prior.Status == aggregate.ActionStatusExpired,
+		prior.Status == aggregate.ActionStatusRejected,
+		lazilyExpired:
+		// re-requestable
 	default:
 		writeJSONError(w, http.StatusUnprocessableEntity,
-			"only an EXPIRED or REJECTED action can be re-requested; this one is "+prior.Status)
+			"only an EXPIRED or REJECTED action can be re-requested; this one is "+prior.Status+" and its approval window has not elapsed")
 		return
+	}
+
+	// Materialize the lazy expiry on demand (the deferred timer firing at the
+	// moment we act on it): transition the original to EXPIRED so its stored
+	// status is honest and it drops out of the pending queue, before the fresh
+	// request links to it. SYSTEM-attributed — the deadline genuinely passed;
+	// this records that fact, it does not forge it.
+	if lazilyExpired {
+		expEnv := newEnvelope(prior.AggregateID,
+			aggregate.Actor{PrincipalID: "system", Kind: aggregate.ActorSystem}, now)
+		if expRes, expErr := b.cfg.Handler.Handle(r.Context(), expEnv, aggregate.ExpireAction{ActionID: priorID}); expErr == nil {
+			b.publishDeltas(expRes)
+		} else {
+			log.Printf("re-request %s: could not materialize expiry (%v); proceeding", priorID, expErr)
+		}
 	}
 
 	var body RerequestBody
