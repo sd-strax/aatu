@@ -68,6 +68,7 @@ type InboundMessage =
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
   | { type: "entity.info"; ref: string }
+  | { type: "export.open" }
   | { type: "copy"; text: string }
   | { type: "investigation.open"; id: string; title?: string }
   | { type: "transcript.open"; interpretationId: string };
@@ -138,6 +139,8 @@ export class InvestigationDocuments {
         void this.resolveLabel(panel, msg.ref);
       } else if (msg.type === "entity.info") {
         void this.entityInfo(id, panel, msg.ref);
+      } else if (msg.type === "export.open") {
+        void this.openMarkdownExport(id);
       } else if (msg.type === "copy") {
         void vscode.env.clipboard.writeText(msg.text);
       } else if (msg.type === "investigation.open") {
@@ -465,6 +468,21 @@ export class InvestigationDocuments {
       void vscode.window.showErrorMessage(`reckon: re-request failed — ${errText(err)}`);
     }
     await this.postPending(id, panel);
+  }
+
+  /**
+   * The live markdown export in an editor tab (binding §6 item 10): rendered
+   * backend-side from the projections, opened as an untitled markdown doc the
+   * analyst can read, save, or paste into a ticket unedited.
+   */
+  private async openMarkdownExport(id: string): Promise<void> {
+    try {
+      const md = await this.client.exportMarkdown(id);
+      const doc = await vscode.workspace.openTextDocument({ content: md, language: "markdown" });
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: export failed — ${errText(err)}`);
+    }
   }
 
   /** Open a thread step's full committed transcript in a read-only tab. */
@@ -1012,6 +1030,7 @@ export class InvestigationDocuments {
         <span class="state verdictbadge" id="verdictBadge" style="display:none"></span>
         <button id="verdictBtn" title="Record the disposition of record">Verdict…</button>
         <span id="lifecycleBtns"></span>
+        <button id="exportBtn" title="The live markdown snapshot — paste into a ticket unedited">Export</button>
         <button id="refresh" title="Reload from the backend">Refresh</button>
       </div>
       <div id="meta"></div>
@@ -2251,6 +2270,7 @@ export class InvestigationDocuments {
       vscode.postMessage({ type: "send", text });
     }
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
+    $("exportBtn").addEventListener("click", () => vscode.postMessage({ type: "export.open" }));
 
     // ---- the reusable prompt card ------------------------------------------
     // One in-context modal for every text-input action — never a top-of-window

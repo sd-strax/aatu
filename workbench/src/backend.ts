@@ -818,6 +818,26 @@ export class BackendClient {
     };
   }
 
+  /**
+   * GET /api/investigations/{id}/export.md — the live markdown projection
+   * (binding §6 item 10): the portable, any-time snapshot. "Paste into a
+   * ticket unedited" is this call, not a file on disk.
+   */
+  async exportMarkdown(investigationId: string): Promise<string> {
+    if (!this.token) {
+      throw new Error("no token source configured");
+    }
+    const bearer = await this.token();
+    const res = await fetch(
+      `${this.baseUrl()}/api/investigations/${encodeURIComponent(investigationId)}/export.md`,
+      { headers: { Authorization: `Bearer ${bearer}` }, signal: AbortSignal.timeout(15_000) },
+    );
+    if (!res.ok) {
+      throw new Error(`export.md → ${res.status}`);
+    }
+    return await res.text();
+  }
+
   private async authedGet<T>(path: string): Promise<T> {
     return this.authed<T>("GET", path);
   }

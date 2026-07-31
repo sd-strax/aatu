@@ -599,6 +599,17 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// The live markdown projection (binding §6 item 10): any-time, any reader —
+	// distinct from POST /export, which builds the signed post-conclusion bundle.
+	if strings.HasSuffix(trimmed, "/export.md") {
+		switch r.Method {
+		case http.MethodGet:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, b.getInvestigationMarkdown)
+		default:
+			methodNotAllowed(w, "GET")
+		}
+		return
+	}
 	if strings.HasSuffix(trimmed, "/lifecycle") {
 		switch r.Method {
 		case http.MethodPost:

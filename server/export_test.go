@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,5 +155,69 @@ func TestExport_NotFound(t *testing.T) {
 	resp, _ := postExport(t, b, mintToken(t, nil), uuid.NewString())
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d; want 404", resp.StatusCode)
+	}
+}
+
+// TestExportMarkdown_LiveProjection: GET /export.md renders at ANY lifecycle
+// state (the live projection, binding §6 item 10) — unlike POST /export, which
+// requires CONCLUDED. Frontmatter + sections speak engine vocabulary.
+func TestExportMarkdown_LiveProjection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := activeInvestigation(t)
+	env := func() aggregate.Envelope {
+		return aggregate.Envelope{
+			AggregateID: invID, TenantID: module.SingleTenantUUID, CorrelationID: uuid.New(),
+			Actor: aggregate.Actor{PrincipalID: "test-subject"}, OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
+	}
+	// Pin + verdict, but do NOT conclude — mid-flight export is the point.
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationEvidencePin,
+		InputRefs: []string{"observed-data--x"}, Rationale: "load-bearing finding",
+	}); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if _, err := testHandler.Handle(context.Background(), env(), aggregate.RecordInterpretation{
+		InterpretationID: uuid.New(), InterpretationType: aggregate.InterpretationVerdict,
+		Verdict:   &aggregate.VerdictNode{Disposition: aggregate.VerdictMalicious},
+		InputRefs: []string{"observed-data--x"}, Rationale: "confirmed",
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+
+	b := newTestBackend(t)
+	srv := httptest.NewServer(b.buildRouter(b.verifier))
+	t.Cleanup(srv.Close)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/investigations/"+invID.String()+"/export.md", nil)
+	req.Header.Set("Authorization", "Bearer "+mintToken(t, nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/markdown; charset=utf-8" {
+		t.Errorf("content-type = %q", ct)
+	}
+	body := make([]byte, 1<<20)
+	n, _ := resp.Body.Read(body)
+	md := string(body[:n])
+	for _, want := range []string{
+		"status: ACTIVE",
+		"verdict: MALICIOUS",
+		"## Pinned evidence",
+		"load-bearing finding",
+		"`observed-data--x`",
+		"## Reasoning",
+		"schema: reckon-export-md/1",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("export.md missing %q", want)
+		}
 	}
 }

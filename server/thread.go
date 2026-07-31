@@ -1,9 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/aggregate"
 )
@@ -60,16 +64,25 @@ func (b *Backend) listInvestigationThread(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusBadRequest, "invalid investigation id in path")
 		return
 	}
+	out, err := b.loadThread(r.Context(), invID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"thread": out})
+}
 
-	rows, err := b.cfg.Handler.DB().QueryContext(r.Context(),
+// loadThread reassembles the thread views for one investigation — shared by
+// the thread endpoint and the markdown export (one behavior, two renderings).
+func (b *Backend) loadThread(ctx context.Context, invID uuid.UUID) ([]ThreadEntryView, error) {
+	rows, err := b.cfg.Handler.DB().QueryContext(ctx,
 		`SELECT sequence_no, occurred_at, actor, payload
 		 FROM events
 		 WHERE aggregate_id = $1 AND event_type = $2
 		 ORDER BY sequence_no`,
 		invID, aggregate.EventTypeInterpretationRecorded)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "query thread: "+err.Error())
-		return
+		return nil, fmt.Errorf("query thread: %w", err)
 	}
 	defer rows.Close()
 
@@ -79,18 +92,16 @@ func (b *Backend) listInvestigationThread(w http.ResponseWriter, r *http.Request
 		var at time.Time
 		var actorRaw, payloadRaw []byte
 		if err := rows.Scan(&seq, &at, &actorRaw, &payloadRaw); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "scan thread: "+err.Error())
-			return
+			return nil, fmt.Errorf("scan thread: %w", err)
 		}
 		var actor aggregate.Actor
 		_ = json.Unmarshal(actorRaw, &actor)
 		var rec aggregate.InterpretationRecorded
 		if err := json.Unmarshal(payloadRaw, &rec); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "decode interpretation: "+err.Error())
-			return
+			return nil, fmt.Errorf("decode interpretation: %w", err)
 		}
 
-		v := ThreadEntryView{
+		out = append(out, ThreadEntryView{
 			SequenceNo:         seq,
 			OccurredAt:         at,
 			Actor:              threadActor(actor),
@@ -103,14 +114,12 @@ func (b *Backend) listInvestigationThread(w http.ResponseWriter, r *http.Request
 			ToolCalls:          len(rec.ToolCallRefs),
 			HasTranscript:      rec.TranscriptRef != nil,
 			ConsultedSOPs:      rec.ConsultedSOPs,
-		}
-		out = append(out, v)
+		})
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "iterate thread: "+err.Error())
-		return
+		return nil, fmt.Errorf("iterate thread: %w", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"thread": out})
+	return out, nil
 }
 
 func threadActor(a aggregate.Actor) ThreadActorView {
