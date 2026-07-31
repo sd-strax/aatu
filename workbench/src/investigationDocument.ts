@@ -15,7 +15,7 @@
 
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
-import { ActionRow, BackendClient, Capability, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
+import { ActionRow, Appearance, BackendClient, Capability, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
@@ -35,6 +35,9 @@ type RenderMessage =
   // A resolved human label for an evidence ref (e.g. "host · WIN-FILE01"),
   // so the chips read as evidence instead of opaque STIX ids.
   | { type: "evidence.label"; ref: string; label: string }
+  // The entity popover's cross-investigation memory (ui/02 §2.4): other
+  // investigations citing this ref, current one excluded.
+  | { type: "entity.info"; ref: string; appearances: Appearance[] }
   | { type: "turn.start" }
   | { type: "turn.user"; text: string }
   | { type: "turn.reasoning"; delta: string }
@@ -60,6 +63,9 @@ type InboundMessage =
   | { type: "lifecycle"; transition: string; reason?: string; summary?: string }
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
+  | { type: "entity.info"; ref: string }
+  | { type: "copy"; text: string }
+  | { type: "investigation.open"; id: string; title?: string }
   | { type: "transcript.open"; interpretationId: string };
 
 export class InvestigationDocuments {
@@ -117,6 +123,12 @@ export class InvestigationDocuments {
         void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
       } else if (msg.type === "evidence.resolve") {
         void this.resolveLabel(panel, msg.ref);
+      } else if (msg.type === "entity.info") {
+        void this.entityInfo(id, panel, msg.ref);
+      } else if (msg.type === "copy") {
+        void vscode.env.clipboard.writeText(msg.text);
+      } else if (msg.type === "investigation.open") {
+        void vscode.commands.executeCommand("reckon.openInvestigation", msg.id, msg.title);
       } else if (msg.type === "transcript.open") {
         void this.openTranscript(msg.interpretationId);
       }
@@ -227,6 +239,21 @@ export class InvestigationDocuments {
     if (label) {
       void this.post(panel, { type: "evidence.label", ref, label });
     }
+  }
+
+  /**
+   * The entity popover's data: every OTHER investigation citing this ref
+   * (cross-investigation memory, binding §6.1). Failure posts an empty list —
+   * the popover renders "first seen here" honestly rather than hanging.
+   */
+  private async entityInfo(id: string, panel: vscode.WebviewPanel, ref: string): Promise<void> {
+    let apps: Appearance[] = [];
+    try {
+      apps = (await this.client.appearances(ref)).filter((a) => a.investigationId !== id);
+    } catch (err) {
+      this.log.debug(`appearances ${ref}: ${errText(err)}`);
+    }
+    void this.post(panel, { type: "entity.info", ref, appearances: apps });
   }
 
   /**
@@ -779,6 +806,42 @@ export class InvestigationDocuments {
     .chip-alert   { color: var(--ent-alert);   background: var(--ent-alert-bg); }
     .chip-brand   { color: var(--he-primary-soft); background: color-mix(in srgb, var(--he-primary) 15%, transparent); }
 
+    /* ---- entity popover (ui/02 §2.4): overlay surface, viewport-clamped ---- */
+    .popover {
+      position: fixed; z-index: 20; width: min(320px, 86vw);
+      background: var(--overlay-bg); border: 1px solid var(--vscode-widget-border, var(--border));
+      border-radius: var(--r-lg); box-shadow: var(--shadow-pop);
+      padding: 11px 13px; animation: dlgIn 0.16s var(--ease-out);
+    }
+    .pop-head { display: flex; align-items: baseline; gap: 8px; }
+    .pop-type {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; flex: none; background: none;
+    }
+    .pop-value {
+      font-family: var(--mono); font-size: var(--fs-md); font-weight: 600;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .pop-id {
+      font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3);
+      margin: 4px 0 8px; word-break: break-all;
+    }
+    .pop-apps { border-top: 1px solid var(--border); padding-top: 7px; margin-bottom: 8px; }
+    .pop-appshead {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 4px;
+    }
+    .pop-first { font-size: var(--fs-xs); color: var(--text-3); font-style: italic; }
+    .app-row {
+      display: flex; align-items: baseline; gap: 7px; font-size: var(--fs-sm);
+      padding: 2px 4px; margin: 0 -4px; border-radius: var(--r-xs); cursor: pointer;
+    }
+    .app-row:hover { background: var(--hover); }
+    .app-row .app-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .app-row .app-status { flex: none; font-size: var(--fs-xs); color: var(--text-3); }
+    .pop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .pop-grid button { font-size: var(--fs-sm); padding: 4px 8px; }
+
     .pinrow { border-left: 2px solid var(--pin); }
     .pinrow .finding { font-size: var(--fs-sm); }
     .pinrow.superseded { border-left-color: var(--border); }
@@ -991,21 +1054,166 @@ export class InvestigationDocuments {
       const val = resolvedLabels[ref];
       return val ? type + " · " + val : type;
     }
+    // Entity types get the popover (ui/02 §2.4: chip → popover → staged pivot);
+    // observed-data / events / reasoning nodes open their record directly
+    // (§2.8: every citation opens).
+    const ENTITY_POPOVER_TYPES = new Set([
+      "x-host", "ipv4-addr", "ipv6-addr", "user-account", "process", "file",
+      "domain-name", "email-addr", "url", "windows-registry-key", "indicator",
+    ]);
     function refChip(ref) {
       const t = ref.includes("--") ? ref.slice(0, ref.indexOf("--")) : "";
       const c = document.createElement("span");
       c.className = "refchip" + (REF_CHIP_CLASS[t] ? " " + REF_CHIP_CLASS[t] : "");
       c.dataset.ref = ref;
       c.textContent = chipText(ref);
-      c.title = "Open evidence: " + ref;
+      c.title = ENTITY_POPOVER_TYPES.has(t) ? "Entity details: " + ref : "Open evidence: " + ref;
       c.addEventListener("click", (e) => {
         e.stopPropagation();
-        vscode.postMessage({ type: "evidence.open", ref });
+        if (ENTITY_POPOVER_TYPES.has(t)) {
+          openEntityPopover(ref, c);
+        } else {
+          vscode.postMessage({ type: "evidence.open", ref });
+        }
       });
       if (resolvedLabels[ref] === undefined) {
         vscode.postMessage({ type: "evidence.resolve", ref });
       }
       return c;
+    }
+
+    // ---- entity popover (ui/02 §2.4) ---------------------------------------
+    // One at a time; fixed-positioned near the chip, viewport-clamped. Pivot
+    // STAGES a question in the composer — it never fires (the pivot pattern).
+    let popEl = null;
+    function closePopover() {
+      if (popEl) { popEl.remove(); popEl = null; }
+    }
+    document.addEventListener("click", (e) => {
+      if (popEl && !popEl.contains(e.target)) closePopover();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closePopover();
+    });
+
+    function openEntityPopover(ref, anchor) {
+      closePopover();
+      const t = ref.includes("--") ? ref.slice(0, ref.indexOf("--")) : "";
+      const pop = document.createElement("div");
+      pop.className = "popover";
+      pop.dataset.ref = ref;
+
+      const head = document.createElement("div");
+      head.className = "pop-head";
+      const typeEl = document.createElement("div");
+      typeEl.className = "pop-type " + (REF_CHIP_CLASS[t] || "");
+      typeEl.textContent = refTypeLabel(ref);
+      const valueEl = document.createElement("div");
+      valueEl.className = "pop-value";
+      valueEl.textContent = resolvedLabels[ref] || "…";
+      head.append(typeEl, valueEl);
+
+      // The deterministic id (03 §7): the engine's UUIDv5 — same entity, same
+      // id, across producers and investigations. Displayed, never computed here.
+      const idEl = document.createElement("div");
+      idEl.className = "pop-id";
+      idEl.textContent = ref;
+      idEl.title = "Deterministic id (engine-minted UUIDv5) — same entity, same id, everywhere";
+
+      const apps = document.createElement("div");
+      apps.className = "pop-apps";
+      apps.innerHTML = '<div class="empty">checking other investigations…</div>';
+
+      const grid = document.createElement("div");
+      grid.className = "pop-grid";
+      const mkAct = (label, title, primary, onClick) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.title = title;
+        if (primary) b.className = "primary";
+        b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+        grid.appendChild(b);
+      };
+      mkAct("Pivot on entity", "Stage a pivot question in the composer — you review and send it", true, () => {
+        const label = resolvedLabels[ref] || refTypeLabel(ref) + " " + ref;
+        closePopover();
+        stageInComposer("Pivot on " + label + ": what other activity involves this " + refTypeLabel(ref) + " across the available telemetry?");
+      });
+      mkAct("Pin as evidence", "Pin this entity with a finding note", false, () => {
+        closePopover();
+        openPinDialog([ref]);
+      });
+      mkAct("Open raw JSON", "The underlying record, read-only (02 §2.8)", false, () => {
+        closePopover();
+        vscode.postMessage({ type: "evidence.open", ref });
+      });
+      mkAct("Copy value", "Copy the resolved value (falls back to the id)", false, () => {
+        const label = resolvedLabels[ref];
+        vscode.postMessage({ type: "copy", text: label ? label : ref });
+        closePopover();
+      });
+
+      pop.append(head, idEl, apps, grid);
+      document.body.appendChild(pop);
+      popEl = pop;
+
+      // Position near the chip, clamped to the viewport (never clipped).
+      const r = anchor.getBoundingClientRect();
+      const w = pop.offsetWidth, h = pop.offsetHeight;
+      let x = Math.min(r.left, window.innerWidth - w - 8);
+      let y = r.bottom + 6;
+      if (y + h > window.innerHeight - 8) y = Math.max(8, r.top - h - 6);
+      pop.style.left = Math.max(8, x) + "px";
+      pop.style.top = y + "px";
+
+      if (resolvedLabels[ref] === undefined) {
+        vscode.postMessage({ type: "evidence.resolve", ref });
+      }
+      vscode.postMessage({ type: "entity.info", ref });
+    }
+
+    // Fill the popover's appearances section once the host answers.
+    function renderPopoverApps(ref, appearances) {
+      if (!popEl || popEl.dataset.ref !== ref) return;
+      const box = popEl.querySelector(".pop-apps");
+      box.textContent = "";
+      if (!appearances || !appearances.length) {
+        const d = document.createElement("div");
+        d.className = "pop-first";
+        d.textContent = "First seen in this investigation. Cross-investigation identity is preserved by deterministic id — not surveillance, just join keys.";
+        box.appendChild(d);
+        return;
+      }
+      const head = document.createElement("div");
+      head.className = "pop-appshead";
+      head.textContent = "Appears in " + appearances.length + " other investigation" + (appearances.length === 1 ? "" : "s");
+      box.appendChild(head);
+      for (const a of appearances.slice(0, 6)) {
+        const row = document.createElement("div");
+        row.className = "app-row";
+        const dot = document.createElement("span");
+        dot.className = "dot" + (a.status === "concluded" || a.status === "archived" ? " unavailable" : "");
+        const title = document.createElement("span");
+        title.className = "app-title";
+        title.textContent = a.title;
+        const st = document.createElement("span");
+        st.className = "app-status";
+        st.textContent = a.status + " · " + a.mentions + "×";
+        row.append(dot, title, st);
+        row.title = (a.seedSummary || a.title) + " — open";
+        row.addEventListener("click", (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: "investigation.open", id: a.investigationId, title: a.title });
+          closePopover();
+        });
+        box.appendChild(row);
+      }
+      if (appearances.length > 6) {
+        const more = document.createElement("div");
+        more.className = "cardmeta";
+        more.textContent = "+" + (appearances.length - 6) + " more";
+        box.appendChild(more);
+      }
     }
 
     // Live approval-window countdown (03 §3.3): the analyst's only warning
@@ -2071,13 +2279,20 @@ export class InvestigationDocuments {
         case "history.turns":
           renderRestored(msg.turns);
           break;
-        case "evidence.label":
+        case "evidence.label": {
           // Enrich every chip for this ref, in place (chips added later read
           // the cache on creation).
           resolvedLabels[msg.ref] = msg.label;
           for (const c of document.querySelectorAll(".refchip")) {
             if (c.dataset.ref === msg.ref) c.textContent = chipText(msg.ref);
           }
+          if (popEl && popEl.dataset.ref === msg.ref) {
+            popEl.querySelector(".pop-value").textContent = msg.label;
+          }
+          break;
+        }
+        case "entity.info":
+          renderPopoverApps(msg.ref, msg.appearances);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');

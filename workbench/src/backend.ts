@@ -98,6 +98,17 @@ export interface PinRow {
   superseded: boolean;
 }
 
+/** One investigation a ref appears in (mirrors server.AppearanceView). */
+export interface Appearance {
+  investigationId: string;
+  title: string;
+  status: string;
+  seedSummary?: string;
+  firstSeen?: string;
+  lastSeen?: string;
+  mentions: number;
+}
+
 /** One opened citation (mirrors server.EvidenceView). */
 export interface EvidenceDoc {
   ref: string;
@@ -671,6 +682,31 @@ export class BackendClient {
       `/api/interpretations/${encodeURIComponent(interpretationId)}/transcript`,
     );
     return { turnId: r.turn_id, body: r.body ?? "" };
+  }
+
+  /**
+   * GET /api/entities/{ref}/appearances — cross-investigation memory
+   * (binding §6.1): every investigation whose thread cites the ref, powered by
+   * deterministic identity. The entity popover's "appears in N other
+   * investigations" list.
+   */
+  async appearances(ref: string): Promise<Appearance[]> {
+    interface Raw {
+      investigation_id?: string; title?: string; status?: string;
+      seed_summary?: string; first_seen?: string; last_seen?: string; mentions?: number;
+    }
+    const body = await this.authedGet<{ appearances?: Raw[] }>(
+      `/api/entities/${encodeURIComponent(ref)}/appearances`,
+    );
+    return (body.appearances ?? []).map((a) => ({
+      investigationId: a.investigation_id ?? "",
+      title: a.title ?? "",
+      status: a.status ?? "",
+      seedSummary: a.seed_summary,
+      firstSeen: a.first_seen,
+      lastSeen: a.last_seen,
+      mentions: a.mentions ?? 0,
+    }));
   }
 
   /** GET /api/evidence/{ref} — citation-open (02 §2.8). */
