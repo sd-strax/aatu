@@ -438,260 +438,383 @@ export class InvestigationDocuments {
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
+    /* =====================================================================
+       design/ui/01-design-system.md, applied. Three tiers of tokens:
+       1. chrome-adjacent — DERIVED from --vscode-* so the panel never fights
+          the user's theme (backgrounds, text, dividers, inputs);
+       2. reckon semantic — FIXED (analysts learn these as meaning): indigo
+          primary, ok/warn/bad/info, the pin amber, trust tiers;
+       3. entity palette — FIXED per type, used identically everywhere.
+       Fills/hovers use color-mix over the theme foreground so density reads
+       the same on any theme without hardcoding a navy ramp here.
+       ===================================================================== */
+    :root {
+      /* type scale (01 §Typography) */
+      --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+      --sans: var(--vscode-font-family);
+      --mono: var(--vscode-editor-font-family, monospace);
+      /* spacing — 4px base; density target: terminal, not airy */
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+      /* radius */
+      --r-xs: 3px; --r-sm: 5px; --r: 7px; --r-lg: 10px; --r-pill: 999px;
+      /* motion */
+      --dur-fast: .16s; --dur: .28s;
+      --ease: cubic-bezier(.4, 0, .2, 1);
+      --ease-out: cubic-bezier(.16, 1, .3, 1);
+      /* brand */
+      --he-primary: #7371fc; --he-primary-soft: #8b8aff; --he-primary-deep: #5d5be0;
+      /* chrome-adjacent, theme-derived */
+      --text: var(--vscode-foreground);
+      --text-2: var(--vscode-descriptionForeground, color-mix(in srgb, var(--vscode-foreground) 62%, transparent));
+      --text-3: color-mix(in srgb, var(--vscode-foreground) 40%, transparent);
+      --border: var(--vscode-panel-border, color-mix(in srgb, var(--vscode-foreground) 9%, transparent));
+      --fill: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
+      --fill-2: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+      --hover: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+      --overlay-bg: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+      --shadow-pop: 0 12px 40px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+      /* semantic (fixed; dark values) */
+      --ok: #4ec77b;   --ok-bg: rgba(78,199,123,.13);   --ok-border: rgba(78,199,123,.32);
+      --warn: #f5b53d; --warn-bg: rgba(245,181,61,.13); --warn-border: rgba(245,181,61,.34);
+      --bad: #ff5f6e;  --bad-bg: rgba(255,95,110,.13);  --bad-border: rgba(255,95,110,.34);
+      --info: #4aa8ff; --info-bg: rgba(74,168,255,.13); --info-border: rgba(74,168,255,.34);
+      --pin: #f5b53d;
+      /* entity palette (fixed per type; dark values) */
+      --ent-host: #6fb6f2;    --ent-host-bg: rgba(111,182,242,.14);
+      --ent-account: #c98fe0; --ent-account-bg: rgba(201,143,224,.15);
+      --ent-ip: #45c9d6;      --ent-ip-bg: rgba(69,201,214,.14);
+      --ent-hash: #f0b94c;    --ent-hash-bg: rgba(240,185,76,.14);
+      --ent-domain: #6fd698;  --ent-domain-bg: rgba(111,214,152,.14);
+      --ent-email: #a99bf5;   --ent-email-bg: rgba(169,155,245,.15);
+      --ent-process: #b6c2cf; --ent-process-bg: rgba(182,194,207,.13);
+      --ent-alert: #f59a6b;   --ent-alert-bg: rgba(245,154,107,.14);
+    }
+    body.vscode-light {
+      --shadow-pop: 0 12px 40px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.10);
+      --ok: #1f9d52;   --ok-bg: rgba(31,157,82,.10);    --ok-border: rgba(31,157,82,.32);
+      --warn: #c8860b; --warn-bg: rgba(200,134,11,.10); --warn-border: rgba(200,134,11,.34);
+      --bad: #e0394a;  --bad-bg: rgba(224,57,74,.10);   --bad-border: rgba(224,57,74,.34);
+      --info: #1f7fe0; --info-bg: rgba(31,127,224,.10); --info-border: rgba(31,127,224,.34);
+      --pin: #c8860b;
+      --ent-host: #1f6fc4;    --ent-host-bg: rgba(31,111,196,.10);
+      --ent-account: #9333b8; --ent-account-bg: rgba(147,51,184,.10);
+      --ent-ip: #0e8a9c;      --ent-ip-bg: rgba(14,138,156,.10);
+      --ent-hash: #b3790a;    --ent-hash-bg: rgba(179,121,10,.11);
+      --ent-domain: #1c9b57;  --ent-domain-bg: rgba(28,155,87,.10);
+      --ent-email: #6a5be0;   --ent-email-bg: rgba(106,91,224,.10);
+      --ent-process: #5a6b7b; --ent-process-bg: rgba(90,107,123,.10);
+      --ent-alert: #d2671f;   --ent-alert-bg: rgba(210,103,31,.10);
+    }
+
     html, body { height: 100%; }
     body {
-      font-family: var(--vscode-font-family);
-      font-size: 13px;
-      line-height: 1.55;
-      color: var(--vscode-foreground);
-      margin: 0;
-      display: flex;
-      height: 100vh;
-      overflow: hidden;
+      font-family: var(--sans); font-size: var(--fs-base); line-height: 1.55;
+      color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden;
+    }
+    ::-webkit-scrollbar { width: 11px; height: 11px; }
+    ::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--vscode-foreground) 13%, transparent);
+      border: 3px solid transparent; background-clip: content-box; border-radius: var(--r-pill);
     }
 
     /* ---- two-region layout: conversation + state rail ---- */
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #rail {
       flex: none; width: 272px; min-width: 200px;
-      border-left: 1px solid var(--vscode-panel-border);
-      overflow-y: auto; padding: 0.75rem 0.9rem 1rem;
+      border-left: 1px solid var(--border);
+      overflow-y: auto; padding: var(--sp-3) var(--sp-3) var(--sp-4);
       background: var(--vscode-sideBar-background, transparent);
     }
     @media (max-width: 640px) { #rail { display: none; } }
 
     header {
-      padding: 0.7rem 1.25rem 0.55rem;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      flex: none;
+      padding: var(--sp-3) var(--sp-5) var(--sp-2);
+      border-bottom: 1px solid var(--border); flex: none;
     }
-    .titlerow { display: flex; align-items: baseline; gap: 0.7rem; }
-    header h1 { font-size: 1.05rem; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .titlerow { display: flex; align-items: baseline; gap: var(--sp-3); }
+    header h1 {
+      font-size: var(--fs-lg); font-weight: 600; margin: 0; flex: 1;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* status pill — tier/state pills are weight-800 micro-labels (01 §Scale) */
     .state {
-      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
-      padding: 0.12rem 0.55rem; border-radius: 0.65rem;
-      background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
+      font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 2px 9px; border-radius: var(--r-pill);
+      background: var(--fill-2); color: var(--text-2); border: 1px solid var(--border);
+      white-space: nowrap;
     }
-    #meta { font-size: 0.74rem; opacity: 0.55; margin-top: 0.15rem; }
+    #state[data-engine="ACTIVE"] { color: var(--he-primary-soft); border-color: color-mix(in srgb, var(--he-primary) 45%, transparent); background: color-mix(in srgb, var(--he-primary) 16%, transparent); }
+    #state[data-engine="CONCLUDED"] { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); }
+    #state[data-engine="ARCHIVED"] { opacity: 0.7; }
+    #meta { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
+    #meta code { font-family: var(--mono); background: none; padding: 0; }
 
     button {
-      font: inherit; color: var(--vscode-button-secondaryForeground);
-      background: var(--vscode-button-secondaryBackground); border: none;
-      padding: 0.25rem 0.7rem; border-radius: 0.25rem; cursor: pointer;
+      font: inherit; font-size: var(--fs-sm); color: var(--text);
+      background: var(--fill-2); border: 1px solid var(--border);
+      padding: 3px 11px; border-radius: var(--r-sm); cursor: pointer;
+      transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
     }
-    button:hover { background: var(--vscode-button-secondaryHoverBackground); }
-    button:disabled { opacity: 0.5; cursor: default; }
+    button:hover { background: var(--fill); border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
+    button:disabled { opacity: 0.45; cursor: default; }
+    button.primary, .decide .primary, .pincta {
+      color: #fff; background: var(--he-primary); border-color: transparent; font-weight: 600;
+    }
+    button.primary:hover, .decide .primary:hover, .pincta:hover { background: var(--he-primary-deep); }
 
-    #scroll { flex: 1; overflow-y: auto; padding: 0.4rem 1.25rem 1rem; }
-    #banner { color: var(--vscode-errorForeground); margin: 0.5rem 0; }
+    #scroll { flex: 1; overflow-y: auto; padding: var(--sp-2) var(--sp-5) var(--sp-4); }
+    #banner { color: var(--bad); margin: var(--sp-2) 0; }
     #banner:empty { display: none; }
     #conversation:empty::before {
       content: "Ask reckon to investigate — it reasons over the evidence, cites what it saw, and proposes actions for your approval.";
-      display: block; opacity: 0.55; font-style: italic; margin: 1.4rem 0; max-width: 46ch;
+      display: block; color: var(--text-3); font-style: italic; margin: var(--sp-6) 0; max-width: 46ch;
     }
 
     /* ---- conversation ---- */
-    .msg { margin: 1rem 0; max-width: 78ch; }
+    .msg { margin: var(--sp-4) 0; max-width: 78ch; font-size: var(--fs-md); }
     .msg.user { display: flex; justify-content: flex-end; max-width: none; }
     .msg.user .bubble {
-      max-width: 60ch; white-space: pre-wrap;
-      background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border);
-      border-radius: 0.6rem; padding: 0.45rem 0.8rem;
+      max-width: 60ch; white-space: pre-wrap; font-size: var(--fs-base);
+      background: var(--fill); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 7px 13px;
     }
     .reasoning {
-      font-style: italic; opacity: 0.7; font-size: 0.86rem; white-space: pre-wrap;
-      border-left: 2px solid var(--vscode-panel-border); padding-left: 0.6rem; margin: 0.3rem 0;
+      font-style: italic; color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap;
+      border-left: 2px solid var(--border); padding-left: 10px; margin: var(--sp-1) 0;
     }
+    /* streaming caret (01 §Motion): blinks at the end of the live segment */
+    .md.live::after {
+      content: "▍"; color: var(--he-primary-soft);
+      animation: caret 1s steps(2) infinite;
+    }
+    @keyframes caret { 50% { opacity: 0; } }
 
     /* markdown-rendered assistant text */
-    .md p { margin: 0.45rem 0; }
-    .md ul, .md ol { margin: 0.35rem 0; padding-left: 1.4rem; }
-    .md li { margin: 0.15rem 0; }
-    .md .mdh { font-weight: 600; margin: 0.7rem 0 0.3rem; }
+    .md p { margin: 7px 0; }
+    .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+    .md li { margin: 2px 0; }
+    .md .mdh { font-weight: 600; margin: 11px 0 5px; }
     .md code, code {
-      font-family: var(--vscode-editor-font-family); font-size: 0.86em;
-      background: var(--vscode-textCodeBlock-background);
-      padding: 0.05em 0.3em; border-radius: 0.25em;
+      font-family: var(--mono); font-size: 0.88em;
+      background: var(--fill-2); padding: 0.5px 4px; border-radius: var(--r-xs);
     }
     .md pre.codeblock {
-      font-family: var(--vscode-editor-font-family); font-size: 0.84rem; line-height: 1.45;
-      background: var(--vscode-textCodeBlock-background);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin: 0.5rem 0;
+      font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.45;
+      background: var(--fill); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 9px 12px; margin: var(--sp-2) 0;
       overflow-x: auto; white-space: pre;
     }
     .md pre.codeblock code { background: none; padding: 0; }
 
-    /* tool rows: one-line summary, args behind the disclosure */
+    /* tool rows: one-line summary, args behind the disclosure — data is mono */
     details.tool {
-      font-family: var(--vscode-editor-font-family); font-size: 0.8rem;
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 0.35rem; margin: 0.4rem 0; max-width: 78ch;
-      background: var(--vscode-textCodeBlock-background);
+      font-family: var(--mono); font-size: var(--fs-sm);
+      border: 1px solid var(--border); border-radius: var(--r);
+      margin: 6px 0; max-width: 78ch; background: var(--fill);
+      transition: border-color var(--dur-fast) var(--ease);
     }
+    details.tool:hover { border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
     details.tool summary {
-      cursor: pointer; padding: 0.28rem 0.6rem; list-style: none;
-      display: flex; align-items: baseline; gap: 0.5rem; overflow: hidden;
+      cursor: pointer; padding: 5px 10px; list-style: none;
+      display: flex; align-items: baseline; gap: var(--sp-2); overflow: hidden;
+      min-height: 24px; box-sizing: border-box;
     }
     details.tool summary::-webkit-details-marker { display: none; }
     .tool .mark { flex: none; }
-    .tool .mark.ok { color: var(--vscode-charts-green, #89d185); }
-    .tool .mark.err { color: var(--vscode-errorForeground); }
+    .tool .mark.ok { color: var(--ok); }
+    .tool .mark.err { color: var(--bad); }
     .tool .verb { font-weight: 600; flex: none; }
     .tool .hint {
-      opacity: 0.55; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+      color: var(--text-3); white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; flex: 1; min-width: 0;
     }
-    .tool .status { flex: none; opacity: 0.8; }
+    .tool .status { flex: none; color: var(--text-2); }
     .tool pre {
-      margin: 0; padding: 0.5rem 0.6rem 0.6rem;
-      border-top: 1px solid var(--vscode-panel-border);
+      margin: 0; padding: 8px 10px 9px; border-top: 1px solid var(--border);
       overflow-x: auto; white-space: pre;
     }
 
-    .committed, .usage { font-size: 0.74rem; opacity: 0.5; margin: 0.35rem 0; }
-    .stepmark { font-size: 0.7rem; opacity: 0.4; margin: 0.5rem 0 0.1rem; letter-spacing: 0.08em; }
+    .committed, .usage { font-size: var(--fs-xs); color: var(--text-3); margin: 5px 0; }
+    .stepmark { font-size: var(--fs-xs); color: var(--text-3); margin: var(--sp-2) 0 2px; letter-spacing: 0.08em; }
     .sopchip {
-      display: inline-block; font-size: 0.7rem; padding: 0.02rem 0.4rem;
-      margin: 0.1rem 0.2rem 0 0; border: 1px solid var(--vscode-charts-blue, #4e94ce);
-      border-radius: 0.5rem; opacity: 0.85;
+      display: inline-block; font-size: var(--fs-xs); padding: 0 7px;
+      margin: 2px 3px 0 0; border: 1px solid var(--info-border);
+      color: var(--info); background: var(--info-bg); border-radius: var(--r-pill);
     }
-    .sopchip.consulted { border-style: dashed; opacity: 0.55; }
-    .translink { cursor: pointer; text-decoration: underline; opacity: 0.7; font-size: 0.72rem; }
-    .translink:hover { opacity: 1; }
-    .error { color: var(--vscode-errorForeground); margin: 0.4rem 0; max-width: 78ch; }
+    .sopchip.consulted { border-style: dashed; opacity: 0.6; background: none; }
+    .translink { cursor: pointer; text-decoration: underline; color: var(--text-2); font-size: var(--fs-xs); }
+    .translink:hover { color: var(--text); }
+    .error { color: var(--bad); margin: 6px 0; max-width: 78ch; }
+
+    /* micro-label eyebrow (01 §Scale): 10px, 700, tracked, uppercase */
+    #rail h2, .railfold > summary, #historyWrap > summary, .dlglabel, .residual .rtitle {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: var(--text-2);
+    }
 
     /* ---- reasoning history (the thread, 13 §4) ---- */
-    #historyWrap { margin: 0.6rem 0 1rem; max-width: 78ch; }
-    #historyWrap > summary {
-      cursor: pointer; font-size: 0.78rem; text-transform: uppercase;
-      letter-spacing: 0.06em; opacity: 0.6; font-weight: 600; margin-bottom: 0.3rem;
-    }
+    #historyWrap { margin: 10px 0 var(--sp-4); max-width: 78ch; }
+    #historyWrap > summary { cursor: pointer; margin-bottom: 5px; }
     .step {
-      border-left: 2px solid var(--vscode-panel-border);
-      padding: 0.15rem 0 0.3rem 0.8rem; margin: 0.55rem 0;
+      border-left: 2px solid var(--border);
+      padding: 2px 0 5px 12px; margin: 9px 0;
     }
-    .step.ai { border-left-color: var(--vscode-charts-blue, #4e94ce); }
+    .step.ai { border-left-color: var(--he-primary); }
     .step .stephead {
-      font-size: 0.72rem; opacity: 0.65;
-      display: flex; align-items: baseline; gap: 0.55rem; flex-wrap: wrap;
+      font-size: var(--fs-xs); color: var(--text-2);
+      display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
     }
     .step .stephead .who { font-weight: 600; }
-    .step .stepbody { font-size: 0.86rem; margin-top: 0.1rem; }
-    .step .stepbody p { margin: 0.2rem 0; }
+    .step.ai .stephead .who { color: var(--he-primary-soft); }
+    .step .stepbody { font-size: var(--fs-sm); margin-top: 2px; }
+    .step .stepbody p { margin: 3px 0; }
 
     /* ---- rail ---- */
-    #rail section { margin-bottom: 1.1rem; }
-    #rail h2 {
-      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
-      opacity: 0.6; margin: 0 0 0.45rem; font-weight: 600;
-    }
-    .railfold { margin-bottom: 1.1rem; }
-    .railfold > summary {
-      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
-      opacity: 0.6; font-weight: 600; cursor: pointer; margin-bottom: 0.45rem;
-    }
+    #rail section { margin-bottom: var(--sp-4); }
+    #rail h2 { margin: 0 0 7px; }
+    .railfold { margin-bottom: var(--sp-4); }
+    .railfold > summary { cursor: pointer; margin-bottom: 7px; }
     .card {
-      border: 1px solid var(--vscode-panel-border); border-radius: 0.4rem;
-      padding: 0.5rem 0.65rem; margin: 0.4rem 0; font-size: 0.84rem;
+      background: var(--fill); border: 1px solid var(--border); border-radius: var(--r);
+      padding: 9px 11px; margin: 6px 0; font-size: var(--fs-sm);
+      transition: border-color var(--dur-fast) var(--ease);
     }
-    .card .statement { font-weight: 600; }
+    .card:hover { border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
+    .card .statement { font-weight: 600; font-size: var(--fs-base); }
+    /* badge: neutral by default; semantic classes color it as meaning */
     .badge {
-      font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.03em;
-      padding: 0.05rem 0.4rem; border-radius: 0.5rem; border: 1px solid var(--vscode-panel-border);
-      margin-left: 0.4rem; vertical-align: middle; white-space: nowrap;
+      font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 1px 7px; border-radius: var(--r-pill); border: 1px solid var(--border);
+      color: var(--text-2); margin-left: 6px; vertical-align: middle; white-space: nowrap;
     }
-    .predictions { list-style: none; padding: 0; margin: 0.35rem 0 0; }
+    .badge.ok   { color: var(--ok);   background: var(--ok-bg);   border-color: var(--ok-border); }
+    .badge.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+    .badge.bad  { color: var(--bad);  background: var(--bad-bg);  border-color: var(--bad-border); }
+    .badge.info { color: var(--info); background: var(--info-bg); border-color: var(--info-border); }
+    /* trust tiers (ui/03 §3.1): T1 info · T2 warning/square · T3 danger/diamond */
+    .badge.T1 { color: var(--info); background: var(--info-bg); border-color: var(--info-border); }
+    .badge.T2 { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+    .badge.T3 { color: var(--bad);  background: var(--bad-bg);  border-color: var(--bad-border); }
+    .badge.T2::before, .badge.T3::before {
+      content: ""; display: inline-block; width: 5px; height: 5px;
+      background: currentColor; margin-right: 4px; vertical-align: 1px;
+    }
+    .badge.T3::before { transform: rotate(45deg); }
+    .predictions { list-style: none; padding: 0; margin: 6px 0 0; }
     .predictions li {
-      padding: 0.2rem 0 0.2rem 0.6rem; border-left: 2px solid var(--vscode-panel-border);
-      margin: 0.25rem 0; font-size: 0.8rem;
+      padding: 3px 0 3px 10px; border-left: 2px solid var(--border);
+      margin: 4px 0; font-size: var(--fs-sm);
     }
-    .cardmeta { font-size: 0.74rem; opacity: 0.65; margin-top: 0.25rem; word-break: break-word; }
-    .decide { margin-top: 0.45rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
-    .decide button { font-size: 0.8rem; padding: 0.2rem 0.6rem; }
-    .decide .primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-    .decide .primary:hover { background: var(--vscode-button-hoverBackground); }
-    .empty { opacity: 0.55; font-style: italic; font-size: 0.8rem; }
-    .caprow { display: flex; align-items: baseline; gap: 0.45rem; font-size: 0.8rem; margin: 0.15rem 0; }
-    .dot { flex: none; width: 0.5em; height: 0.5em; border-radius: 50%; background: var(--vscode-charts-green, #89d185); }
-    .dot.degraded { background: var(--vscode-charts-yellow, #cca700); }
-    .dot.unavailable { background: var(--vscode-charts-red, #f14c4c); opacity: 0.7; }
-    .caprow .verb { font-family: var(--vscode-editor-font-family); }
+    .cardmeta { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; word-break: break-word; }
+    .decide { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .decide button { font-size: var(--fs-sm); padding: 3px 10px; }
+    .empty { color: var(--text-3); font-style: italic; font-size: var(--fs-sm); }
+    .caprow { display: flex; align-items: baseline; gap: 7px; font-size: var(--fs-sm); margin: 2px 0; min-height: 20px; }
+    .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+    .dot.degraded { background: var(--warn); }
+    .dot.unavailable { background: var(--bad); opacity: 0.7; }
+    .caprow .verb { font-family: var(--mono); }
     .caprow.unavailable .verb { opacity: 0.5; }
     body.loading #rail { opacity: 0.6; }
 
     /* ---- verdict + pins + citations ---- */
-    .verdictbadge.BENIGN { background: rgba(78,199,123,.2); color: var(--vscode-charts-green, #4ec77b); }
-    .verdictbadge.SUSPICIOUS { background: rgba(245,181,61,.2); color: var(--vscode-charts-yellow, #f5b53d); }
-    .verdictbadge.MALICIOUS { background: rgba(255,95,110,.2); color: var(--vscode-charts-red, #ff5f6e); }
+    .verdictbadge.BENIGN    { color: var(--ok);   background: var(--ok-bg);   border-color: var(--ok-border); }
+    .verdictbadge.SUSPICIOUS{ color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+    .verdictbadge.MALICIOUS { color: var(--bad);  background: var(--bad-bg);  border-color: var(--bad-border); }
+
+    /* entity chip (01 §Entity chip anatomy): mono, type-colored, leading swatch */
     .refchip {
-      display: inline-block; font-family: var(--vscode-editor-font-family);
-      font-size: 0.72rem; padding: 0.02rem 0.35rem; margin: 0.1rem 0.15rem 0.1rem 0;
-      border: 1px solid var(--vscode-panel-border); border-radius: 0.3rem;
-      cursor: pointer; opacity: 0.85; max-width: 100%; overflow: hidden;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-family: var(--mono); font-size: 0.92em; font-weight: 600;
+      padding: 1px 7px 1px 6px; margin: 2px 3px 2px 0;
+      border-radius: var(--r-sm); line-height: 1.45; border: none;
+      color: var(--ent-process); background: var(--ent-process-bg);
+      cursor: pointer; max-width: 100%; overflow: hidden;
       text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+      transition: filter var(--dur-fast) var(--ease);
     }
-    .refchip:hover { border-color: var(--vscode-focusBorder, currentColor); opacity: 1; }
-    .pinrow .finding { font-size: 0.84rem; }
-    .pinrow.superseded .finding { text-decoration: line-through; opacity: 0.55; }
-    .pinrow .unpin { float: right; font-size: 0.72rem; padding: 0 0.35rem; }
-    .countdown.warn { color: var(--vscode-charts-yellow, #f5b53d); font-weight: 600; }
-    .countdown.due { color: var(--vscode-errorForeground); font-weight: 600; }
-    .toolrefs { padding: 0.35rem 0.6rem 0.5rem; border-top: 1px solid var(--vscode-panel-border); font-family: var(--vscode-font-family); }
-    .toolactions { margin-top: 0.4rem; }
-    .pincta {
-      font-size: 0.76rem; padding: 0.15rem 0.6rem;
-      color: var(--vscode-button-foreground);
-      background: var(--vscode-button-background);
-      border-radius: 0.3rem;
+    .refchip::before {
+      content: ""; flex: none; width: 6px; height: 6px;
+      border-radius: 2px; background: currentColor;
     }
-    .pincta:hover { background: var(--vscode-button-hoverBackground); }
-    .stepPin { font-size: 0.7rem; padding: 0.05rem 0.45rem; margin-left: 0.35rem; }
+    .refchip:hover { filter: brightness(1.18); box-shadow: 0 0 0 1px currentColor inset; }
+    .refchip.pinned { box-shadow: 0 0 0 1px var(--pin) inset; }
+    .chip-host    { color: var(--ent-host);    background: var(--ent-host-bg); }
+    .chip-account { color: var(--ent-account); background: var(--ent-account-bg); }
+    .chip-ip      { color: var(--ent-ip);      background: var(--ent-ip-bg); }
+    .chip-hash    { color: var(--ent-hash);    background: var(--ent-hash-bg); }
+    .chip-domain  { color: var(--ent-domain);  background: var(--ent-domain-bg); }
+    .chip-email   { color: var(--ent-email);   background: var(--ent-email-bg); }
+    .chip-alert   { color: var(--ent-alert);   background: var(--ent-alert-bg); }
+    .chip-brand   { color: var(--he-primary-soft); background: color-mix(in srgb, var(--he-primary) 15%, transparent); }
+
+    .pinrow { border-left: 2px solid var(--pin); }
+    .pinrow .finding { font-size: var(--fs-sm); }
+    .pinrow.superseded { border-left-color: var(--border); }
+    .pinrow.superseded .finding { text-decoration: line-through; color: var(--text-3); }
+    .pinrow .unpin { float: right; font-size: var(--fs-xs); padding: 0 6px; }
+    .countdown.warn { color: var(--warn); font-weight: 600; }
+    .countdown.due { color: var(--bad); font-weight: 600; }
+    .toolrefs { padding: 6px 10px 8px; border-top: 1px solid var(--border); font-family: var(--sans); }
+    .toolactions { margin-top: 6px; }
+    .pincta { font-size: var(--fs-sm); padding: 2px 10px; border-radius: var(--r-sm); }
+    .stepPin { font-size: var(--fs-xs); padding: 1px 8px; margin-left: 6px; }
     /* The pin sits at the right end of the always-visible tool summary. */
-    .summaryPin { flex: none; margin-left: auto; font-size: 0.72rem; padding: 0.02rem 0.5rem; }
+    .summaryPin { flex: none; margin-left: auto; font-size: var(--fs-xs); padding: 0 8px; }
     details.tool[open] .summaryPin { opacity: 0.9; }
 
+    /* ---- dialogs: overlay surface, pop shadow, dlgIn entrance ---- */
     #verdictDialog, #promptDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
       display: flex; align-items: center; justify-content: center; z-index: 10;
     }
-    #promptInput {
+    #verdictDialog .dlg, #promptDialog .dlg {
+      width: min(480px, 90vw); background: var(--overlay-bg);
+      border: 1px solid var(--vscode-widget-border, var(--border));
+      border-radius: var(--r-lg); padding: var(--sp-4) var(--sp-5) var(--sp-4);
+      box-shadow: var(--shadow-pop);
+      animation: dlgIn 0.2s var(--ease-out);
+    }
+    @keyframes dlgIn {
+      from { opacity: 0; transform: translateY(6px) scale(.97); }
+      to   { opacity: 1; transform: none; }
+    }
+    #verdictDialog h3, #promptDialog h3 { margin: 0 0 10px; font-size: var(--fs-lg); }
+    #promptInput, #verdictRationale {
       width: 100%; box-sizing: border-box; font: inherit; resize: vertical;
       color: var(--vscode-input-foreground); background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 0.3rem; padding: 0.4rem 0.5rem;
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: var(--r-sm); padding: 7px 9px;
+    }
+    #promptInput:focus, #verdictRationale:focus, #composer textarea:focus {
+      outline: none; border-color: var(--he-primary);
     }
     #promptLabel:empty, #promptHelper:empty, #promptRefs:empty { display: none; }
-    .pinrefs { margin: 0.5rem 0 0.3rem; }
-    .pinhelp { font-size: 0.76rem; opacity: 0.6; margin: 0.3rem 0 0.1rem; }
-    #verdictDialog .dlg, #promptDialog .dlg {
-      width: min(480px, 90vw); background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-      border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
-      border-radius: 0.5rem; padding: 0.9rem 1.1rem 1rem;
-      box-shadow: 0 8px 28px rgba(0,0,0,.45);
+    .pinrefs { margin: var(--sp-2) 0 5px; }
+    .pinhelp { font-size: var(--fs-sm); color: var(--text-2); margin: 5px 0 2px; }
+    .checklist { margin: 5px 0 10px; font-size: var(--fs-sm); }
+    .checklist .item { margin: 3px 0; }
+    .checklist .ok { color: var(--ok); }
+    .checklist .unmet { color: var(--warn); }
+    .dlglabel { margin: 9px 0 4px; }
+    .dispositions label { margin-right: var(--sp-4); font-size: var(--fs-base); cursor: pointer; }
+    .residual {
+      font-size: var(--fs-sm); color: var(--text-2); margin-top: 9px;
+      border-left: 2px solid var(--warn-border); padding-left: 10px;
     }
-    #verdictDialog h3 { margin: 0 0 0.6rem; font-size: 1rem; }
-    .checklist { margin: 0.3rem 0 0.6rem; font-size: 0.84rem; }
-    .checklist .item { margin: 0.2rem 0; }
-    .checklist .ok { color: var(--vscode-charts-green, #4ec77b); }
-    .checklist .unmet { color: var(--vscode-charts-yellow, #f5b53d); }
-    .dlglabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; opacity: 0.6; margin: 0.55rem 0 0.25rem; }
-    .dispositions label { margin-right: 0.9rem; font-size: 0.86rem; cursor: pointer; }
-    #verdictRationale {
-      width: 100%; box-sizing: border-box; font: inherit; resize: vertical;
-      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 0.3rem; padding: 0.4rem 0.5rem;
-    }
-    .residual { font-size: 0.78rem; opacity: 0.75; margin-top: 0.55rem; border-left: 2px solid var(--vscode-panel-border); padding-left: 0.6rem; }
-    .residual .rtitle { text-transform: uppercase; letter-spacing: .05em; font-size: 0.7rem; opacity: 0.8; margin-bottom: 0.2rem; }
+    .residual .rtitle { margin-bottom: 3px; }
 
     /* ---- composer ---- */
     #composer {
-      flex: none; display: flex; gap: 0.5rem; padding: 0.6rem 1.25rem;
-      border-top: 1px solid var(--vscode-panel-border);
+      flex: none; display: flex; gap: var(--sp-2); padding: 10px var(--sp-5);
+      border-top: 1px solid var(--border);
     }
     #composer textarea {
       flex: 1; resize: none; font: inherit; color: var(--vscode-input-foreground);
-      background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-      border-radius: 0.3rem; padding: 0.45rem 0.6rem; min-height: 2.4rem; max-height: 8rem;
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: var(--r-sm); padding: 7px 10px; min-height: 2.4rem; max-height: 8rem;
+      transition: border-color var(--dur-fast) var(--ease);
     }
     #send { align-self: flex-end; }
   </style>
@@ -819,6 +942,15 @@ export class InvestigationDocuments {
       "identity": "vendor", "sighting": "sighting",
     };
     const resolvedLabels = {}; // ref → resolved value, webview-side cache
+    // Entity-type palette classes (ui/01 §Entity-type palette): one fixed
+    // color per type, everywhere. Unmapped types fall to the neutral gray.
+    const REF_CHIP_CLASS = {
+      "x-host": "chip-host", "ipv4-addr": "chip-ip", "ipv6-addr": "chip-ip",
+      "user-account": "chip-account", "file": "chip-hash",
+      "domain-name": "chip-domain", "url": "chip-domain", "email-addr": "chip-email",
+      "indicator": "chip-alert", "sighting": "chip-alert",
+      "x-hypothesis": "chip-brand", "x-prediction": "chip-brand",
+    };
     function refTypeLabel(ref) {
       const t = ref.includes("--") ? ref.slice(0, ref.indexOf("--")) : "event";
       return REF_TYPE_LABELS[t] || t;
@@ -829,8 +961,9 @@ export class InvestigationDocuments {
       return val ? type + " · " + val : type;
     }
     function refChip(ref) {
+      const t = ref.includes("--") ? ref.slice(0, ref.indexOf("--")) : "";
       const c = document.createElement("span");
-      c.className = "refchip";
+      c.className = "refchip" + (REF_CHIP_CLASS[t] ? " " + REF_CHIP_CLASS[t] : "");
       c.dataset.ref = ref;
       c.textContent = chipText(ref);
       c.title = "Open evidence: " + ref;
@@ -1037,11 +1170,15 @@ export class InvestigationDocuments {
 
     // Append streamed/completed text into the current segment, re-rendering
     // its markdown from the accumulated raw buffer (cheap at chat sizes).
+    // The live segment carries the streaming caret; closeSeg retires it.
+    function closeSeg() {
+      if (turn && turn.seg) { turn.seg.classList.remove("live"); turn.seg = null; }
+    }
     function appendText(delta) {
       if (!turn) return;
       if (!turn.seg) {
         turn.seg = document.createElement("div");
-        turn.seg.className = "md";
+        turn.seg.className = "md live";
         turn.buf = "";
         turn.wrap.appendChild(turn.seg);
       }
@@ -1067,7 +1204,7 @@ export class InvestigationDocuments {
       body.textContent = JSON.stringify(inputArgs ?? {}, null, 2);
       row.append(sum, body);
       (turn ? turn.wrap : conversation).appendChild(row);
-      if (turn) { turn.seg = null; turn.tools.push(row); }
+      if (turn) { closeSeg(); turn.tools.push(row); }
       return row;
     }
 
@@ -1354,6 +1491,16 @@ export class InvestigationDocuments {
     }
 
     // ---- rail --------------------------------------------------------------
+    // badgeClass maps a status word to its semantic tone — confirmed things
+    // read green, refuted red, everything undecided stays neutral.
+    const BADGE_TONE = {
+      CONFIRMED: "ok", SUPPORTED: "ok", TESTED: "ok", SUCCEEDED: "ok",
+      REFUTED: "bad", FAILED: "bad", EXPIRED: "warn",
+    };
+    function badgeClass(status) {
+      const tone = BADGE_TONE[String(status || "").toUpperCase()];
+      return "badge" + (tone ? " " + tone : "");
+    }
     function renderHypotheses(hs) {
       const box = $("hyps");
       if (!hs || !hs.length) {
@@ -1362,10 +1509,10 @@ export class InvestigationDocuments {
       }
       box.innerHTML = hs.map((h) => {
         const preds = (h.predictions || []).map((p) =>
-          '<li>' + esc(p.statement) + '<span class="badge">' + esc(p.status) + '</span></li>'
+          '<li>' + esc(p.statement) + '<span class="' + badgeClass(p.status) + '">' + esc(p.status) + '</span></li>'
         ).join("");
         return '<div class="card"><div><span class="statement">' + esc(h.statement) + '</span>'
-          + '<span class="badge">' + esc(h.status) + '</span></div>'
+          + '<span class="' + badgeClass(h.status) + '">' + esc(h.status) + '</span></div>'
           + (preds ? '<ul class="predictions">' + preds + '</ul>' : '') + '</div>';
       }).join("");
     }
@@ -1440,7 +1587,11 @@ export class InvestigationDocuments {
         meta.textContent = (p.actor === "AI_DELEGATED" ? "AI" : p.actor === "SYSTEM" ? "system" : "analyst")
           + (p.pinnedAt ? " · " + new Date(p.pinnedAt).toLocaleString() : "");
         const refs = document.createElement("div");
-        for (const r of p.inputRefs || []) refs.appendChild(refChip(r));
+        for (const r of p.inputRefs || []) {
+          const ch = refChip(r);
+          if (!p.superseded) ch.classList.add("pinned"); // amber inset (ui/01 anatomy)
+          refs.appendChild(ch);
+        }
         row.append(finding, meta, refs);
         box.appendChild(row);
       }
@@ -1476,10 +1627,10 @@ export class InvestigationDocuments {
         name.className = "statement";
         name.textContent = a.actionType;
         const tier = document.createElement("span");
-        tier.className = "badge";
+        tier.className = "badge " + a.tier;
         tier.textContent = a.tier;
         const state = document.createElement("span");
-        state.className = "badge";
+        state.className = "badge" + (a.expired ? " warn" : "");
         state.textContent = a.expired ? "EXPIRED" : a.pendingLabel;
         head.append(name, tier, state);
 
@@ -1821,7 +1972,7 @@ export class InvestigationDocuments {
         case "turn.step":
           // A subtle step divider from round 2 on (round 1 is the turn start).
           if (turn && msg.round > 1) {
-            turn.seg = null;
+            closeSeg();
             const d = document.createElement("div");
             d.className = "stepmark";
             d.textContent = "· step " + msg.round + " ·";
@@ -1855,6 +2006,7 @@ export class InvestigationDocuments {
             line.textContent = parts.join(" · ");
             turn.wrap.appendChild(line);
           }
+          closeSeg();
           turn = null;
           setComposerEnabled(true);
           break;
