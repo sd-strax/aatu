@@ -68,6 +68,28 @@
         "command": "reckon.openInvestigation",
         "category": "reckon",
         "title": "Open Investigation"
+      },
+      {
+        "command": "reckon.applyPosture",
+        "category": "reckon",
+        "title": "Apply Workbench Posture"
+      },
+      {
+        "command": "reckon.revertPosture",
+        "category": "reckon",
+        "title": "Revert Workbench Posture"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "reckon.newInvestigation",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i"
+      },
+      {
+        "command": "workbench.view.extension.reckon",
+        "key": "ctrl+alt+shift+i",
+        "mac": "cmd+alt+shift+i"
       }
     ],
     "menus": {

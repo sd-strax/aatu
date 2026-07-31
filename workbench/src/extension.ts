@@ -212,7 +212,30 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("reckon.refreshInvestigations", () => {
       investigations.refresh();
     }),
+
+    // The profile trim (design/13 §6): investigation-first posture, offered
+    // never forced, reversible. What settings CAN do; the honest ceiling —
+    // hiding other view containers, rebranding the window, product.json
+    // behavior — is the fork's payoff, not the extension's.
+    vscode.commands.registerCommand("reckon.applyPosture", () => applyPosture(true)),
+    vscode.commands.registerCommand("reckon.revertPosture", () => applyPosture(false)),
   );
+
+  // First-run offer (design/13 §6): once, and "Not now" is remembered. An
+  // analyst embedding reckon in their developer profile is a supported choice.
+  if (!context.globalState.get<boolean>("reckon.postureOffered")) {
+    void context.globalState.update("reckon.postureOffered", true);
+    void vscode.window
+      .showInformationMessage(
+        "reckon: apply the investigation-first workbench posture? (no startup editor, quieter chrome — every bit reversible via “reckon: Revert Workbench Posture”)",
+        "Apply", "Not now",
+      )
+      .then((choice) => {
+        if (choice === "Apply") {
+          void applyPosture(true);
+        }
+      });
+  }
 
   // Fire-and-forget: restore a prior session, then seed the signed-in context key.
   void session.restore().finally(() => {
@@ -226,6 +249,35 @@ export function deactivate(): void {
 
 function backendUrl(): string {
   return vscode.workspace.getConfiguration("reckon").get<string>("backendUrl", "http://localhost:8080");
+}
+
+/**
+ * The posture's settings (design/13 §6), applied globally: no startup editor,
+ * no command center, no tips, menu bar behind Alt (Win/Linux; macOS keeps its
+ * native bar per-OS convention). Revert clears our overrides back to defaults
+ * rather than guessing what the user had. Keybindings for the core loop ship
+ * via contributes.keybindings and need no toggling.
+ */
+const POSTURE: Record<string, unknown> = {
+  "workbench.startupEditor": "none",
+  "window.commandCenter": false,
+  "workbench.tips.enabled": false,
+  "window.menuBarVisibility": "toggle",
+};
+
+async function applyPosture(on: boolean): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration();
+  for (const [key, value] of Object.entries(POSTURE)) {
+    try {
+      await cfg.update(key, on ? value : undefined, vscode.ConfigurationTarget.Global);
+    } catch {
+      // A missing/renamed upstream setting must not break the rest.
+    }
+  }
+  void vscode.window.showInformationMessage(
+    on ? "reckon: workbench posture applied (revert any time: “reckon: Revert Workbench Posture”)"
+      : "reckon: workbench posture reverted — your defaults are back",
+  );
 }
 
 function errText(err: unknown): string {
