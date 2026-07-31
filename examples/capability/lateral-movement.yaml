@@ -12,6 +12,14 @@ adapters:
     class: fixture
     enabled: true
     scenario: lateral-movement-via-rdp
+  # Installed but NOT enabled (11 §6.2): the enablement surface's demo gap.
+  # get_host_context binds to this instance, so the verb reports unavailable
+  # until an operator enables it — the workbench's gap hint + schema form
+  # (11 §5.1) close it end-to-end, writing back into this file.
+  fixture_context:
+    class: fixture
+    enabled: false
+    scenario: lateral-movement-via-rdp
   # Real adapters land in Phase E; disabled here so v0 runs on fixtures only.
   crowdstrike_falcon:
     class: native_api
@@ -48,6 +56,16 @@ bindings:
       operation: replay
       priority: 100
       params: {}
+
+  # Bound to the disabled fixture_context instance above — the shipped
+  # installed-not-enabled gap the enablement flow closes.
+  get_host_context:
+    - adapter: fixture_context
+      operation: replay
+      priority: 100
+      params:
+        host:
+          hostname: "${entity.host.hostname}"
 
 policies:
   default_window:

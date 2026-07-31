@@ -302,6 +302,10 @@ func serve(cfg config.Config) error {
 		Middleware:         tel.HTTPMiddleware,
 		CapabilityResolver: capResolver,
 		CapabilityCatalog:  capCatalog,
+		// The enablement surface (11 §5.1) edits the same file the resolver
+		// was built from and rebuilds it in place.
+		CapabilityConfigPath:  cfg.Capability.ConfigPath,
+		CapabilityFixtureRoot: cfg.Capability.FixtureRoot,
 		Gate2:              gate2,
 		ActionCatalog:      actionCatalog,
 		ActionResolver:     actionResolver,

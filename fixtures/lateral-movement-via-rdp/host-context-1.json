@@ -1,0 +1,24 @@
+{
+  "fixture_meta": {
+    "scenario": "lateral-movement-via-rdp",
+    "matches": {
+      "verb": "get_host_context",
+      "params": { "host.hostname": "WIN-FILE01" }
+    },
+    "delay_ms": 30
+  },
+  "ocsf": {
+    "class_uid": 5001,
+    "class_name": "Device Inventory Info",
+    "time": "2026-04-20T14:00:00Z",
+    "device": {
+      "hostname": "WIN-FILE01",
+      "domain": "CONTOSO",
+      "os": { "name": "Windows Server 2022", "type": "Windows" },
+      "owner": { "name": "File Services" },
+      "criticality": "high",
+      "last_seen_time": "2026-04-20T14:00:00Z",
+      "agent_list": [ { "name": "edr-sensor", "vendor_name": "fixture" } ]
+    }
+  }
+}

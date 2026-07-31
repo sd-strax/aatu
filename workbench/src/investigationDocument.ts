@@ -15,7 +15,7 @@
 
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
-import { ActionRow, Appearance, BackendClient, Capability, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
+import { ActionRow, Appearance, BackendClient, Capability, Enablement, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
@@ -25,6 +25,9 @@ type RenderMessage =
   // rail renders that honestly instead of an empty list. thread is the
   // chronological reasoning history (13 §4); null when its fetch failed.
   | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[]; capabilities: Capability[] | null; thread: ThreadEntry[] | null }
+  // The enablement surface (11 §5.1): gap hints + the schema the form renders
+  // from. Null when the layer is off or the fetch failed — hints just absent.
+  | { type: "enablement"; data: Enablement | null }
   | { type: "error"; message: string }
   | { type: "pending"; actions: ActionRow[] }
   | { type: "pins"; pins: PinRow[] }
@@ -73,6 +76,7 @@ type InboundMessage =
   | { type: "pin.unpin"; interpretationId: string; reason: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "hyp.ack"; hypothesisRef: string }
+  | { type: "enablement.apply"; adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] }
   | { type: "lifecycle"; transition: string; reason?: string; summary?: string }
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
@@ -140,6 +144,8 @@ export class InvestigationDocuments {
         void this.submitVerdict(id, panel, msg);
       } else if (msg.type === "hyp.ack") {
         void this.ackHypothesis(id, panel, msg.hypothesisRef);
+      } else if (msg.type === "enablement.apply") {
+        void this.applyEnablement(id, panel, msg);
       } else if (msg.type === "lifecycle") {
         void this.lifecycleTransition(id, panel, msg);
       } else if (msg.type === "evidence.open") {
@@ -190,6 +196,11 @@ export class InvestigationDocuments {
       // fire-and-forget: both are lenses over the cited refs, sharing one
       // round of (cached) evidence fetches.
       void this.postDerivedViews(panel, thread ?? []);
+      // The enablement view (gap hints + form schemas). Absence is honest:
+      // a 503/failed fetch just means no hints render.
+      void this.client.enablement()
+        .then((data) => this.post(panel, { type: "enablement", data }))
+        .catch(() => this.post(panel, { type: "enablement", data: null }));
 
       // Cold restore (07 cross-cutting acceptance): fetch the committed
       // transcripts and let the webview reconstruct the conversation. Bounded
@@ -431,6 +442,55 @@ export class InvestigationDocuments {
       void vscode.window.showInformationMessage(`reckon: verdict recorded — ${msg.disposition}`);
     } catch (err) {
       void vscode.window.showErrorMessage(`reckon: verdict failed — ${errText(err)}`);
+    }
+    await this.load(id, panel);
+  }
+
+  /**
+   * Apply an enablement change (11 §5.1). The webview form collected the
+   * non-secret fields; here the flow becomes NATIVE: a modal confirm bound to
+   * the human's identity, and secret fields captured through a secure input —
+   * out-of-band of the webview and the conversation, so a secret value never
+   * touches chat content or the transcript store. What is captured for an
+   * x-secret field is a secret REFERENCE (keychain:// env:// vault://), per
+   * 11 §4.3 — the engine refuses literals at config load.
+   */
+  private async applyEnablement(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] },
+  ): Promise<void> {
+    const verb = msg.enabled ? "Enable" : "Disable";
+    const pick = await vscode.window.showWarningMessage(
+      `reckon: ${verb} adapter "${msg.adapter}"? This edits the tenant config file (the source of truth) and records an attributed config-plane audit entry.`,
+      { modal: true },
+      verb,
+    );
+    if (pick !== verb) {
+      return;
+    }
+    const config = { ...msg.config };
+    for (const field of msg.secretFields ?? []) {
+      const v = await vscode.window.showInputBox({
+        title: `reckon — ${msg.adapter}.${field} (secret reference)`,
+        prompt: "A secret REFERENCE (keychain://…, env://NAME, vault://…) — never the literal value; the engine refuses literals at config load.",
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (v === undefined) {
+        return; // cancelled — nothing applied
+      }
+      if (v.trim() !== "") {
+        config[field] = v.trim();
+      }
+    }
+    try {
+      await this.client.applyEnablement(msg.adapter, msg.enabled, config);
+      void vscode.window.showInformationMessage(
+        `reckon: ${msg.adapter} ${msg.enabled ? "enabled" : "disabled"} — capability surface rebuilt`,
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: enablement failed — ${errText(err)}`);
     }
     await this.load(id, panel);
   }
@@ -1043,11 +1103,11 @@ export class InvestigationDocuments {
     details.tool[open] .summaryPin { opacity: 0.9; }
 
     /* ---- dialogs: overlay surface, pop shadow, dlgIn entrance ---- */
-    #verdictDialog, #promptDialog {
+    #verdictDialog, #promptDialog, #enableDialog {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
       display: flex; align-items: center; justify-content: center; z-index: 10;
     }
-    #verdictDialog .dlg, #promptDialog .dlg {
+    #verdictDialog .dlg, #promptDialog .dlg, #enableDialog .dlg {
       width: min(480px, 90vw); background: var(--overlay-bg);
       border: 1px solid var(--vscode-widget-border, var(--border));
       border-radius: var(--r-lg); padding: var(--sp-4) var(--sp-5) var(--sp-4);
@@ -1058,7 +1118,29 @@ export class InvestigationDocuments {
       from { opacity: 0; transform: translateY(6px) scale(.97); }
       to   { opacity: 1; transform: none; }
     }
-    #verdictDialog h3, #promptDialog h3 { margin: 0 0 10px; font-size: var(--fs-lg); }
+    #verdictDialog h3, #promptDialog h3, #enableDialog h3 { margin: 0 0 10px; font-size: var(--fs-lg); }
+    #enableFields .field { margin: 8px 0; }
+    #enableFields label { display: block; font-size: var(--fs-sm); margin-bottom: 3px; }
+    #enableFields .fdesc { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
+    #enableFields input {
+      width: 100%; box-sizing: border-box; font: inherit;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: var(--r-sm); padding: 6px 9px;
+    }
+    #enableFields input:focus { outline: none; border-color: var(--he-primary); }
+    #enableFields .secretnote {
+      font-size: var(--fs-xs); color: var(--warn); border: 1px dashed var(--warn-border);
+      border-radius: var(--r-sm); padding: 5px 8px;
+    }
+    .gaphint {
+      font-size: var(--fs-xs); border: 1px dashed var(--info-border);
+      background: var(--info-bg); color: var(--info);
+      border-radius: var(--r-sm); padding: 4px 8px; margin: 5px 0;
+      font-family: var(--sans);
+    }
+    .gaphint button { font-size: var(--fs-xs); padding: 0 8px; margin-left: 6px; }
+    .caprow .setup { font-size: var(--fs-xs); padding: 0 7px; margin-left: auto; }
     #promptInput, #verdictRationale {
       width: 100%; box-sizing: border-box; font: inherit; resize: vertical;
       color: var(--vscode-input-foreground); background: var(--vscode-input-background);
@@ -1181,6 +1263,22 @@ export class InvestigationDocuments {
     </div>
   </div>
 
+  <!-- The enablement form (11 §5.1): rendered by the EXTENSION from the
+       adapter's config schema — the model never generates it, and free-text
+       model output is never parsed into config. Confirming hands off to a
+       NATIVE modal + secure inputs in the extension host. -->
+  <div id="enableDialog" style="display:none">
+    <div class="dlg">
+      <h3 id="enableTitle"></h3>
+      <div id="enableIntro" class="pinhelp"></div>
+      <div id="enableFields"></div>
+      <div class="decide">
+        <button class="primary" id="enableConfirm"></button>
+        <button id="enableCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div id="verdictDialog" style="display:none">
     <div class="dlg">
       <h3>Record verdict</h3>
@@ -1217,6 +1315,9 @@ export class InvestigationDocuments {
 
     // Rail state the verdict dialog + header badges derive from.
     let lastPins = [], lastHyps = [], lastCaps = null, lastVerdict = null, lastPending = [];
+    // The enablement view (11 §5.1): gap hints + form schemas. Null = layer
+    // off or unreachable — hints simply absent.
+    let lastEnablement = null;
 
     // A clickable citation (02 §2.8): every ref opens. The chip reads as
     // evidence — a type label immediately (from the id prefix), enriched with
@@ -1664,6 +1765,31 @@ export class InvestigationDocuments {
       // detail to hunt for behind the disclosure. The ref chips (inspectable
       // citations) stay in the expanded body.
       attachResultRefs(row, msg.refs);
+
+      // The gap hint (11 §5.1): the verb came back unavailable AND an
+      // installed-but-disabled adapter could serve it. Mentionable here;
+      // actionable only through the human-confirmed form.
+      if (!msg.isError && typeof msg.coverage === "string" && msg.coverage.indexOf("UNAVAILABLE") === 0) {
+        appendGapHint(row, msg.name);
+      }
+    }
+
+    // appendGapHint attaches the installed-not-enabled note under a tool row
+    // when the enablement view knows a closable adapter for the verb.
+    function appendGapHint(container, verb) {
+      if (!lastEnablement) return;
+      const v = (lastEnablement.verbs || []).find((x) => x.verb === verb);
+      if (!v || v.enabled || !(v.closableBy || []).length) return;
+      const adapter = v.closableBy[0];
+      const hint = document.createElement("div");
+      hint.className = "gaphint";
+      hint.textContent = "⚡ " + adapter + " could answer this — installed, not enabled.";
+      const btn = document.createElement("button");
+      btn.textContent = "Set up…";
+      btn.title = "Opens the schema-derived form; you confirm natively — the AI cannot apply config";
+      btn.addEventListener("click", (e) => { e.stopPropagation(); openEnableForm(adapter); });
+      hint.appendChild(btn);
+      container.appendChild(hint);
     }
 
     // attachResultRefs puts a pin button on the row's summary (always visible)
@@ -2206,9 +2332,90 @@ export class InvestigationDocuments {
         verb.className = "verb";
         verb.textContent = c.verb;
         row.append(dot, verb);
+        // Installed-not-enabled (11 §6.2): the operator-facing affordance on
+        // the health row itself — the agent's tool surface never sees it.
+        if (c.status === "unavailable" && lastEnablement) {
+          const ev = (lastEnablement.verbs || []).find((x) => x.verb === c.verb);
+          if (ev && !ev.enabled && (ev.closableBy || []).length) {
+            const setup = document.createElement("button");
+            setup.className = "setup";
+            setup.textContent = "set up";
+            setup.title = ev.closableBy[0] + " is installed but not enabled — enable it to serve " + c.verb;
+            setup.addEventListener("click", () => openEnableForm(ev.closableBy[0]));
+            row.appendChild(setup);
+          }
+        }
         box.appendChild(row);
       }
     }
+
+    // ---- the enablement form (11 §5.1) -------------------------------------
+    // Schema-derived, extension-rendered. Prefills are visible and editable —
+    // a prefill is a suggestion, not a value. Secrets never get a field here:
+    // they are captured through the HOST's secure input after the native
+    // confirm, and what is captured is a secret REFERENCE.
+    let enableCtx = null; // { adapter, inputs: {field: el}, secretFields }
+    function openEnableForm(adapterName) {
+      if (!lastEnablement) return;
+      const a = (lastEnablement.adapters || []).find((x) => x.name === adapterName);
+      if (!a) return;
+      if (!a.supportable) return; // no affordance for classes v0 cannot spawn
+      $("enableTitle").textContent = (a.enabled ? "Configure " : "Enable ") + a.name;
+      $("enableIntro").textContent = "Class " + a.class + ". Applying edits the tenant config file (the source of truth) and is recorded with your identity. You confirm in a native dialog next.";
+      const box = $("enableFields");
+      box.textContent = "";
+      const inputs = {};
+      const secretFields = [];
+      const prefill = { scenario: a.scenario || "" };
+      for (const name in (a.configFields || {})) {
+        const f = a.configFields[name];
+        const wrap = document.createElement("div");
+        wrap.className = "field";
+        if (f.secret) {
+          secretFields.push(name);
+          const note = document.createElement("div");
+          note.className = "secretnote";
+          note.textContent = name + ": secret — captured via secure input when you apply (a keychain:// / env:// / vault:// reference, never the value, never in this conversation)";
+          wrap.appendChild(note);
+        } else {
+          const label = document.createElement("label");
+          label.textContent = name + ((a.requiredFields || []).includes(name) ? " (required)" : "");
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = prefill[name] !== undefined ? prefill[name] : "";
+          inputs[name] = input;
+          wrap.append(label, input);
+          if (f.description) {
+            const d = document.createElement("div");
+            d.className = "fdesc";
+            d.textContent = f.description;
+            wrap.appendChild(d);
+          }
+        }
+        box.appendChild(wrap);
+      }
+      $("enableConfirm").textContent = a.enabled ? "Apply changes" : "Enable " + a.name;
+      enableCtx = { adapter: a.name, inputs, secretFields, enabled: a.enabled };
+      $("enableDialog").style.display = "flex";
+    }
+    function closeEnableForm() { $("enableDialog").style.display = "none"; enableCtx = null; }
+    $("enableCancel").addEventListener("click", closeEnableForm);
+    $("enableConfirm").addEventListener("click", () => {
+      if (!enableCtx) return;
+      const config = {};
+      for (const name in enableCtx.inputs) {
+        const v = enableCtx.inputs[name].value.trim();
+        if (v !== "") config[name] = v;
+      }
+      vscode.postMessage({
+        type: "enablement.apply",
+        adapter: enableCtx.adapter,
+        enabled: true,
+        config,
+        secretFields: enableCtx.secretFields,
+      });
+      closeEnableForm();
+    });
 
     // Pinned evidence (01 §Pinned evidence): the curation fold. Superseded
     // pins render struck, never absent. DOM-built (findings are free text).
@@ -2618,6 +2825,11 @@ export class InvestigationDocuments {
         }
         case "entity.info":
           renderPopoverApps(msg.ref, msg.appearances);
+          break;
+        case "enablement":
+          lastEnablement = msg.data;
+          // Re-render the health rows so the set-up affordances appear.
+          if (lastCaps) renderCapabilities(lastCaps);
           break;
         case "events.strip":
           renderEventStrip(msg.items);

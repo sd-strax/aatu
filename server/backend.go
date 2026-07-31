@@ -99,9 +99,17 @@ type BackendConfig struct {
 	// CapabilityResolver and CapabilityCatalog, when both non-nil, enable the
 	// /api/capabilities route (the read-side capability layer, Phase B). Nil
 	// leaves the route returning 503 so the backend still serves without a
-	// capability config.
+	// capability config. Read through Backend.capabilitySurface — the
+	// enablement endpoint hot-swaps them after a config change.
 	CapabilityResolver *capability.Resolver
 	CapabilityCatalog  *capability.Catalog
+
+	// CapabilityConfigPath + CapabilityFixtureRoot mirror the runtime config
+	// the resolver was built from; both non-empty enables the /api/enablement
+	// surface (11 §5.1) — the file is the single source of truth, the endpoint
+	// is sugar that edits it and rebuilds the resolver in place.
+	CapabilityConfigPath  string
+	CapabilityFixtureRoot string
 
 	// Gate2 and ActionCatalog, when both non-nil, enable the POST /api/actions
 	// (request_action) route (the write-side authorization path, Phase C). Nil
@@ -162,6 +170,10 @@ type Backend struct {
 	// hub fans projection deltas out to subscribed WebSocket clients. Set at
 	// construction so it outlives individual Start/Stop cycles.
 	hub *hub
+
+	// capOverride, when set (under mu), supersedes cfg.CapabilityResolver/
+	// Catalog — the enablement endpoint's hot swap after a config rewrite.
+	capOverride *capabilitySurface
 }
 
 // NewBackend constructs the Backend (not yet started). The supervisor
@@ -241,6 +253,9 @@ func (b *Backend) Start(ctx context.Context) error {
 	// timer (covers actions requested before the timer existed, and any missed
 	// start). Idempotent per action; background — never blocks startup.
 	if b.cfg.Handler != nil {
+		//nolint:gosec // G118: deliberately not request-scoped — Start's ctx is a
+		// startup deadline; the sweep is a background reconciliation that must
+		// outlive it.
 		go b.sweepExpiryTimers(context.Background())
 	}
 
@@ -343,6 +358,13 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	api.Handle("/capability/", authz.RequireAuth(verifier)(
 		http.HandlerFunc(b.capabilityInvokeRoute),
 	))
+
+	// /api/enablement — the operator's installed/enabled surface + the
+	// human-confirmed apply path (11 §5.1). The tenant config FILE stays the
+	// authority; these routes are sugar that reads/edits it. Analyst role;
+	// the POST additionally refuses AI-delegated tokens inside the handler.
+	api.Handle("/enablement", authz.RequireAuth(verifier)(http.HandlerFunc(b.enablementRoute)))
+	api.Handle("/enablement/", authz.RequireAuth(verifier)(http.HandlerFunc(b.enablementRoute)))
 
 	// GET /api/action-types — list_action_types (08 §3): the write-side catalog
 	// (action_type, intent, tier, reversibility, D3FEND) with per-type
@@ -672,15 +694,42 @@ func (b *Backend) listCapabilities(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, "GET")
 		return
 	}
-	if b.cfg.CapabilityResolver == nil || b.cfg.CapabilityCatalog == nil {
+	resolver, catalog := b.capabilitySurface()
+	if resolver == nil || catalog == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "capability layer not configured")
 		return
 	}
 	b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, func(w http.ResponseWriter, _ *http.Request) {
-		summaries := b.cfg.CapabilityResolver.ListCapabilities(b.cfg.CapabilityCatalog)
+		summaries := resolver.ListCapabilities(catalog)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": summaries})
 	})
+}
+
+// capabilitySurface returns the live resolver + catalog: the hot-swapped pair
+// when the enablement endpoint has rebuilt them, else the boot-time pair.
+func (b *Backend) capabilitySurface() (*capability.Resolver, *capability.Catalog) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.capOverride != nil {
+		return b.capOverride.resolver, b.capOverride.catalog
+	}
+	return b.cfg.CapabilityResolver, b.cfg.CapabilityCatalog
+}
+
+// setCapabilitySurface installs a rebuilt resolver + catalog (enablement hot
+// swap). In-flight requests keep the pair they already read — safe, since a
+// resolver is immutable once built.
+func (b *Backend) setCapabilitySurface(r *capability.Resolver, c *capability.Catalog) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.capOverride = &capabilitySurface{resolver: r, catalog: c}
+}
+
+// capabilitySurface bundles the pair so the override is one pointer swap.
+type capabilitySurface struct {
+	resolver *capability.Resolver
+	catalog  *capability.Catalog
 }
 
 // --- dependency probes -------------------------------------------------------

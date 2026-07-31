@@ -155,6 +155,42 @@ export interface Hypothesis {
   predictions: Prediction[];
 }
 
+/** One JSON-schema property of an adapter's config form (11 §4.3). */
+export interface ConfigField {
+  type?: string;
+  description?: string;
+  /** x-secret: the value must be a secret REFERENCE, captured out-of-band. */
+  secret?: boolean;
+}
+
+/** One installed adapter instance (mirrors server.EnablementAdapterView). */
+export interface EnablementAdapter {
+  name: string;
+  class: string;
+  enabled: boolean;
+  scenario?: string;
+  /** Schema-derived form source; the extension renders it, never the model. */
+  configFields: Record<string, ConfigField>;
+  requiredFields: string[];
+  /** False for classes v0 cannot spawn — no enable affordance, honestly. */
+  supportable: boolean;
+}
+
+/** One verb's enablement state (mirrors server.EnablementVerbView). */
+export interface EnablementVerb {
+  verb: string;
+  adapters: string[];
+  enabled: boolean;
+  /** Disabled-but-supportable adapters that would serve this verb. */
+  closableBy: string[];
+}
+
+/** The operator enablement surface (11 §5.1). */
+export interface Enablement {
+  adapters: EnablementAdapter[];
+  verbs: EnablementVerb[];
+}
+
 /** One typed input of a capability verb (mirrors capability.InputParam). */
 export interface CapabilityInput {
   name: string;
@@ -382,6 +418,55 @@ export class BackendClient {
       output: c.descriptor?.output ?? "",
       status: c.status ?? "unavailable",
     }));
+  }
+
+  /**
+   * GET /api/enablement — the operator view of installed adapters and the
+   * gaps a disabled one could close (11 §5.1, §6.2). Analyst role.
+   */
+  async enablement(): Promise<Enablement> {
+    interface RawAdapter {
+      name?: string; class?: string; enabled?: boolean; scenario?: string;
+      config_schema?: { properties?: Record<string, { type?: string; description?: string; "x-secret"?: boolean }>; required?: string[] };
+      supportable?: boolean;
+    }
+    interface RawVerb {
+      verb?: string; adapters?: string[]; enabled?: boolean; closable_by?: string[];
+    }
+    const body = await this.authedGet<{ adapters?: RawAdapter[]; verbs?: RawVerb[] }>("/api/enablement");
+    return {
+      adapters: (body.adapters ?? []).map((a) => {
+        const fields: Record<string, ConfigField> = {};
+        const props = a.config_schema?.properties ?? {};
+        for (const [k, p] of Object.entries(props)) {
+          fields[k] = { type: p.type, description: p.description, secret: p["x-secret"] === true };
+        }
+        return {
+          name: a.name ?? "",
+          class: a.class ?? "",
+          enabled: a.enabled ?? false,
+          scenario: a.scenario,
+          configFields: fields,
+          requiredFields: a.config_schema?.required ?? [],
+          supportable: a.supportable ?? false,
+        };
+      }),
+      verbs: (body.verbs ?? []).map((v) => ({
+        verb: v.verb ?? "",
+        adapters: v.adapters ?? [],
+        enabled: v.enabled ?? false,
+        closableBy: v.closable_by ?? [],
+      })),
+    };
+  }
+
+  /**
+   * POST /api/enablement/adapters/{name} — the human-confirmed apply
+   * (11 §5.1). Always the HUMAN token: the backend 403s a delegate token, and
+   * no sidecar tool reaches this path — the tool gap is the guarantee.
+   */
+  async applyEnablement(adapter: string, enabled: boolean, config: Record<string, string>): Promise<void> {
+    await this.authedPost(`/api/enablement/adapters/${encodeURIComponent(adapter)}`, { enabled, config });
   }
 
   /**

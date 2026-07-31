@@ -49,6 +49,8 @@ func (b *Backend) getInvestigationMarkdown(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	//nolint:gosec // G705: served as text/markdown (never text/html), and the
+	// consumer is an editor tab — no DOM sink on this path.
 	_, _ = w.Write([]byte(md))
 }
 

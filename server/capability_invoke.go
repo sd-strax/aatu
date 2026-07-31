@@ -77,7 +77,7 @@ func (b *Backend) capabilityInvokeRoute(w http.ResponseWriter, r *http.Request) 
 		methodNotAllowed(w, "POST")
 		return
 	}
-	if b.cfg.CapabilityResolver == nil || b.cfg.CapabilityCatalog == nil {
+	if resolver, catalog := b.capabilitySurface(); resolver == nil || catalog == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "capability layer not configured")
 		return
 	}
@@ -96,7 +96,8 @@ func (b *Backend) capabilityInvoke(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "path must be /capability/{verb}")
 		return
 	}
-	if _, known := b.cfg.CapabilityCatalog.Descriptor(verb); !known {
+	resolver, catalog := b.capabilitySurface()
+	if _, known := catalog.Descriptor(verb); !known {
 		writeJSONError(w, http.StatusNotFound, "unknown verb "+verb)
 		return
 	}
@@ -113,7 +114,7 @@ func (b *Backend) capabilityInvoke(w http.ResponseWriter, r *http.Request) {
 		input.Window = capability.TimeWindow{From: body.Window.From, To: body.Window.To}
 	}
 
-	res, err := b.cfg.CapabilityResolver.Resolve(r.Context(), verb, input)
+	res, err := resolver.Resolve(r.Context(), verb, input)
 	if err != nil {
 		var ae *capability.AdapterError
 		if errors.As(err, &ae) {
