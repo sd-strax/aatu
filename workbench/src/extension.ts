@@ -10,7 +10,7 @@
 // filesystem.
 
 import * as vscode from "vscode";
-import { BackendClient, Seed } from "./backend";
+import { BackendClient, InvestigationSummary, Seed } from "./backend";
 import { Session } from "./auth";
 import { SidecarTransport } from "./agentTransport";
 import { InvestigationDocuments } from "./investigationDocument";
@@ -31,7 +31,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Authenticated client: its token source is the session, refreshed on demand.
   const client = new BackendClient(() => backendUrl(), () => session.token());
 
-  const investigations = new InvestigationsProvider(client, session);
+  // Last-seen event sequences — view state behind the tree's unseen-changes
+  // cue (ui/02 §2.12). Never investigation state; lives in globalState.
+  const seen = new SeenTracker(context.globalState);
+  const investigations = new InvestigationsProvider(client, session, seen);
   // The agent loop lives in the Go sidecar (implementation/agent-sidecar.md);
   // this transport spawns it and answers its getToken callbacks from the auth
   // session — the extension stays the sole auth owner.
@@ -41,7 +44,9 @@ export function activate(context: vscode.ExtensionContext): void {
     apiKey: () => context.secrets.get(ANTHROPIC_KEY_SECRET),
     getToken: (kind, force) => session.token(kind, force),
   }, log);
-  const documents = new InvestigationDocuments(client, log, transport);
+  const documents = new InvestigationDocuments(client, log, transport, (id, seq) => {
+    void seen.set(id, seq).then(() => investigations.refresh());
+  });
   context.subscriptions.push(
     log,
     session,
@@ -228,17 +233,64 @@ function errText(err: unknown): string {
 }
 
 /**
- * The Investigations view. Three states, each a distinct honest surface:
- * backend incompatible/unreachable (fail closed with a diagnostic), signed out
- * (a sign-in affordance), or signed in (the real list from /api/investigations).
+ * Per-investigation last-seen event sequence, in globalState. The tree's
+ * unseen-changes cue compares this against the backend's last_event_sequence:
+ * strictly view state (ui/02 §2.12), so it never touches the record.
+ */
+class SeenTracker {
+  private static readonly KEY = "reckon.seenSeq";
+
+  constructor(private readonly memento: vscode.Memento) {}
+
+  get(id: string): number {
+    return this.memento.get<Record<string, number>>(SeenTracker.KEY, {})[id] ?? 0;
+  }
+
+  async set(id: string, seq: number): Promise<void> {
+    const all = { ...this.memento.get<Record<string, number>>(SeenTracker.KEY, {}) };
+    if ((all[id] ?? 0) >= seq) {
+      return;
+    }
+    all[id] = seq;
+    await this.memento.update(SeenTracker.KEY, all);
+  }
+}
+
+/** Display order + collapsed defaults for the status groups (ui/06). */
+const TREE_GROUPS: { status: string; label: string; collapsed: boolean }[] = [
+  { status: "ACTIVE", label: "Active", collapsed: false },
+  { status: "PAUSED", label: "Paused", collapsed: false },
+  { status: "DRAFT", label: "Draft", collapsed: false },
+  { status: "CONCLUDED", label: "Concluded", collapsed: true },
+  { status: "ARCHIVED", label: "Archived", collapsed: true },
+];
+
+/** Status dot colors (ui/06): themed chart colors, not hardcoded hex. */
+const STATUS_COLOR: Record<string, string> = {
+  ACTIVE: "charts.blue",
+  PAUSED: "charts.yellow",
+  DRAFT: "descriptionForeground",
+  CONCLUDED: "charts.purple",
+  ARCHIVED: "disabledForeground",
+};
+
+/**
+ * The Investigations view — a triage queue, not a file listing (ui/06). Three
+ * top-level states, each a distinct honest surface: backend incompatible or
+ * unreachable (fail closed with a diagnostic), signed out (a sign-in
+ * affordance), or signed in — status groups whose rows are ordered
+ * needs-me-first: soonest-expiring approval, then pending approvals, then
+ * unseen changes, then recency.
  */
 class InvestigationsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private rows: InvestigationSummary[] = [];
 
   constructor(
     private readonly client: BackendClient,
     private readonly session: Session,
+    private readonly seen: SeenTracker,
   ) {}
 
   refresh(): void {
@@ -251,7 +303,8 @@ class InvestigationsProvider implements vscode.TreeDataProvider<vscode.TreeItem>
 
   async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     if (element) {
-      return [];
+      const group = (element as GroupItem).groupStatus;
+      return group ? this.groupRows(group) : [];
     }
 
     const status = await this.client.status();
@@ -270,29 +323,99 @@ class InvestigationsProvider implements vscode.TreeDataProvider<vscode.TreeItem>
     }
 
     try {
-      const rows = await this.client.investigations();
-      if (rows.length === 0) {
-        const empty = new vscode.TreeItem("No investigations yet");
-        empty.description = "seed one to begin";
-        empty.iconPath = new vscode.ThemeIcon("search");
-        return [empty];
-      }
-      return rows.map((r) => {
-        const item = new vscode.TreeItem(r.title);
-        item.description = r.state;
-        item.tooltip = `${r.id}\n${r.state}`;
-        item.iconPath = new vscode.ThemeIcon("law");
-        item.command = {
-          command: "reckon.openInvestigation",
-          title: "Open Investigation",
-          arguments: [r.id, r.title],
-        };
-        return item;
-      });
+      this.rows = await this.client.investigations();
     } catch (err) {
       // A 401 here means the token went stale under us — surface it, don't hang.
       return [this.actionItem("Could not load investigations", errText(err), "warning", "reckon.refreshInvestigations")];
     }
+    if (this.rows.length === 0) {
+      const empty = new vscode.TreeItem("No investigations yet");
+      empty.description = "seed one to begin";
+      empty.iconPath = new vscode.ThemeIcon("search");
+      return [empty];
+    }
+
+    const items: vscode.TreeItem[] = [];
+    for (const g of TREE_GROUPS) {
+      const inGroup = this.rows.filter((r) => r.state.toUpperCase() === g.status);
+      if (!inGroup.length) {
+        continue;
+      }
+      // Group-level rollups so a collapsed group still signals what's inside.
+      const pending = inGroup.reduce((n, r) => n + r.pendingActions, 0);
+      const item = new GroupItem(
+        `${g.label} (${inGroup.length})`,
+        g.status,
+        g.collapsed ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded,
+      );
+      if (pending > 0) {
+        item.description = `${pending} awaiting approval`;
+      }
+      items.push(item);
+    }
+    // Anything in a state outside the known groups still shows (honesty over taxonomy).
+    const known = new Set(TREE_GROUPS.map((g) => g.status));
+    for (const r of this.rows.filter((x) => !known.has(x.state.toUpperCase()))) {
+      items.push(this.rowItem(r));
+    }
+    return items;
+  }
+
+  /** The rows of one status group, needs-me-first (ui/06). */
+  private groupRows(status: string): vscode.TreeItem[] {
+    const rows = this.rows.filter((r) => r.state.toUpperCase() === status);
+    rows.sort((a, b) => {
+      // 1. Soonest approval expiry first (an open countdown outranks all).
+      const ax = a.nearestExpiry ? Date.parse(a.nearestExpiry) : Infinity;
+      const bx = b.nearestExpiry ? Date.parse(b.nearestExpiry) : Infinity;
+      if (ax !== bx) return ax - bx;
+      // 2. More pending approvals first.
+      if (a.pendingActions !== b.pendingActions) return b.pendingActions - a.pendingActions;
+      // 3. Unseen changes before caught-up.
+      const au = this.unseen(a) ? 0 : 1;
+      const bu = this.unseen(b) ? 0 : 1;
+      if (au !== bu) return au - bu;
+      // 4. Recency.
+      return (b.updatedAt ? Date.parse(b.updatedAt) : 0) - (a.updatedAt ? Date.parse(a.updatedAt) : 0);
+    });
+    return rows.map((r) => this.rowItem(r));
+  }
+
+  /** Unseen = the thread grew past what this analyst last had open here. */
+  private unseen(r: InvestigationSummary): boolean {
+    const last = this.seen.get(r.id);
+    return last > 0 && r.lastEventSequence > last;
+  }
+
+  private rowItem(r: InvestigationSummary): vscode.TreeItem {
+    const item = new vscode.TreeItem(r.title);
+    const cues: string[] = [];
+    if (r.nearestExpiry) {
+      const left = Date.parse(r.nearestExpiry) - Date.now();
+      cues.push(left <= 0 ? "⏳ expired" : `⏳ ${fmtShort(left)}`);
+    }
+    if (r.pendingActions > 0) {
+      cues.push(`${r.pendingActions} pending`);
+    }
+    if (this.unseen(r)) {
+      cues.push("● new");
+    }
+    if (r.seedSummary) {
+      cues.push(r.seedSummary);
+    }
+    item.description = cues.join(" · ");
+    item.tooltip = `${r.title}\n${r.id}\n${r.state}${r.seedSummary ? "\n" + r.seedSummary : ""}`;
+    const color = STATUS_COLOR[r.state.toUpperCase()] ?? "descriptionForeground";
+    // An open approval window trumps the status dot — that row needs a human.
+    item.iconPath = r.pendingActions > 0
+      ? new vscode.ThemeIcon("bell-dot", new vscode.ThemeColor("charts.orange"))
+      : new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor(color));
+    item.command = {
+      command: "reckon.openInvestigation",
+      title: "Open Investigation",
+      arguments: [r.id, r.title],
+    };
+    return item;
   }
 
   private actionItem(label: string, description: string, icon: string, command: string): vscode.TreeItem {
@@ -303,4 +426,24 @@ class InvestigationsProvider implements vscode.TreeDataProvider<vscode.TreeItem>
     item.command = { command, title: label };
     return item;
   }
+}
+
+/** A status group node; groupStatus keys getChildren back into the rows. */
+class GroupItem extends vscode.TreeItem {
+  constructor(
+    label: string,
+    readonly groupStatus: string,
+    state: vscode.TreeItemCollapsibleState,
+  ) {
+    super(label, state);
+    this.contextValue = "reckon.group";
+  }
+}
+
+/** Compact remaining-time label for the tree's ⏳ cue. */
+function fmtShort(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }

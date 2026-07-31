@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -28,6 +29,13 @@ type InvestigationView struct {
 	// investigations. SeedSummary is the triage-queue display line.
 	Seed        *SeedBody `json:"seed,omitempty"`
 	SeedSummary string    `json:"seed_summary,omitempty"`
+
+	// Triage cues (ui/06 §Tree view — "what needs me, now?"), list rows only:
+	// actions still awaiting a human decision, and the soonest approval-window
+	// deadline among them (the countdown outranks everything else).
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+	PendingActions int        `json:"pending_actions,omitempty"`
+	NearestExpiry  *time.Time `json:"nearest_expiry,omitempty"`
 }
 
 func seedBody(s *aggregate.Seed) *SeedBody {
@@ -78,10 +86,19 @@ func (b *Backend) listInvestigations(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "aggregate handler not configured")
 		return
 	}
+	// The pending subqueries feed the tree's needs-me-first ordering (ui/06):
+	// REQUESTED / PENDING_SECONDARY are the statuses still awaiting a human.
 	rows, err := b.cfg.Handler.DB().QueryContext(r.Context(),
-		`SELECT aggregate_id, title, status, last_event_sequence, COALESCE(seed_summary, '')
-		 FROM investigation_current
-		 ORDER BY updated_at DESC LIMIT 200`)
+		`SELECT i.aggregate_id, i.title, i.status, i.last_event_sequence,
+		        COALESCE(i.seed_summary, ''), i.updated_at,
+		        (SELECT COUNT(*) FROM action_current a
+		          WHERE a.aggregate_id = i.aggregate_id
+		            AND a.status IN ('REQUESTED', 'PENDING_SECONDARY')),
+		        (SELECT MIN(a.expires_at) FROM action_current a
+		          WHERE a.aggregate_id = i.aggregate_id
+		            AND a.status IN ('REQUESTED', 'PENDING_SECONDARY'))
+		 FROM investigation_current i
+		 ORDER BY i.updated_at DESC LIMIT 200`)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "query: "+err.Error())
 		return
@@ -91,11 +108,19 @@ func (b *Backend) listInvestigations(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var v InvestigationView
 		var id uuid.UUID
-		if err := rows.Scan(&id, &v.Title, &v.Status, &v.LastEventSequence, &v.SeedSummary); err != nil {
+		var updatedAt time.Time
+		var nearest sql.NullTime
+		if err := rows.Scan(&id, &v.Title, &v.Status, &v.LastEventSequence, &v.SeedSummary,
+			&updatedAt, &v.PendingActions, &nearest); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "scan: "+err.Error())
 			return
 		}
 		v.AggregateID = id.String()
+		v.UpdatedAt = &updatedAt
+		if nearest.Valid {
+			t := nearest.Time
+			v.NearestExpiry = &t
+		}
 		out = append(out, v)
 	}
 	if out == nil {

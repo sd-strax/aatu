@@ -35,6 +35,10 @@ type RenderMessage =
   // A resolved human label for an evidence ref (e.g. "host · WIN-FILE01"),
   // so the chips read as evidence instead of opaque STIX ids.
   | { type: "evidence.label"; ref: string; label: string }
+  // The event-time strip (13 §4 Timeline, minimal at v0): the cited telemetry
+  // ordered by EVENT time — when it happened, not when we learned it (the two
+  // clocks, binding §7). Each item opens its record.
+  | { type: "events.strip"; items: { ref: string; time: string; label: string }[] }
   // The entity popover's cross-investigation memory (ui/02 §2.4): other
   // investigations citing this ref, current one excluded.
   | { type: "entity.info"; ref: string; appearances: Appearance[] }
@@ -73,11 +77,20 @@ export class InvestigationDocuments {
   // Resolved evidence-ref labels, shared across panels — deterministic ids
   // mean a ref resolves to the same thing everywhere, so cache once.
   private readonly labelCache = new Map<string, string>();
+  // Full evidence docs, cached for the same reason (null = unfetchable). Feeds
+  // both label resolution and the event-time strip without duplicate fetches.
+  private readonly docCache = new Map<string, EvidenceDoc | null>();
 
   constructor(
     private readonly client: BackendClient,
     private readonly log: vscode.LogOutputChannel,
     private readonly transport: AgentTransport,
+    /**
+     * Called after each successful load with the last event sequence the
+     * analyst has now seen — feeds the tree's unseen-changes cue (02 §2.12).
+     * Last-seen is view state, never investigation state.
+     */
+    private readonly onLoaded?: (id: string, lastEventSequence: number) => void,
   ) {}
 
   /** Open (or reveal) the document for one investigation. */
@@ -160,6 +173,10 @@ export class InvestigationDocuments {
       ]);
       panel.title = `⚖ ${investigation.title}`;
       void this.post(panel, { type: "data", investigation, hypotheses, capabilities, thread });
+      this.onLoaded?.(id, investigation.lastEventSequence);
+      // The event-time strip rides the same load, fire-and-forget: cited
+      // telemetry ordered by when it HAPPENED (not when we learned it).
+      void this.postEventStrip(panel, thread ?? []);
 
       // Cold restore (07 cross-cutting acceptance): fetch the committed
       // transcripts and let the webview reconstruct the conversation. Bounded
@@ -221,6 +238,22 @@ export class InvestigationDocuments {
     await this.postPending(id, panel);
   }
 
+  /** Fetch one evidence doc through the cache (null = unfetchable). */
+  private async getDoc(ref: string): Promise<EvidenceDoc | null> {
+    const hit = this.docCache.get(ref);
+    if (hit !== undefined) {
+      return hit;
+    }
+    let doc: EvidenceDoc | null;
+    try {
+      doc = await this.client.evidence(ref);
+    } catch {
+      doc = null;
+    }
+    this.docCache.set(ref, doc);
+    return doc;
+  }
+
   /**
    * Resolve a human label for an evidence ref (host · WIN-FILE01, account ·
    * svc_backup) from the evidence endpoint, cached. Posts back only on a hit;
@@ -229,16 +262,53 @@ export class InvestigationDocuments {
   private async resolveLabel(panel: vscode.WebviewPanel, ref: string): Promise<void> {
     let label = this.labelCache.get(ref);
     if (label === undefined) {
-      try {
-        label = deriveEvidenceLabel(await this.client.evidence(ref));
-      } catch {
-        label = "";
-      }
+      const doc = await this.getDoc(ref);
+      label = doc ? deriveEvidenceLabel(doc) : "";
       this.labelCache.set(ref, label);
     }
     if (label) {
       void this.post(panel, { type: "evidence.label", ref, label });
     }
+  }
+
+  /**
+   * The event-time strip's data (13 §4 Timeline, minimal at v0): every ref the
+   * thread cites that carries an EVENT time — OCSF telemetry (`time`) and
+   * observed-data (`first_observed`). Bounded; failures just leave gaps (the
+   * strip is a lens, never load-bearing).
+   */
+  private async postEventStrip(panel: vscode.WebviewPanel, thread: ThreadEntry[]): Promise<void> {
+    const refs: string[] = [];
+    for (const e of thread) {
+      for (const r of [...e.inputRefs, ...e.outputRefs]) {
+        if (r && !refs.includes(r)) {
+          refs.push(r);
+        }
+      }
+    }
+    const bounded = refs.slice(0, 80);
+    const items: { ref: string; time: string; label: string }[] = [];
+    // Small batches: local backend, but no reason to fire 80 at once.
+    for (let i = 0; i < bounded.length; i += 8) {
+      const docs = await Promise.all(bounded.slice(i, i + 8).map((r) => this.getDoc(r)));
+      for (const doc of docs) {
+        if (!doc) {
+          continue;
+        }
+        let time = doc.kind === "ocsf" ? doc.time : undefined;
+        if (!time && doc.type === "observed-data") {
+          const p = (doc.payload ?? {}) as Record<string, unknown>;
+          if (typeof p.first_observed === "string") {
+            time = p.first_observed;
+          }
+        }
+        if (time && Number.isFinite(Date.parse(time))) {
+          items.push({ ref: doc.ref, time, label: doc.type || doc.kind });
+        }
+      }
+    }
+    items.sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+    void this.post(panel, { type: "events.strip", items });
   }
 
   /**
@@ -691,9 +761,29 @@ export class InvestigationDocuments {
     .error { color: var(--bad); margin: 6px 0; max-width: 78ch; }
 
     /* micro-label eyebrow (01 §Scale): 10px, 700, tracked, uppercase */
-    #rail h2, .railfold > summary, #historyWrap > summary, .dlglabel, .residual .rtitle {
+    #rail h2, .railfold > summary, #historyWrap > summary, #stripWrap > summary, .dlglabel, .residual .rtitle {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.07em; color: var(--text-2);
+    }
+
+    /* ---- event-time strip (13 §4 Timeline, minimal): the OTHER clock ---- */
+    #stripWrap { margin: 10px 0 var(--sp-3); max-width: 78ch; }
+    #stripWrap > summary { cursor: pointer; margin-bottom: 6px; }
+    #strip {
+      position: relative; height: 26px; margin: 2px 6px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #strip .evdot {
+      position: absolute; bottom: -4px; width: 7px; height: 7px;
+      border-radius: 50%; background: var(--info); border: 1px solid var(--vscode-editor-background);
+      cursor: pointer; transform: translateX(-50%);
+      transition: transform var(--dur-fast) var(--ease);
+    }
+    #strip .evdot:hover { transform: translateX(-50%) scale(1.5); }
+    #strip .evdot.od { background: var(--he-primary-soft); }
+    #stripAxis {
+      display: flex; justify-content: space-between; margin: 6px 6px 0;
+      font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3);
     }
 
     /* ---- reasoning history (the thread, 13 §4) ---- */
@@ -929,6 +1019,11 @@ export class InvestigationDocuments {
 
     <div id="scroll">
       <div id="banner"></div>
+      <details id="stripWrap" style="display:none">
+        <summary id="stripSummary">Event time</summary>
+        <div id="strip"></div>
+        <div id="stripAxis"></div>
+      </details>
       <details id="historyWrap" style="display:none">
         <summary id="historySummary">How this investigation got here</summary>
         <div id="history"></div>
@@ -1491,6 +1586,51 @@ export class InvestigationDocuments {
       box.className = "toolrefs";
       for (const r of refs.slice(0, 12)) box.appendChild(refChip(r));
       row.appendChild(box);
+    }
+
+    // ---- event-time strip (13 §4 Timeline, minimal at v0) ------------------
+    // Attacks are sequences, and event time is not investigation time (the two
+    // clocks, binding §7): the thread is ordered by when we LEARNED things;
+    // this strip orders the cited telemetry by when it HAPPENED. Each dot
+    // opens its record — the 7-second anomaly should be visible, not buried.
+    function renderEventStrip(items) {
+      const wrap = $("stripWrap");
+      if (!items || items.length < 2) {
+        wrap.style.display = "none";
+        return;
+      }
+      wrap.style.display = "";
+      const t0 = Date.parse(items[0].time);
+      const t1 = Date.parse(items[items.length - 1].time);
+      const span = Math.max(1, t1 - t0);
+      $("stripSummary").textContent =
+        "Event time · " + items.length + " events over " + fmtSpan(span);
+      const strip = $("strip");
+      strip.textContent = "";
+      for (const it of items) {
+        const dot = document.createElement("span");
+        dot.className = "evdot" + (it.label === "observed-data" ? " od" : "");
+        dot.style.left = (((Date.parse(it.time) - t0) / span) * 100).toFixed(2) + "%";
+        dot.title = it.label + " · " + new Date(it.time).toLocaleString() + " — open record";
+        dot.addEventListener("click", () => vscode.postMessage({ type: "evidence.open", ref: it.ref }));
+        strip.appendChild(dot);
+      }
+      const axis = $("stripAxis");
+      axis.textContent = "";
+      const a = document.createElement("span");
+      a.textContent = new Date(t0).toLocaleString();
+      const b = document.createElement("span");
+      b.textContent = new Date(t1).toLocaleString();
+      axis.append(a, b);
+    }
+    function fmtSpan(ms) {
+      const s = Math.round(ms / 1000);
+      if (s < 120) return s + "s";
+      const m = Math.round(s / 60);
+      if (m < 120) return m + "m";
+      const h = Math.round(m / 60);
+      if (h < 48) return h + "h";
+      return Math.round(h / 24) + "d";
     }
 
     // ---- reasoning history -------------------------------------------------
@@ -2293,6 +2433,9 @@ export class InvestigationDocuments {
         }
         case "entity.info":
           renderPopoverApps(msg.ref, msg.appearances);
+          break;
+        case "events.strip":
+          renderEventStrip(msg.items);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');

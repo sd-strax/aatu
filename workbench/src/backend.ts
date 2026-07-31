@@ -58,6 +58,13 @@ export interface InvestigationSummary {
   state: string;
   /** The triage line: what this case is about (01 §Extension 1). */
   seedSummary?: string;
+  /** Last committed event — drives the unseen-changes cue (ui/02 §2.12). */
+  lastEventSequence: number;
+  updatedAt?: string;
+  /** Actions still awaiting a human decision (triage cue, ui/06). */
+  pendingActions: number;
+  /** Soonest approval-window deadline among them (ISO) — the countdown cue. */
+  nearestExpiry?: string;
 }
 
 /** The investigation's root (mirrors server.SeedBody, 01 §Extension 1). */
@@ -246,6 +253,9 @@ interface RawInvestigation {
   title: string;
   status: string;
   last_event_sequence?: number;
+  updated_at?: string;
+  pending_actions?: number;
+  nearest_expiry?: string;
   verdict?: { disposition?: string; rationale?: string; verdict_at?: string };
   seed?: {
     type?: string; alert_id?: string; source?: string;
@@ -444,6 +454,10 @@ export class BackendClient {
       title: r.title || "(untitled)",
       state: r.status,
       seedSummary: r.seed_summary,
+      lastEventSequence: r.last_event_sequence ?? 0,
+      updatedAt: r.updated_at,
+      pendingActions: r.pending_actions ?? 0,
+      nearestExpiry: r.nearest_expiry,
     }));
   }
 
