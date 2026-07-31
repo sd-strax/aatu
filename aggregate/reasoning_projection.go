@@ -283,13 +283,16 @@ type HypothesisCurrent struct {
 	LastEventSequence int64
 }
 
-// PredictionCurrent is one materialized prediction row.
+// PredictionCurrent is one materialized prediction row. TestQuery is read from
+// the canonical x-prediction STIX payload (the projector's other write) rather
+// than a duplicated column — the declared test is immutable after creation.
 type PredictionCurrent struct {
 	ID                string
 	HypothesisRef     string
 	AggregateID       AggregateID
 	Statement         string
 	Status            string
+	TestQuery         *QuerySpec
 	TestResultRefs    []string
 	LastEventSequence int64
 }
@@ -326,12 +329,17 @@ func ListHypotheses(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]H
 }
 
 // ListPredictions returns the predictions of one investigation, oldest first.
+// The declared test query rides along from the canonical STIX payload, so the
+// tracker can stage it ("Test this") without a second fetch.
 func ListPredictions(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]PredictionCurrent, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, hypothesis_ref, aggregate_id, statement, status, test_result_refs, last_event_sequence
-		FROM prediction_current
-		WHERE aggregate_id = $1
-		ORDER BY created_at, id
+		SELECT p.id, p.hypothesis_ref, p.aggregate_id, p.statement, p.status,
+		       p.test_result_refs, p.last_event_sequence,
+		       s.payload -> 'test_query'
+		FROM prediction_current p
+		LEFT JOIN stix_objects s ON s.id = split_part(p.id, '--', 2)::uuid
+		WHERE p.aggregate_id = $1
+		ORDER BY p.created_at, p.id
 	`, aggregateID)
 	if err != nil {
 		return nil, fmt.Errorf("query prediction_current: %w", err)
@@ -341,13 +349,16 @@ func ListPredictions(ctx context.Context, db *sql.DB, aggregateID uuid.UUID) ([]
 	var out []PredictionCurrent
 	for rows.Next() {
 		var p PredictionCurrent
-		var refs []byte
+		var refs, testQuery []byte
 		if err := rows.Scan(&p.ID, &p.HypothesisRef, &p.AggregateID, &p.Statement,
-			&p.Status, &refs, &p.LastEventSequence); err != nil {
+			&p.Status, &refs, &p.LastEventSequence, &testQuery); err != nil {
 			return nil, fmt.Errorf("scan prediction_current: %w", err)
 		}
 		if len(refs) > 0 {
 			_ = json.Unmarshal(refs, &p.TestResultRefs)
+		}
+		if len(testQuery) > 0 {
+			_ = json.Unmarshal(testQuery, &p.TestQuery)
 		}
 		out = append(out, p)
 	}

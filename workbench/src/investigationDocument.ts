@@ -56,6 +56,7 @@ type InboundMessage =
   | { type: "pin.add"; refs: string[]; finding: string }
   | { type: "pin.unpin"; interpretationId: string; reason: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
+  | { type: "hyp.ack"; hypothesisRef: string }
   | { type: "lifecycle"; transition: string; reason?: string; summary?: string }
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
@@ -108,6 +109,8 @@ export class InvestigationDocuments {
         void this.unpin(id, panel, msg.interpretationId, msg.reason);
       } else if (msg.type === "verdict.submit") {
         void this.submitVerdict(id, panel, msg);
+      } else if (msg.type === "hyp.ack") {
+        void this.ackHypothesis(id, panel, msg.hypothesisRef);
       } else if (msg.type === "lifecycle") {
         void this.lifecycleTransition(id, panel, msg);
       } else if (msg.type === "evidence.open") {
@@ -240,6 +243,20 @@ export class InvestigationDocuments {
       void vscode.window.showErrorMessage(`reckon: un-pin failed — ${errText(err)}`);
     }
     await this.postPending(id, panel);
+  }
+
+  /**
+   * Acknowledge an AI-PROPOSED hypothesis — the human taking ownership of the
+   * line of inquiry (02 §2.9). The aggregate enforces that this is a human act;
+   * a rejection surfaces verbatim.
+   */
+  private async ackHypothesis(id: string, panel: vscode.WebviewPanel, hypothesisRef: string): Promise<void> {
+    try {
+      await this.client.acknowledgeHypothesis(id, hypothesisRef);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: acknowledge failed — ${errText(err)}`);
+    }
+    await this.load(id, panel);
   }
 
   /** Record the verdict of record — always the analyst's act here (human token). */
@@ -704,6 +721,20 @@ export class InvestigationDocuments {
     .predictions li {
       padding: 3px 0 3px 10px; border-left: 2px solid var(--border);
       margin: 4px 0; font-size: var(--fs-sm);
+    }
+    .testbtn { font-size: var(--fs-xs); padding: 0 8px; margin-left: 6px; }
+    /* the suggested next move (02 §2.9): what would decide this, one click to stage */
+    .nextmove {
+      border: 1px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
+      background: color-mix(in srgb, var(--he-primary) 8%, transparent);
+      border-radius: var(--r); padding: 6px 10px; margin: 2px 0 8px;
+      font-size: var(--fs-sm); cursor: pointer;
+      transition: background var(--dur-fast) var(--ease);
+    }
+    .nextmove:hover { background: color-mix(in srgb, var(--he-primary) 14%, transparent); }
+    .nextmove .nextlabel {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: var(--he-primary-soft);
     }
     .cardmeta { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; word-break: break-word; }
     .decide { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1501,20 +1532,118 @@ export class InvestigationDocuments {
       const tone = BADGE_TONE[String(status || "").toUpperCase()];
       return "badge" + (tone ? " " + tone : "");
     }
+    // Stage a question into the composer — the pivot pattern (02 §2.9): staged,
+    // never auto-fired. The analyst reads, edits, and sends.
+    function stageInComposer(text) {
+      if (conversationClosed || input.disabled) return;
+      input.value = text;
+      input.focus();
+      input.setSelectionRange(text.length, text.length);
+    }
+    function predictionTestText(p) {
+      const q = p.testQuery || {};
+      if (q.queryText) {
+        return "Test this prediction" + (q.tool ? " via " + q.tool : "") + ": " + q.queryText;
+      }
+      return "Test the prediction: " + p.statement;
+    }
+
+    // The hypothesis tracker — the drivable loop (02 §2.9). Hypotheses are the
+    // unit of work: PROPOSED cards carry Acknowledge (a human act the engine
+    // enforces), UNTESTED predictions carry "Test this" (stages the declared
+    // test), and the cheapest untested prediction is surfaced as the suggested
+    // next move — "what would decide this?" answered at a glance.
     function renderHypotheses(hs) {
       const box = $("hyps");
+      box.textContent = "";
       if (!hs || !hs.length) {
         box.innerHTML = '<div class="empty">None yet</div>';
         return;
       }
-      box.innerHTML = hs.map((h) => {
-        const preds = (h.predictions || []).map((p) =>
-          '<li>' + esc(p.statement) + '<span class="' + badgeClass(p.status) + '">' + esc(p.status) + '</span></li>'
-        ).join("");
-        return '<div class="card"><div><span class="statement">' + esc(h.statement) + '</span>'
-          + '<span class="' + badgeClass(h.status) + '">' + esc(h.status) + '</span></div>'
-          + (preds ? '<ul class="predictions">' + preds + '</ul>' : '') + '</div>';
-      }).join("");
+
+      // The suggested next move: the first UNTESTED prediction under a live
+      // (PROPOSED/OPEN) hypothesis — earliest first, matching reading order.
+      let suggested = null;
+      for (const h of hs) {
+        if (h.status !== "PROPOSED" && h.status !== "OPEN") continue;
+        for (const p of h.predictions || []) {
+          if (p.status === "UNTESTED") { suggested = p; break; }
+        }
+        if (suggested) break;
+      }
+      if (suggested) {
+        const s = document.createElement("div");
+        s.className = "nextmove";
+        const label = document.createElement("span");
+        label.className = "nextlabel";
+        label.textContent = "next: ";
+        const text = document.createElement("span");
+        text.className = "nexttext";
+        text.textContent = suggested.statement;
+        s.append(label, text);
+        s.title = "Stage this test in the composer (you send it)";
+        s.addEventListener("click", () => stageInComposer(predictionTestText(suggested)));
+        box.appendChild(s);
+      }
+
+      for (const h of hs) {
+        const card = document.createElement("div");
+        card.className = "card";
+        const head = document.createElement("div");
+        const st = document.createElement("span");
+        st.className = "statement";
+        st.textContent = h.statement;
+        const badge = document.createElement("span");
+        badge.className = badgeClass(h.status);
+        badge.textContent = h.status;
+        head.append(st, badge);
+        card.appendChild(head);
+
+        if (h.status === "PROPOSED") {
+          const own = document.createElement("div");
+          own.className = "decide";
+          const ack = document.createElement("button");
+          ack.textContent = "Acknowledge";
+          ack.title = "Take ownership of this AI-proposed line of inquiry (PROPOSED → OPEN). A human act — the engine refuses it from the AI.";
+          ack.addEventListener("click", () => {
+            ack.disabled = true;
+            vscode.postMessage({ type: "hyp.ack", hypothesisRef: h.id });
+          });
+          own.appendChild(ack);
+          card.appendChild(own);
+        }
+
+        const preds = h.predictions || [];
+        if (preds.length) {
+          const ul = document.createElement("ul");
+          ul.className = "predictions";
+          for (const p of preds) {
+            const li = document.createElement("li");
+            const ptext = document.createElement("span");
+            ptext.textContent = p.statement;
+            const pbadge = document.createElement("span");
+            pbadge.className = badgeClass(p.status);
+            pbadge.textContent = p.status;
+            li.append(ptext, pbadge);
+            if (p.status === "UNTESTED") {
+              const test = document.createElement("button");
+              test.className = "testbtn";
+              test.textContent = "Test this";
+              test.title = p.testQuery && p.testQuery.queryText
+                ? "Stage the declared test in the composer: " + p.testQuery.queryText
+                : "Stage a test of this prediction in the composer";
+              test.addEventListener("click", () => stageInComposer(predictionTestText(p)));
+              li.appendChild(test);
+            }
+            // The decisive outcomes cite what was observed — every test-result
+            // ref opens (02 §2.8).
+            for (const r of p.testResultRefs || []) li.appendChild(refChip(r));
+            ul.appendChild(li);
+          }
+          card.appendChild(ul);
+        }
+        box.appendChild(card);
+      }
     }
 
     function renderCapabilities(caps) {

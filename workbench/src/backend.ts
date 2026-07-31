@@ -110,11 +110,19 @@ export interface EvidenceDoc {
   sourceTool?: string;
 }
 
+/** A prediction's declared falsification test (mirrors aggregate.QuerySpec). */
+export interface TestQuery {
+  tool?: string;
+  queryText?: string;
+}
+
 /** One prediction under a hypothesis (mirrors server.PredictionView). */
 export interface Prediction {
   id: string;
   statement: string;
   status: string;
+  /** The declared test — "Test this" stages it in the composer, never fires it. */
+  testQuery?: TestQuery;
   testResultRefs: string[];
 }
 
@@ -251,6 +259,7 @@ interface RawPrediction {
   id: string;
   statement: string;
   status: string;
+  test_query?: { tool?: string; query_text?: string };
   test_result_refs?: string[];
 }
 
@@ -471,6 +480,9 @@ export class BackendClient {
         id: p.id,
         statement: p.statement,
         status: p.status,
+        testQuery: p.test_query
+          ? { tool: p.test_query.tool, queryText: p.test_query.query_text }
+          : undefined,
         testResultRefs: p.test_result_refs ?? [],
       })),
     }));
@@ -609,6 +621,20 @@ export class BackendClient {
       interpretation_type: "evidence-pin",
       input_refs: refs,
       rationale: finding,
+    });
+  }
+
+  /**
+   * Acknowledge an AI-PROPOSED hypothesis into OPEN — the human taking
+   * ownership of the line of inquiry (01 §Interpretation types). The aggregate
+   * refuses this from an AI delegate; always the human token.
+   */
+  async acknowledgeHypothesis(investigationId: string, hypothesisRef: string): Promise<void> {
+    await this.authedPost("/api/interpretations", {
+      investigation_ref: investigationId,
+      interpretation_type: "hypothesis",
+      hypothesis_ref: hypothesisRef,
+      rationale: "acknowledged from the workbench — taking ownership of this line of inquiry",
     });
   }
 

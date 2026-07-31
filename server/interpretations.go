@@ -268,12 +268,15 @@ type HypothesisView struct {
 	Predictions []PredictionView `json:"predictions,omitempty"`
 }
 
-// PredictionView is one prediction row in a HypothesisView.
+// PredictionView is one prediction row in a HypothesisView. TestQuery is the
+// declared falsification test (01 §x-prediction) — the tracker's "Test this"
+// stages it into the composer, never fires it.
 type PredictionView struct {
-	ID             string   `json:"id"`
-	Statement      string   `json:"statement"`
-	Status         string   `json:"status"`
-	TestResultRefs []string `json:"test_result_refs,omitempty"`
+	ID             string               `json:"id"`
+	Statement      string               `json:"statement"`
+	Status         string               `json:"status"`
+	TestQuery      *aggregate.QuerySpec `json:"test_query,omitempty"`
+	TestResultRefs []string             `json:"test_result_refs,omitempty"`
 }
 
 // listInvestigationHypotheses serves GET /api/investigations/{id}/hypotheses:
@@ -307,6 +310,7 @@ func (b *Backend) listInvestigationHypotheses(w http.ResponseWriter, r *http.Req
 			ID:             p.ID,
 			Statement:      p.Statement,
 			Status:         p.Status,
+			TestQuery:      p.TestQuery,
 			TestResultRefs: p.TestResultRefs,
 		})
 	}
