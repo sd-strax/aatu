@@ -39,6 +39,15 @@ type RenderMessage =
   // ordered by EVENT time — when it happened, not when we learned it (the two
   // clocks, binding §7). Each item opens its record.
   | { type: "events.strip"; items: { ref: string; time: string; label: string }[] }
+  // The minimal evidence graph (13 §7 step 7): the two-layer join rendered
+  // navigably — interpretation acts → interpretation-layer objects (STIX) →
+  // raw telemetry (OCSF). Edges are the actual citations; nothing is inferred.
+  | {
+      type: "graph";
+      acts: { id: string; label: string; ai: boolean; seq: number; hasTranscript: boolean }[];
+      refs: { id: string; kind: string; type: string }[];
+      edges: { from: string; to: string }[];
+    }
   // The entity popover's cross-investigation memory (ui/02 §2.4): other
   // investigations citing this ref, current one excluded.
   | { type: "entity.info"; ref: string; appearances: Appearance[] }
@@ -177,9 +186,10 @@ export class InvestigationDocuments {
       panel.title = `⚖ ${investigation.title}`;
       void this.post(panel, { type: "data", investigation, hypotheses, capabilities, thread });
       this.onLoaded?.(id, investigation.lastEventSequence);
-      // The event-time strip rides the same load, fire-and-forget: cited
-      // telemetry ordered by when it HAPPENED (not when we learned it).
-      void this.postEventStrip(panel, thread ?? []);
+      // The event-time strip + evidence graph ride the same load,
+      // fire-and-forget: both are lenses over the cited refs, sharing one
+      // round of (cached) evidence fetches.
+      void this.postDerivedViews(panel, thread ?? []);
 
       // Cold restore (07 cross-cutting acceptance): fetch the committed
       // transcripts and let the webview reconstruct the conversation. Bounded
@@ -275,12 +285,17 @@ export class InvestigationDocuments {
   }
 
   /**
-   * The event-time strip's data (13 §4 Timeline, minimal at v0): every ref the
-   * thread cites that carries an EVENT time — OCSF telemetry (`time`) and
-   * observed-data (`first_observed`). Bounded; failures just leave gaps (the
-   * strip is a lens, never load-bearing).
+   * The derived lenses over the thread's citations, sharing one round of
+   * (cached) evidence fetches — bounded; failures just leave gaps (both are
+   * lenses, never load-bearing):
+   *
+   *   - the event-time strip (13 §4 Timeline, minimal at v0): every ref that
+   *     carries an EVENT time — OCSF `time` and observed-data `first_observed`;
+   *   - the minimal evidence graph (13 §7 step 7): the two-layer join —
+   *     interpretation acts → STIX objects → OCSF telemetry, with the
+   *     observed-data → entity object_refs making the join explicit.
    */
-  private async postEventStrip(panel: vscode.WebviewPanel, thread: ThreadEntry[]): Promise<void> {
+  private async postDerivedViews(panel: vscode.WebviewPanel, thread: ThreadEntry[]): Promise<void> {
     const refs: string[] = [];
     for (const e of thread) {
       for (const r of [...e.inputRefs, ...e.outputRefs]) {
@@ -312,6 +327,52 @@ export class InvestigationDocuments {
     }
     items.sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     void this.post(panel, { type: "events.strip", items });
+
+    // --- the graph: acts + cited refs + observed-data joins ---------------
+    const acts: { id: string; label: string; ai: boolean; seq: number; hasTranscript: boolean }[] = [];
+    const edges: { from: string; to: string }[] = [];
+    const inGraph = new Set<string>();
+    for (const e of thread.slice(-40)) {
+      const actId = e.interpretationId || `seq-${e.sequenceNo}`;
+      acts.push({
+        id: actId,
+        label: e.interpretationType,
+        ai: e.actor.kind === "AI_DELEGATED",
+        seq: e.sequenceNo,
+        hasTranscript: e.hasTranscript,
+      });
+      for (const r of [...e.inputRefs, ...e.outputRefs]) {
+        if (!r) {
+          continue;
+        }
+        inGraph.add(r);
+        edges.push({ from: actId, to: r });
+      }
+    }
+    const graphRefs: { id: string; kind: string; type: string }[] = [];
+    for (const r of inGraph) {
+      const doc = this.docCache.get(r) ?? null;
+      graphRefs.push({
+        id: r,
+        kind: doc?.kind ?? "",
+        type: doc?.type ?? (r.includes("--") ? r.slice(0, r.indexOf("--")) : "event"),
+      });
+      // The explicit two-layer join: observed-data → the entities it observed.
+      if (doc?.kind === "stix" && doc.type === "observed-data") {
+        const p = doc.payload as { object_refs?: unknown } | null;
+        const objRefs = Array.isArray(p?.object_refs) ? p.object_refs : [];
+        for (const or of objRefs) {
+          if (typeof or !== "string" || or === "") {
+            continue;
+          }
+          if (!inGraph.has(or)) {
+            inGraph.add(or); // Set iteration includes entries added mid-loop
+          }
+          edges.push({ from: r, to: or });
+        }
+      }
+    }
+    void this.post(panel, { type: "graph", acts, refs: graphRefs, edges });
   }
 
   /**
@@ -779,7 +840,7 @@ export class InvestigationDocuments {
     .error { color: var(--bad); margin: 6px 0; max-width: 78ch; }
 
     /* micro-label eyebrow (01 §Scale): 10px, 700, tracked, uppercase */
-    #rail h2, .railfold > summary, #historyWrap > summary, #stripWrap > summary, .dlglabel, .residual .rtitle {
+    #rail h2, .railfold > summary, #historyWrap > summary, #stripWrap > summary, #graphWrap > summary, .dlglabel, .residual .rtitle {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.07em; color: var(--text-2);
     }
@@ -803,6 +864,22 @@ export class InvestigationDocuments {
       display: flex; justify-content: space-between; margin: 6px 6px 0;
       font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3);
     }
+
+    /* ---- evidence graph (13 §7 step 7, minimal): the two-layer join ---- */
+    #graphWrap { margin: 10px 0 var(--sp-3); max-width: 78ch; }
+    #graphWrap > summary { cursor: pointer; margin-bottom: 6px; }
+    #graphBox { overflow-x: auto; }
+    #graphBox svg { display: block; font-family: var(--mono); }
+    #graphBox .gedge { stroke: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); stroke-width: 1; fill: none; }
+    #graphBox .gedge.join { stroke: color-mix(in srgb, var(--he-primary) 40%, transparent); stroke-dasharray: 3 2; }
+    #graphBox .gnode { cursor: pointer; }
+    #graphBox .gnode rect { rx: 4; fill: var(--fill-2); stroke: var(--border); }
+    #graphBox .gnode.act rect { stroke: color-mix(in srgb, var(--he-primary) 50%, transparent); }
+    #graphBox .gnode.act.human rect { stroke: var(--ok-border); }
+    #graphBox .gnode.ocsf rect { fill: color-mix(in srgb, var(--info) 10%, transparent); stroke: var(--info-border); }
+    #graphBox .gnode text { font-size: 10px; fill: var(--text); }
+    #graphBox .gnode:hover rect { stroke-width: 2; }
+    #graphBox .gcol { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; fill: var(--text-3); text-transform: uppercase; }
 
     /* ---- reasoning history (the thread, 13 §4) ---- */
     #historyWrap { margin: 10px 0 var(--sp-4); max-width: 78ch; }
@@ -1042,6 +1119,10 @@ export class InvestigationDocuments {
         <summary id="stripSummary">Event time</summary>
         <div id="strip"></div>
         <div id="stripAxis"></div>
+      </details>
+      <details id="graphWrap" style="display:none">
+        <summary id="graphSummary">Evidence graph</summary>
+        <div id="graphBox"></div>
       </details>
       <details id="historyWrap" style="display:none">
         <summary id="historySummary">How this investigation got here</summary>
@@ -1650,6 +1731,90 @@ export class InvestigationDocuments {
       const h = Math.round(m / 60);
       if (h < 48) return h + "h";
       return Math.round(h / 24) + "d";
+    }
+
+    // ---- evidence graph (13 §7 step 7, minimal) ----------------------------
+    // Three layers, left to right: interpretation acts → interpretation-layer
+    // objects (STIX) → raw telemetry (OCSF). Edges are real citations (act →
+    // ref) and the explicit observed-data → entity join — never inference.
+    // Click an act with a transcript to open it; click any ref to open its
+    // record. Richness is deferred to v1; navigability is the v0 bar.
+    const SVGNS = "http://www.w3.org/2000/svg";
+    function svgEl(tag, attrs) {
+      const el2 = document.createElementNS(SVGNS, tag);
+      for (const k in attrs) el2.setAttribute(k, attrs[k]);
+      return el2;
+    }
+    function renderGraph(msg) {
+      const wrap = $("graphWrap");
+      const box = $("graphBox");
+      const acts = msg.acts || [], refs = msg.refs || [], edges = msg.edges || [];
+      if (!acts.length || !refs.length) {
+        wrap.style.display = "none";
+        return;
+      }
+      wrap.style.display = "";
+      // Columns: acts | stix objects | ocsf events. Unfetched refs classify by
+      // shape (a STIX id has the "type--uuid" separator).
+      const stix = refs.filter((r) => r.kind === "stix" || (r.kind === "" && r.id.includes("--")));
+      const ocsf = refs.filter((r) => !stix.includes(r));
+      $("graphSummary").textContent = "Evidence graph · " + acts.length + " acts · "
+        + stix.length + " objects · " + ocsf.length + " events";
+
+      const ROW = 24, TOP = 22, NW = [206, 196, 150], CX = [8, 250, 482];
+      const H = TOP + 10 + Math.max(acts.length, stix.length, ocsf.length) * ROW;
+      const svg = svgEl("svg", { viewBox: "0 0 640 " + H, width: "100%" });
+
+      const pos = {}; // node id → {x, y, w} (right/left anchor points)
+      const layNodes = (list, col, cls, label) => {
+        svg.appendChild(Object.assign(svgEl("text", { x: CX[col], y: 12, class: "gcol" }),
+          { textContent: label }));
+        list.forEach((n, i) => {
+          const y = TOP + i * ROW;
+          pos[n.id] = { x: CX[col], y: y + 8, w: NW[col] };
+          const g = svgEl("g", { class: cls(n), transform: "translate(" + CX[col] + "," + y + ")" });
+          g.appendChild(svgEl("rect", { width: NW[col], height: 17 }));
+          const t = svgEl("text", { x: 5, y: 12 });
+          t.textContent = nodeLabel(n);
+          g.appendChild(t);
+          g.addEventListener("click", () => nodeOpen(n));
+          svg.appendChild(g);
+        });
+      };
+      function nodeLabel(n) {
+        if (n.seq !== undefined) return "#" + n.seq + " " + n.label;
+        const short = resolvedLabels[n.id] || (n.type + (n.id.includes("--") ? " " + n.id.slice(n.id.indexOf("--") + 2, n.id.indexOf("--") + 8) : ""));
+        return short.length > 30 ? short.slice(0, 29) + "…" : short;
+      }
+      function nodeOpen(n) {
+        if (n.seq !== undefined) {
+          if (n.hasTranscript) vscode.postMessage({ type: "transcript.open", interpretationId: n.id });
+        } else {
+          vscode.postMessage({ type: "evidence.open", ref: n.id });
+        }
+      }
+
+      // Edges under the nodes: draw first.
+      const eg = svgEl("g", {});
+      svg.appendChild(eg);
+      layNodes(acts, 0, (n) => "gnode act" + (n.ai ? "" : " human"), "reasoning acts");
+      layNodes(stix, 1, () => "gnode stix", "interpretation layer (stix)");
+      layNodes(ocsf, 2, () => "gnode ocsf", "telemetry (ocsf)");
+
+      const isJoin = new Set(stix.map((r) => r.id));
+      for (const e of edges) {
+        const a = pos[e.from], b2 = pos[e.to];
+        if (!a || !b2) continue;
+        const x1 = a.x + a.w, y1 = a.y, x2 = b2.x, y2 = b2.y;
+        const mid = (x1 + x2) / 2;
+        const p = svgEl("path", {
+          d: "M" + x1 + "," + y1 + " C" + mid + "," + y1 + " " + mid + "," + y2 + " " + x2 + "," + y2,
+          class: "gedge" + (isJoin.has(e.from) ? " join" : ""),
+        });
+        eg.appendChild(p);
+      }
+      box.textContent = "";
+      box.appendChild(svg);
     }
 
     // ---- reasoning history -------------------------------------------------
@@ -2456,6 +2621,9 @@ export class InvestigationDocuments {
           break;
         case "events.strip":
           renderEventStrip(msg.items);
+          break;
+        case "graph":
+          renderGraph(msg);
           break;
         case "turn.user":
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');
