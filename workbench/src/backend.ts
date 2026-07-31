@@ -198,8 +198,8 @@ export interface ActionRow {
   /**
    * True when the request's approval deadline (expires_at, frozen at request
    * time) has passed: the engine will refuse an approve, so the UI must not
-   * offer one. The status may still read REQUESTED — v0 has no expiry timer;
-   * the engine checks lazily at the approve attempt.
+   * offer one. The stored status (converged by the durable expiry timer) is
+   * authoritative; the deadline comparison covers the moments it lags.
    */
   expired: boolean;
   /** The approval deadline (ISO), for the live countdown. */
@@ -686,6 +686,29 @@ export class BackendClient {
    */
   async rerequestAction(actionId: string, rationale: string): Promise<void> {
     await this.authedPost(`/api/actions/${encodeURIComponent(actionId)}/rerequest`, { rationale });
+  }
+
+  /**
+   * POST /api/investigations/{id}/lifecycle — the analyst-driven state machine
+   * (01 §Extension 2): activate | pause | resume | conclude | reopen | archive.
+   * Conclude requires report_ref (minted by the caller — the STIX Report object
+   * itself is v1) and is refused by the aggregate without a verdict of record.
+   * Human token only; the aggregate's actor allowlist bars an AI delegate.
+   */
+  async lifecycle(
+    investigationId: string,
+    body: { transition: string; reason?: string; reportRef?: string; summary?: string },
+  ): Promise<{ status: string; exportWorkflowId?: string }> {
+    const r = await this.authedPost<{ status?: string; export_workflow_id?: string }>(
+      `/api/investigations/${encodeURIComponent(investigationId)}/lifecycle`,
+      {
+        transition: body.transition,
+        reason: body.reason,
+        report_ref: body.reportRef,
+        summary: body.summary,
+      },
+    );
+    return { status: r.status ?? "", exportWorkflowId: r.export_workflow_id };
   }
 
   /** POST /api/actions/{id}/reject — ditto, human token only. */

@@ -13,6 +13,7 @@
 // call; the webview only renders messages posted to it. The CSP forbids all
 // network from the page.
 
+import { randomUUID } from "crypto";
 import * as vscode from "vscode";
 import { ActionRow, BackendClient, Capability, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
 import { AgentTransport } from "./agentTransport";
@@ -55,6 +56,7 @@ type InboundMessage =
   | { type: "pin.add"; refs: string[]; finding: string }
   | { type: "pin.unpin"; interpretationId: string; reason: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
+  | { type: "lifecycle"; transition: string; reason?: string; summary?: string }
   | { type: "evidence.open"; ref: string }
   | { type: "evidence.resolve"; ref: string }
   | { type: "transcript.open"; interpretationId: string };
@@ -106,6 +108,8 @@ export class InvestigationDocuments {
         void this.unpin(id, panel, msg.interpretationId, msg.reason);
       } else if (msg.type === "verdict.submit") {
         void this.submitVerdict(id, panel, msg);
+      } else if (msg.type === "lifecycle") {
+        void this.lifecycleTransition(id, panel, msg);
       } else if (msg.type === "evidence.open") {
         void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
       } else if (msg.type === "evidence.resolve") {
@@ -251,6 +255,39 @@ export class InvestigationDocuments {
       void vscode.window.showErrorMessage(`reckon: verdict failed — ${errText(err)}`);
     }
     await this.load(id, panel);
+  }
+
+  /**
+   * Drive one lifecycle transition — always the analyst's act on the human
+   * token (the aggregate's actor allowlist bars an AI delegate from
+   * conclude/reopen/archive). Conclude mints the STIX Report id here — the
+   * Report object itself is v1; the aggregate requires the reference — and the
+   * aggregate refuses to conclude without a verdict of record, an error we
+   * surface verbatim. A full reload follows: status, thread, and (after
+   * conclude) the export trail all changed.
+   */
+  private async lifecycleTransition(
+    id: string,
+    panel: vscode.WebviewPanel,
+    msg: { transition: string; reason?: string; summary?: string },
+  ): Promise<void> {
+    try {
+      const body: { transition: string; reason?: string; reportRef?: string; summary?: string } = {
+        transition: msg.transition,
+        reason: msg.reason?.trim() || undefined,
+      };
+      if (msg.transition === "conclude") {
+        body.reportRef = `report--${randomUUID()}`;
+        body.summary = msg.summary?.trim() || undefined;
+      }
+      const res = await this.client.lifecycle(id, body);
+      const exportNote = res.exportWorkflowId ? " · export started" : "";
+      void vscode.window.showInformationMessage(`reckon: investigation → ${res.status}${exportNote}`);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: ${msg.transition} failed — ${errText(err)}`);
+    }
+    await this.load(id, panel);
+    await this.postPending(id, panel);
   }
 
   /**
@@ -667,6 +704,7 @@ export class InvestigationDocuments {
         <span class="state" id="state"></span>
         <span class="state verdictbadge" id="verdictBadge" style="display:none"></span>
         <button id="verdictBtn" title="Record the disposition of record">Verdict…</button>
+        <span id="lifecycleBtns"></span>
         <button id="refresh" title="Reload from the backend">Refresh</button>
       </div>
       <div id="meta"></div>
@@ -826,7 +864,9 @@ export class InvestigationDocuments {
     // (binding §2.4 — ACTIVE reads as remediating / verdict-reached; derived,
     // never stored).
     function renderHeaderState(status) {
-      if (status) $("state").dataset.engine = status;
+      // The engine speaks lowercase ("active"); the header vocabulary is
+      // uppercase. Normalize once here — every comparison below assumes it.
+      if (status) $("state").dataset.engine = String(status).toUpperCase();
       const engine = $("state").dataset.engine || "";
       let label = engine;
       if (engine === "ACTIVE") {
@@ -845,6 +885,80 @@ export class InvestigationDocuments {
       } else {
         vb.style.display = "none";
       }
+      renderLifecycleControls(engine);
+    }
+
+    // The lifecycle state machine's affordances (01 §Extension 2), contextual
+    // to the engine status — every legal move visible as a button, never a
+    // menu. Conclude is gated in the aggregate on a verdict of record; the
+    // button says so up front rather than offering a click that can only 422.
+    function renderLifecycleControls(engine) {
+      const box = $("lifecycleBtns");
+      box.textContent = "";
+      const mk = (text, title, onClick, disabledReason) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        b.title = disabledReason || title;
+        b.disabled = !!disabledReason;
+        if (!disabledReason) b.addEventListener("click", onClick);
+        box.appendChild(b);
+      };
+      const send = (transition, reason) =>
+        vscode.postMessage({ type: "lifecycle", transition, reason });
+      switch (engine) {
+        case "DRAFT":
+          mk("Activate", "Move to ACTIVE — clears the investigation to request external actions", () => send("activate"));
+          break;
+        case "ACTIVE":
+          mk("Pause", "A reversible hold — resume any time", () => send("pause"));
+          mk("Conclude…", "Close with the verdict of record and a summary",
+            () => openPrompt({
+              title: "Conclude investigation",
+              label: "Summary of record — what did this investigation determine?",
+              placeholder: "e.g. Confirmed C2 beaconing from WIN-9; host isolated, IOCs blocked.",
+              helper: "Concluding consumes the verdict of record (" + (lastVerdict ? lastVerdict.disposition : "none") + ") and files the final report reference. You can reopen later if the world disagrees.",
+              confirm: "Conclude",
+              onConfirm: (summary) => vscode.postMessage({ type: "lifecycle", transition: "conclude", summary }),
+            }),
+            lastVerdict ? "" : "Record a verdict first — a conclusion consumes the verdict of record");
+          break;
+        case "PAUSED":
+          mk("Resume", "Back to ACTIVE", () => send("resume"));
+          break;
+        case "CONCLUDED":
+          mk("Reopen…", "Back to ACTIVE — the prior conclusion stays on the record",
+            () => openPrompt({
+              title: "Reopen investigation",
+              label: "Why does this need to be reopened?",
+              placeholder: "e.g. New alert on the same host — the conclusion may not hold",
+              helper: "Reopening clears the conclusion slot; the prior report stays referenced from the thread.",
+              confirm: "Reopen",
+              onConfirm: (reason) => vscode.postMessage({ type: "lifecycle", transition: "reopen", reason }),
+            }));
+          mk("Archive…", "Terminal — accepts no further changes",
+            () => openPrompt({
+              title: "Archive investigation",
+              label: "Archiving is TERMINAL — the record accepts no further changes, ever. Note why (optional):",
+              placeholder: "e.g. Retention review complete",
+              helper: "Unlike pause or conclude, there is no way back from archived.",
+              confirm: "Archive permanently",
+              require: false,
+              onConfirm: (reason) => vscode.postMessage({ type: "lifecycle", transition: "archive", reason }),
+            }));
+          break;
+      }
+      // Terminal / closed states park the interactive surfaces honestly:
+      // archived accepts nothing; concluded pauses the conversation until a
+      // reopen (the engine would refuse the commit anyway — no affordance
+      // that can only fail).
+      const closed = engine === "ARCHIVED" || engine === "CONCLUDED";
+      conversationClosed = closed;
+      input.disabled = closed;
+      sendBtn.disabled = closed;
+      input.placeholder = engine === "ARCHIVED" ? "Archived — this record is final."
+        : engine === "CONCLUDED" ? "Concluded — reopen to continue the conversation."
+        : "Ask reckon to investigate… (Enter to send, Shift+Enter for newline)";
+      $("verdictBtn").style.display = closed ? "none" : "";
     }
 
     function esc(s) {
@@ -1487,7 +1601,11 @@ export class InvestigationDocuments {
       for (const b of document.querySelectorAll("#pending button")) b.disabled = !on;
     }
 
+    // conversationClosed: the lifecycle parked the composer (CONCLUDED /
+    // ARCHIVED) — a turn ending must not re-open it.
+    let conversationClosed = false;
     function setComposerEnabled(on) {
+      if (on && conversationClosed) return;
       sendBtn.disabled = !on;
       input.disabled = !on;
       if (on) input.focus();
