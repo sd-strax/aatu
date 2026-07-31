@@ -564,7 +564,9 @@ export class BackendClient {
         targets: (a.targets ?? []).map((t) => t.resolved_identifier || t.entity_ref || ""),
         pending,
         pendingLabel,
-        expired: Number.isFinite(expiry) && Date.now() > expiry,
+        // The stored status is authoritative (the durable expiry timer owns the
+        // transition); the deadline comparison covers the moments it lags.
+        expired: status === "EXPIRED" || (pending && Number.isFinite(expiry) && Date.now() > expiry),
         expiresAt: a.expires_at,
         reversibility: a.reversibility,
         tierEscalated: a.tier_escalated ?? false,

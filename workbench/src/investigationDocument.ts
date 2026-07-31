@@ -1339,7 +1339,13 @@ export class InvestigationDocuments {
       lastPending = actions || [];
       renderHeaderState();
       const box = $("pending");
-      const pend = lastPending.filter((a) => a.pending);
+      // The queue: live pending rows, plus EXPIRED ones (they carry the
+      // re-request affordance) — but not an EXPIRED action that already has a
+      // successor (retry_of pointing at it): its re-request happened, and a
+      // dangling button would mint duplicates.
+      const retried = new Set(lastPending.map((a) => a.retryOf).filter(Boolean));
+      const pend = lastPending.filter((a) =>
+        a.pending || (a.status === "EXPIRED" && !retried.has(a.actionId)));
       box.textContent = "";
       // The interrupt pattern: no section at all when nothing needs the
       // analyst; pinned above everything when something does.
