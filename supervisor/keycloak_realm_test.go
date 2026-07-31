@@ -93,6 +93,38 @@ func TestRealm_ClientDescriptionsFitKeycloakColumn(t *testing.T) {
 	}
 }
 
+// TestRealm_TokenLifetimes: the shipped realm and convergeRealmLifetimes'
+// constants must agree (the JSON covers fresh imports; convergence heals
+// existing installs — drift between them means the two paths produce different
+// realms), and the SSO idle timeout must comfortably exceed the access-token
+// lifespan — otherwise every refresh token dies (session idled out) before a
+// client's just-before-expiry refresh, forcing a fresh login every session.
+func TestRealm_TokenLifetimes(t *testing.T) {
+	var doc struct {
+		AccessTokenLifespan   int `json:"accessTokenLifespan"`
+		SSOSessionIdleTimeout int `json:"ssoSessionIdleTimeout"`
+		SSOSessionMaxLifespan int `json:"ssoSessionMaxLifespan"`
+	}
+	if err := json.Unmarshal(defaultRealmJSON, &doc); err != nil {
+		t.Fatalf("embedded realm json does not parse: %v", err)
+	}
+	if doc.AccessTokenLifespan != realmAccessTokenLifespan ||
+		doc.SSOSessionIdleTimeout != realmSSOIdleTimeout ||
+		doc.SSOSessionMaxLifespan != realmSSOMaxLifespan {
+		t.Errorf("realm json lifetimes (%d/%d/%d) drift from the convergence constants (%d/%d/%d) — fresh imports and healed installs would differ",
+			doc.AccessTokenLifespan, doc.SSOSessionIdleTimeout, doc.SSOSessionMaxLifespan,
+			realmAccessTokenLifespan, realmSSOIdleTimeout, realmSSOMaxLifespan)
+	}
+	if doc.SSOSessionIdleTimeout < 2*doc.AccessTokenLifespan {
+		t.Errorf("ssoSessionIdleTimeout (%ds) must comfortably exceed accessTokenLifespan (%ds): refresh happens just before access expiry, and an idled-out session kills the refresh token first",
+			doc.SSOSessionIdleTimeout, doc.AccessTokenLifespan)
+	}
+	if doc.SSOSessionMaxLifespan < doc.SSOSessionIdleTimeout {
+		t.Errorf("ssoSessionMaxLifespan (%ds) below ssoSessionIdleTimeout (%ds) makes the idle window unreachable",
+			doc.SSOSessionMaxLifespan, doc.SSOSessionIdleTimeout)
+	}
+}
+
 // TestRealm_ShipsNoCredentialedUser: the distributed artifact carries NO user
 // account. A hardcoded-password (let alone privileged) account in a public-bound
 // realm is a default-credentials liability; local/CI logins are provisioned

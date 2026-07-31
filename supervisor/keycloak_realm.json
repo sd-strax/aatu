@@ -7,8 +7,8 @@
   "verifyEmail": false,
   "loginTheme": "keycloak",
   "accessTokenLifespan": 3600,
-  "ssoSessionIdleTimeout": 1800,
-  "ssoSessionMaxLifespan": 28800,
+  "ssoSessionIdleTimeout": 1209600,
+  "ssoSessionMaxLifespan": 2592000,
   "sslRequired": "external",
   "roles": {
     "realm": [

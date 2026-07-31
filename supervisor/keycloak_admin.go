@@ -102,6 +102,39 @@ func (a *KeycloakAdmin) SetDirectAccessGrants(ctx context.Context, clientID stri
 	return nil
 }
 
+// EnsureTokenLifetimes converges the realm's session/token lifetimes to the
+// given values (seconds). Needed because --import-realm only reads the shipped
+// realm JSON when the realm does not exist yet — an installed realm keeps
+// whatever it was imported with, so a lifetime fix in keycloak_realm.json
+// would otherwise never reach existing installs. Reads the full realm
+// representation and writes it back with only these fields changed; a no-op
+// (no PUT) when the values already match. Returns whether it changed anything.
+func (a *KeycloakAdmin) EnsureTokenLifetimes(ctx context.Context, accessTokenLifespan, ssoIdleTimeout, ssoMaxLifespan int) (changed bool, err error) {
+	var rep map[string]any
+	if err := a.do(ctx, http.MethodGet, "", nil, &rep); err != nil {
+		return false, fmt.Errorf("read realm %q: %w", a.realm, err)
+	}
+	want := map[string]int{
+		"accessTokenLifespan":   accessTokenLifespan,
+		"ssoSessionIdleTimeout": ssoIdleTimeout,
+		"ssoSessionMaxLifespan": ssoMaxLifespan,
+	}
+	for field, v := range want {
+		// JSON numbers decode as float64.
+		if cur, ok := rep[field].(float64); !ok || int(cur) != v {
+			rep[field] = v
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := a.do(ctx, http.MethodPut, "", rep, nil); err != nil {
+		return true, fmt.Errorf("update realm %q lifetimes: %w", a.realm, err)
+	}
+	return true, nil
+}
+
 // EnsureUser creates the user if absent (enabled, verified email so the direct
 // grant isn't blocked by a required action), (re)sets a non-temporary password,
 // and assigns the given realm roles. Idempotent. Returns whether it created the

@@ -91,6 +91,66 @@ func (f *fakeKeycloak) handler() http.Handler {
 	return mux
 }
 
+// TestKeycloakAdmin_EnsureTokenLifetimes: converges a drifted realm (PUT with
+// only the lifetime fields changed, everything else preserved) and is a no-op
+// when the values already match — every boot runs this, so the no-op path is
+// the common one.
+func TestKeycloakAdmin_EnsureTokenLifetimes(t *testing.T) {
+	realm := map[string]any{
+		"realm":                 "reckon",
+		"accessTokenLifespan":   float64(3600),
+		"ssoSessionIdleTimeout": float64(1800), // the stale pre-fix value
+		"ssoSessionMaxLifespan": float64(28800),
+		"displayName":           "reckon", // must survive the write-back
+	}
+	puts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/realms/master/protocol/openid-connect/token", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "admin-token"})
+	})
+	mux.HandleFunc("/admin/realms/reckon", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(realm)
+		case http.MethodPut:
+			puts++
+			var rep map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&rep)
+			realm = rep
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	admin := NewKeycloakAdmin(srv.URL, "reckon")
+	if err := admin.Login(context.Background(), "admin", "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := admin.EnsureTokenLifetimes(context.Background(), 3600, 1209600, 2592000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || puts != 1 {
+		t.Errorf("drifted realm: changed=%v puts=%d; want a single converging PUT", changed, puts)
+	}
+	if realm["ssoSessionIdleTimeout"] != float64(1209600) && realm["ssoSessionIdleTimeout"] != 1209600 {
+		t.Errorf("idle timeout not converged: %v", realm["ssoSessionIdleTimeout"])
+	}
+	if realm["displayName"] != "reckon" {
+		t.Errorf("unrelated realm field lost in write-back: displayName=%v", realm["displayName"])
+	}
+
+	changed, err = admin.EnsureTokenLifetimes(context.Background(), 3600, 1209600, 2592000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || puts != 1 {
+		t.Errorf("matching realm: changed=%v puts=%d; want a no-op (no second PUT)", changed, puts)
+	}
+}
+
 func TestProvisionDevAuth_CreatesUserEnablesROPCAndAssignsRoles(t *testing.T) {
 	fake := &fakeKeycloak{}
 	srv := httptest.NewServer(fake.handler())

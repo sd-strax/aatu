@@ -76,6 +76,19 @@ type Keycloak struct {
 // caller indefinitely.
 var healthHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
+// The realm's session/token lifetimes (seconds). MUST match
+// keycloak_realm.json (guarded by TestRealm_TokenLifetimes): the JSON covers
+// fresh imports, convergeRealmLifetimes heals existing installs. The load-
+// bearing invariant: the SSO idle timeout must comfortably exceed the access
+// token lifespan, or refresh tokens die (session idled out) before clients
+// ever attempt their just-before-expiry refresh — forcing a fresh login every
+// session.
+const (
+	realmAccessTokenLifespan = 3600    // 1h — role/claim freshness
+	realmSSOIdleTimeout      = 1209600 // 14d — refresh survives a hiatus of a fortnight
+	realmSSOMaxLifespan      = 2592000 // 30d — absolute re-auth backstop
+)
+
 // NewKeycloak constructs the Keycloak component (not yet started).
 // Defaults: HTTPPort=8543, ManagementPort=9543, RealmName=branding.CLI,
 // DataDir=$HOME/<branding.DataDir>/keycloak.
@@ -120,7 +133,36 @@ func (k *Keycloak) Start(ctx context.Context) error {
 		_ = k.kill()
 		return err
 	}
+	k.convergeRealmLifetimes(ctx)
 	return nil
+}
+
+// convergeRealmLifetimes heals an installed realm's session/token lifetimes to
+// the shipped defaults. --import-realm only reads keycloak_realm.json when the
+// realm doesn't exist, so a lifetime fix there never reaches existing installs
+// on its own; this runs every boot and is a no-op once the values match. The
+// values must stay in lockstep with keycloak_realm.json. Best-effort: a
+// failure logs and continues — a stale lifetime degrades session longevity,
+// not correctness, and must not take the IdP down with it.
+//
+// The invariant that matters: the SSO idle timeout must comfortably exceed
+// accessTokenLifespan, or every refresh token dies (session idled out) before
+// clients ever attempt their just-before-expiry refresh — the "why do I have
+// to log in every time" failure mode.
+func (k *Keycloak) convergeRealmLifetimes(ctx context.Context) {
+	admin := NewKeycloakAdmin(fmt.Sprintf("http://localhost:%d", k.cfg.HTTPPort), k.cfg.RealmName)
+	if err := admin.Login(ctx, "admin", k.cfg.AdminPassword); err != nil {
+		log.Printf("keycloak: realm-lifetime convergence skipped (admin login: %v)", err)
+		return
+	}
+	changed, err := admin.EnsureTokenLifetimes(ctx, realmAccessTokenLifespan, realmSSOIdleTimeout, realmSSOMaxLifespan)
+	if err != nil {
+		log.Printf("keycloak: realm-lifetime convergence failed: %v", err)
+		return
+	}
+	if changed {
+		log.Printf("keycloak: realm %s session lifetimes converged to shipped defaults (sso idle 14d, max 30d)", k.cfg.RealmName)
+	}
 }
 
 // Stop sends SIGTERM, waits up to ctx's deadline (or 30s default) for clean
