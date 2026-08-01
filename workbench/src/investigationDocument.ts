@@ -1649,8 +1649,8 @@ export class InvestigationDocuments {
        "From an alert…" path stays explicit (no ingestion to infer from at v0). -->
   <div id="draftView" style="display:none">
     <div class="draftCard">
-      <h2>Root this investigation</h2>
-      <p class="draftLead">Name what you're looking at — a host, an IP, a hash — or ask a question to hunt.</p>
+      <h2>What are you investigating?</h2>
+      <p class="draftLead">A host, an IP, or a file hash — or a question to hunt.</p>
       <textarea id="draftInput" rows="1" placeholder="WIN-FILE01   ·   185.220.101.5   ·   a file hash   —   or a question"></textarea>
       <div id="draftInterp" class="draftInterp"></div>
       <div class="draftActions">
@@ -3304,7 +3304,7 @@ export class InvestigationDocuments {
       if (seed.type === "entity") {
         const label = seedTypeLabel(seed.entityRef);
         const who = seed.entityIdentifier || seed.entityRef || "";
-        html = "Rooted on " + label + " <b>" + esc(who) + "</b>";
+        html = "Investigating " + label + " <b>" + esc(who) + "</b>";
       } else if (seed.type === "question") {
         html = "Hunting — <b>" + esc(seed.hypothesisStatement || "") + "</b>";
       } else if (seed.type === "alert") {
@@ -3345,13 +3345,13 @@ export class InvestigationDocuments {
       const kind = effectiveDraftKind(v);
       const singleToken = !/\\s/.test(v) && !v.endsWith("?");
       if (kind === "entity") {
-        interp.innerHTML = "→ root on " + entitySubLabel(v) + " <b>" + esc(v) + "</b>"
-          + '<span class="toggle" id="draftToQuestion">ask this as a question instead</span>';
+        interp.innerHTML = "→ investigate " + entitySubLabel(v) + " <b>" + esc(v) + "</b>"
+          + '<span class="toggle" id="draftToQuestion">hunt this as a question instead</span>';
         const t = $("draftToQuestion");
         if (t) t.onclick = () => { draftOverride = "question"; renderDraftInterp(); };
       } else {
-        interp.innerHTML = "→ a hunt (question)"
-          + (singleToken ? '<span class="toggle" id="draftToEntity">root on the host instead</span>' : "");
+        interp.innerHTML = "→ a hunt (open question)"
+          + (singleToken ? '<span class="toggle" id="draftToEntity">investigate a specific host/IP instead</span>' : "");
         const t = $("draftToEntity");
         if (t) t.onclick = () => { draftOverride = "entity"; renderDraftInterp(); };
       }
