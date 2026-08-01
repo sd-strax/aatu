@@ -2621,16 +2621,28 @@ export class InvestigationDocuments {
             }
             // The decisive outcomes cite what was observed — every test-result
             // ref opens (02 §2.8), and a decided prediction is pinnable as
-            // evidence: statement + outcome + its citations, prefilled.
+            // evidence: statement + outcome + its citations, prefilled. The
+            // pin cites the PREDICTION NODE too, so an active pin is
+            // detectable and the affordance goes inert instead of minting
+            // duplicates (un-pin brings it back — supersession, not deletion).
             const trefs = p.testResultRefs || [];
             for (const r of trefs) li.appendChild(refChip(r));
             if (trefs.length && p.status !== "UNTESTED") {
+              const alreadyPinned = lastPins.some((x) => !x.superseded && (
+                (x.inputRefs || []).includes(p.id) ||
+                trefs.every((r) => (x.inputRefs || []).includes(r))));
               const pin = document.createElement("button");
               pin.className = "pincta testbtn";
-              pin.textContent = "📌 Pin";
-              pin.title = "Pin this decided prediction + its test evidence (feeds the verdict gate)";
-              pin.addEventListener("click", () =>
-                openPinDialog(trefs, "[" + p.status + "] " + p.statement));
+              if (alreadyPinned) {
+                pin.textContent = "📌 pinned";
+                pin.disabled = true;
+                pin.title = "Already in the pinned evidence — un-pin there to revise";
+              } else {
+                pin.textContent = "📌 Pin";
+                pin.title = "Pin this decided prediction + its test evidence (feeds the verdict gate)";
+                pin.addEventListener("click", () =>
+                  openPinDialog([p.id].concat(trefs), "[" + p.status + "] " + p.statement));
+              }
               li.appendChild(pin);
             }
             ul.appendChild(li);
@@ -3307,6 +3319,8 @@ export class InvestigationDocuments {
           break;
         case "pins":
           renderPins(msg.pins);
+          // Pin state feeds the tracker's pin affordances — keep them honest.
+          if (lastHyps.length) renderHypotheses(lastHyps);
           break;
         case "comms":
           renderComms(msg.threads);
