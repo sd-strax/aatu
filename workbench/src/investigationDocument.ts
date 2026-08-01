@@ -2114,7 +2114,24 @@ export class InvestigationDocuments {
           flushPara(); flushList();
           out.push('<div class="mdh">' + inlineMd(h[1]) + "</div>");
         } else if (line.trim() === "") {
-          flushPara(); flushList();
+          flushPara();
+          // A blank line inside a list is inter-item spacing (a "loose" list):
+          // keep the list open when the next content is another item of the
+          // same kind, so an <ol> numbers continuously (1, 2, 3) instead of
+          // splitting into single-item lists that each restart at 1.
+          if (list) {
+            let j = i + 1;
+            while (j < lines.length && lines[j].trim() === "") j++;
+            const next = j < lines.length ? lines[j] : "";
+            const sameKind = list.tag === "ul"
+              ? /^\\s*[-*•]\\s+/.test(next)
+              : /^\\s*\\d+[.)]\\s+/.test(next);
+            if (!sameKind) flushList();
+          }
+        } else if (list && /^\\s+\\S/.test(line)) {
+          // An indented continuation line wraps into the current list item
+          // rather than breaking the list.
+          list.items[list.items.length - 1] += " " + line.trim();
         } else {
           flushList();
           para.push(line);
