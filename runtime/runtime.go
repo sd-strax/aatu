@@ -240,16 +240,16 @@ func serve(cfg config.Config) error {
 		HostPort:  fmt.Sprintf("localhost:%d", cfg.Temporal.FrontendPort),
 		Namespace: cfg.Temporal.Namespace,
 	})
-	activities, err := buildActionActivities(cfg, handler)
-	if err != nil {
-		return err
-	}
 	// The comms-thread store (Phase F, binding §4) rides the main DB: the
 	// result path opens threads for SUCCEEDED notify.* dispatches, and the
 	// backend serves/acts on them.
 	commsStore := comms.NewStore(handler.DB())
+	activities, err := buildActionActivities(cfg, handler, commsStore)
+	if err != nil {
+		return err
+	}
 	if activities != nil {
-		worker.WithActivities(activities.WithComms(commsStore))
+		worker.WithActivities(activities)
 		log.Printf("%s: action-lifecycle activities registered on the worker", branding.CLI)
 	}
 	archiveActivities, err := buildArchiveActivities(cfg, handler)
@@ -386,7 +386,7 @@ func buildBackendActionResolver(cfg config.Config) (*action.ActionResolver, erro
 // handler + write-side action resolver) from the tenant config, or nil when no
 // write bindings are configured. Reuses the capability config path — the
 // action_adapters/action_bindings keys can share the same file (08 §4).
-func buildActionActivities(cfg config.Config, handler *aggregate.Handler) (*temporal.Activities, error) {
+func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsStore *comms.Store) (*temporal.Activities, error) {
 	path := cfg.Capability.ConfigPath
 	if path == "" {
 		return nil, nil
@@ -402,7 +402,7 @@ func buildActionActivities(cfg config.Config, handler *aggregate.Handler) (*temp
 	if err != nil {
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
-	return temporal.NewActivities(handler, resolver), nil
+	return temporal.NewActivities(handler, resolver, commsStore), nil
 }
 
 // buildArchiveActivities constructs the post-conclusion export activities: the

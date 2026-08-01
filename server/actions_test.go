@@ -335,7 +335,7 @@ func TestExpiryTimer_RaceResolvesForTheHuman(t *testing.T) {
 	}
 
 	// The timer fires late: benign no-op, approved status stands.
-	acts := temporal.NewActivities(testHandler, nil)
+	acts := temporal.NewActivities(testHandler, nil, nil)
 	if err := acts.EmitExpired(context.Background(), temporal.EmitExpiredInput{
 		ActionID:    actionID.String(),
 		AggregateID: invID.String(),

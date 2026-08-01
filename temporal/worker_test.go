@@ -99,3 +99,21 @@ func TestWorkerHealthBeforeStart(t *testing.T) {
 		t.Errorf("Stop before Start returned error: %v", err)
 	}
 }
+
+// TestActivityStructsRegisterCleanly: Worker.Start registers the activity
+// structs wholesale (RegisterActivity picks up every exported method), and the
+// SDK panics at boot on any exported method that isn't a valid activity
+// signature — a stray builder/helper method would take the whole stack down.
+// The test environment runs the same registry validation, so it fails here in
+// the fast suite instead. Fast — no dev server.
+func TestActivityStructsRegisterCleanly(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("activity struct has an exported method with a non-activity signature: %v", r)
+		}
+	}()
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(NewActivities(nil, nil, nil))
+	env.RegisterActivity(NewArchiveActivities(nil, nil, ""))
+}

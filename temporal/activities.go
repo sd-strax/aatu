@@ -32,17 +32,14 @@ type Activities struct {
 	comms    *comms.Store
 }
 
-// NewActivities constructs the activity set.
-func NewActivities(handler *aggregate.Handler, resolver *action.ActionResolver) *Activities {
-	return &Activities{handler: handler, resolver: resolver}
-}
-
-// WithComms attaches the comms-thread store (Phase F): a SUCCEEDED notify.*
-// result opens (or, via thread_ref, extends) its comms thread. Nil-safe —
-// without it, results record exactly as before.
-func (a *Activities) WithComms(store *comms.Store) *Activities {
-	a.comms = store
-	return a
+// NewActivities constructs the activity set. comms (Phase F) may be nil —
+// with it, a SUCCEEDED notify.* result opens (or, via thread_ref, extends) its
+// comms thread; without it, results record exactly as before. It is a
+// constructor parameter rather than a builder method because the worker
+// registers this struct wholesale (RegisterActivity), and Temporal panics on
+// any exported method that isn't a valid activity signature.
+func NewActivities(handler *aggregate.Handler, resolver *action.ActionResolver, comms *comms.Store) *Activities {
+	return &Activities{handler: handler, resolver: resolver, comms: comms}
 }
 
 // CheckDispatched is the dispatch-ledger guard (08 §6b): it reports whether the

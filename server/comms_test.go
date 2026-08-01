@@ -32,7 +32,7 @@ func TestComms_NotifyResultOpensThread(t *testing.T) {
 	}
 	invID := activeInvestigation(t)
 	store := comms.NewStore(testDB)
-	acts := temporal.NewActivities(testHandler, nil).WithComms(store)
+	acts := temporal.NewActivities(testHandler, nil, store)
 
 	env := func() aggregate.Envelope {
 		return newEnvelope(invID, aggregate.Actor{PrincipalID: "test-subject"}, commandNow())
