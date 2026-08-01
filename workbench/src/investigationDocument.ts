@@ -733,7 +733,9 @@ export class InvestigationDocuments {
     const clipped = statement.length > 60 ? statement.slice(0, 59) + "…" : statement;
     const instruction = `⚡ Propose tests: for the hypothesis "${statement}" (${hypothesisRef}), `
       + "record the falsifiable predictions that would decide it — one prediction per test, "
-      + "each with a concrete test query against the available capability verbs. Prove it or break it.";
+      + "each with a concrete test query against the available capability verbs. Prove it or break it. "
+      + "Record them with the tools ONLY; keep your final message to one sentence and do not "
+      + "restate the predictions in prose — the tracker renders them.";
     await this.runTurn(id, panel, instruction, { label: `⚡ propose tests · ${clipped}` });
   }
 
@@ -1148,19 +1150,25 @@ export class InvestigationDocuments {
     details.aside > summary::-webkit-details-marker { display: none; }
     details.aside > summary:hover { color: var(--text); }
     details.aside .asidebody { padding: 4px 0 2px; }
-    /* the suggested next move (02 §2.9): what would decide this, one click to stage */
-    .nextmove {
-      border: 1px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
-      background: color-mix(in srgb, var(--he-primary) 8%, transparent);
-      border-radius: var(--r); padding: 6px 10px; margin: 2px 0 8px;
-      font-size: var(--fs-sm); cursor: pointer;
-      transition: background var(--dur-fast) var(--ease);
+    /* clamped statements: the rail is a scoreboard, not an essay — click expands */
+    .clamp {
+      display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+      cursor: pointer;
     }
-    .nextmove:hover { background: color-mix(in srgb, var(--he-primary) 14%, transparent); }
-    .nextmove .nextlabel {
+    .clamp.c2 { -webkit-line-clamp: 2; }
+    .clamp.c4 { -webkit-line-clamp: 4; }
+    .clamp.expanded { -webkit-line-clamp: unset; display: inline; }
+    /* the suggested next move (02 §2.9), marked IN PLACE — one surface */
+    .predictions li.next {
+      border-left-color: var(--he-primary);
+      background: color-mix(in srgb, var(--he-primary) 6%, transparent);
+    }
+    .nexttag {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.07em; color: var(--he-primary-soft);
+      letter-spacing: 0.07em; color: var(--he-primary-soft); margin: 0 4px;
     }
+    .hyphead { display: flex; align-items: baseline; gap: 6px; }
+    .hyphead .statement { flex: 1; min-width: 0; }
     .cardmeta { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; word-break: break-word; }
     .decide { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
     .decide button { font-size: var(--fs-sm); padding: 3px 10px; }
@@ -2437,37 +2445,27 @@ export class InvestigationDocuments {
       }
 
       // The suggested next move: the first UNTESTED prediction under a live
-      // (PROPOSED/OPEN) hypothesis — earliest first, matching reading order.
-      let suggested = null;
+      // hypothesis. Marked IN PLACE on its row (a "next" tag + primary Test
+      // this) — one authoritative surface, emphasis instead of repetition.
+      let suggestedId = null;
       for (const h of hs) {
         if (h.status !== "PROPOSED" && h.status !== "OPEN") continue;
         for (const p of h.predictions || []) {
-          if (p.status === "UNTESTED") { suggested = p; break; }
+          if (p.status === "UNTESTED") { suggestedId = p.id; break; }
         }
-        if (suggested) break;
-      }
-      if (suggested) {
-        const s = document.createElement("div");
-        s.className = "nextmove";
-        const label = document.createElement("span");
-        label.className = "nextlabel";
-        label.textContent = "next: ";
-        const text = document.createElement("span");
-        text.className = "nexttext";
-        text.textContent = suggested.statement;
-        s.append(label, text);
-        s.title = "Stage this test in the composer (you send it)";
-        s.addEventListener("click", () => stageInComposer(predictionTestText(suggested)));
-        box.appendChild(s);
+        if (suggestedId) break;
       }
 
       for (const h of hs) {
         const card = document.createElement("div");
         card.className = "card";
         const head = document.createElement("div");
+        head.className = "hyphead";
         const st = document.createElement("span");
-        st.className = "statement";
+        st.className = "statement clamp c4";
         st.textContent = h.statement;
+        st.title = h.statement;
+        st.addEventListener("click", () => st.classList.toggle("expanded"));
         const badge = document.createElement("span");
         badge.className = badgeClass(h.status);
         badge.textContent = h.status;
@@ -2515,15 +2513,27 @@ export class InvestigationDocuments {
           ul.className = "predictions";
           for (const p of preds) {
             const li = document.createElement("li");
+            const isNext = p.id === suggestedId;
+            if (isNext) li.classList.add("next");
             const ptext = document.createElement("span");
+            ptext.className = "clamp c2";
             ptext.textContent = p.statement;
+            ptext.title = p.statement;
+            ptext.addEventListener("click", () => ptext.classList.toggle("expanded"));
+            li.appendChild(ptext);
+            if (isNext) {
+              const tag = document.createElement("span");
+              tag.className = "nexttag";
+              tag.textContent = "next";
+              li.appendChild(tag);
+            }
             const pbadge = document.createElement("span");
             pbadge.className = badgeClass(p.status);
             pbadge.textContent = p.status;
-            li.append(ptext, pbadge);
+            li.appendChild(pbadge);
             if (p.status === "UNTESTED") {
               const test = document.createElement("button");
-              test.className = "testbtn";
+              test.className = "testbtn" + (isNext ? " primary" : "");
               test.textContent = "Test this";
               test.title = p.testQuery && p.testQuery.queryText
                 ? "Stage the declared test in the composer: " + p.testQuery.queryText
