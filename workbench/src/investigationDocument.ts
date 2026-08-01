@@ -846,15 +846,23 @@ export class InvestigationDocuments {
       border: 3px solid transparent; background-clip: content-box; border-radius: var(--r-pill);
     }
 
-    /* ---- two-region layout: conversation + state rail ---- */
+    /* ---- two-region layout: conversation + grip + state rail ---- */
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-    #rail {
-      flex: none; width: 272px; min-width: 200px;
+    #railGrip {
+      flex: none; width: 5px; cursor: col-resize;
       border-left: 1px solid var(--border);
+      transition: background var(--dur-fast) var(--ease);
+    }
+    #railGrip:hover, body.railDragging #railGrip {
+      background: color-mix(in srgb, var(--he-primary) 40%, transparent);
+    }
+    body.railDragging { cursor: col-resize; user-select: none; }
+    #rail {
+      flex: none; width: var(--rail-w, 272px); min-width: 200px; max-width: 60vw;
       overflow-y: auto; padding: var(--sp-3) var(--sp-3) var(--sp-4);
       background: var(--vscode-sideBar-background, transparent);
     }
-    @media (max-width: 640px) { #rail { display: none; } }
+    @media (max-width: 640px) { #rail, #railGrip { display: none; } }
 
     header {
       padding: var(--sp-3) var(--sp-5) var(--sp-2);
@@ -1071,6 +1079,13 @@ export class InvestigationDocuments {
       margin: 4px 0; font-size: var(--fs-sm);
     }
     .testbtn { font-size: var(--fs-xs); padding: 0 8px; margin-left: 6px; }
+    /* the staged-question affordance: reads as the suggested move, not chrome */
+    button.askdecide {
+      color: var(--he-primary-soft);
+      border: 1px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
+      background: color-mix(in srgb, var(--he-primary) 8%, transparent);
+    }
+    button.askdecide:hover { background: color-mix(in srgb, var(--he-primary) 15%, transparent); }
     /* the suggested next move (02 §2.9): what would decide this, one click to stage */
     .nextmove {
       border: 1px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
@@ -1317,6 +1332,7 @@ export class InvestigationDocuments {
     </div>
   </div>
 
+  <div id="railGrip" title="Drag to resize"></div>
   <aside id="rail">
     <!-- The rail mirrors the epistemic workflow: what we believe (hypotheses,
          the scoreboard) → what grounds it (pinned evidence). Approvals are an
@@ -2376,7 +2392,8 @@ export class InvestigationDocuments {
         decide.className = "decide";
         if (h.status === "PROPOSED") {
           const ack = document.createElement("button");
-          ack.textContent = "Acknowledge";
+          ack.className = "primary";
+          ack.textContent = "✓ Acknowledge";
           ack.title = "Take ownership of this AI-proposed line of inquiry (PROPOSED → OPEN). A human act — the engine refuses it from the AI.";
           ack.addEventListener("click", () => {
             ack.disabled = true;
@@ -2387,10 +2404,12 @@ export class InvestigationDocuments {
         // A live hypothesis with nothing left to test is a dead end the
         // scoreboard framing exists to prevent (02 §2.9): stage the
         // "what would decide this?" question so the agent declares
-        // falsifiable predictions — staged, never auto-fired.
+        // falsifiable predictions — staged, never auto-fired. Styled as the
+        // suggested-move affordance, not a neutral button.
         if (live && !hasUntested) {
           const ask = document.createElement("button");
-          ask.textContent = "What would decide this?";
+          ask.className = "askdecide";
+          ask.textContent = "⚡ What would decide this?";
           ask.title = "Stage a request for falsifiable predictions (with concrete test queries) in the composer — you send it";
           ask.addEventListener("click", () => stageInComposer(
             'For the hypothesis "' + h.statement + '": declare the falsifiable predictions that would decide it, each with a concrete test query against the available capability verbs.'));
@@ -2897,6 +2916,37 @@ export class InvestigationDocuments {
     }
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
     $("exportBtn").addEventListener("click", () => vscode.postMessage({ type: "export.open" }));
+
+    // ---- resizable rail ----------------------------------------------------
+    // Drag the grip to size the rail; the width persists in webview state so
+    // a reload (and retainContextWhenHidden round-trips) keep it.
+    (function () {
+      const saved = vscode.getState();
+      if (saved && Number.isFinite(saved.railW)) {
+        document.documentElement.style.setProperty("--rail-w", saved.railW + "px");
+      }
+      const grip = $("railGrip");
+      let dragging = false;
+      grip.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        document.body.classList.add("railDragging");
+        grip.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+      grip.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const w = Math.min(Math.max(window.innerWidth - e.clientX, 200), Math.floor(window.innerWidth * 0.6));
+        document.documentElement.style.setProperty("--rail-w", w + "px");
+      });
+      grip.addEventListener("pointerup", (e) => {
+        if (!dragging) return;
+        dragging = false;
+        document.body.classList.remove("railDragging");
+        grip.releasePointerCapture(e.pointerId);
+        const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--rail-w"), 10);
+        if (Number.isFinite(w)) vscode.setState({ ...(vscode.getState() || {}), railW: w });
+      });
+    })();
 
     // ---- the reusable prompt card ------------------------------------------
     // One in-context modal for every text-input action — never a top-of-window
