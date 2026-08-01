@@ -2365,7 +2365,7 @@ export class InvestigationDocuments {
       title: "New hypothesis",
       label: "The claim to test — often the ALTERNATE explanation",
       placeholder: "e.g. The svc_backup RDP logon was legitimate maintenance by the backup team, not lateral movement.",
-      helper: "Recorded as yours, OPEN immediately. Then use “What would decide this?” to get falsifiable predictions for it — competing hypotheses are decided by evidence, not argument.",
+      helper: "Recorded as yours, OPEN immediately. Then hit “Propose tests” on it — competing hypotheses are decided by evidence, not argument.",
       confirm: "Record hypothesis",
       onConfirm: (statement) => vscode.postMessage({ type: "hyp.new", statement }),
     }));
@@ -2438,17 +2438,17 @@ export class InvestigationDocuments {
           decide.appendChild(ack);
         }
         // A live hypothesis with nothing left to test is a dead end the
-        // scoreboard framing exists to prevent (02 §2.9): stage the
-        // "what would decide this?" question so the agent declares
-        // falsifiable predictions — staged, never auto-fired. Styled as the
-        // suggested-move affordance, not a neutral button.
+        // scoreboard framing exists to prevent (02 §2.9): stage an IMPERATIVE
+        // instruction — the analyst commands, the AI produces the falsifiable
+        // predictions. Staged, never auto-fired; styled as the suggested-move
+        // affordance, not a neutral button.
         if (live && !hasUntested) {
           const ask = document.createElement("button");
           ask.className = "askdecide";
-          ask.textContent = "⚡ What would decide this?";
-          ask.title = "Stage a request for falsifiable predictions (with concrete test queries) in the composer — you send it";
+          ask.textContent = "⚡ Propose tests";
+          ask.title = "Stage the order in the composer: propose falsifiable tests (with concrete queries) for this hypothesis — you review and send";
           ask.addEventListener("click", () => stageInComposer(
-            'For the hypothesis "' + h.statement + '": declare the falsifiable predictions that would decide it, each with a concrete test query against the available capability verbs.'));
+            'Propose falsifiable tests for: "' + h.statement + '" — one prediction per test, each with a concrete query against the available verbs. Prove it or break it.'));
           decide.appendChild(ask);
         }
         if (decide.childElementCount) card.appendChild(decide);
