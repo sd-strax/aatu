@@ -1177,6 +1177,14 @@ export class InvestigationDocuments {
       margin: 4px 0; font-size: var(--fs-sm);
     }
     .testbtn { font-size: var(--fs-xs); padding: 0 8px; margin-left: 6px; }
+    /* prediction controls: badge · chips · action, action always right-anchored */
+    .predrow {
+      display: flex; flex-wrap: wrap; align-items: center;
+      gap: 3px 6px; margin-top: 4px;
+    }
+    .predrow .refchip { margin: 0; }
+    .predrow .badge { margin-left: 0; }
+    .predrow .predact { margin-left: auto; }
     .railadd {
       font-size: var(--fs-xs); padding: 0 7px; margin-left: 5px;
       text-transform: none; letter-spacing: normal; vertical-align: 1px;
@@ -2605,34 +2613,40 @@ export class InvestigationDocuments {
             ptext.title = p.statement;
             ptext.addEventListener("click", () => ptext.classList.toggle("expanded"));
             li.appendChild(ptext);
+
+            // One structured controls row per prediction: status badge, then
+            // evidence chips, action anchored at the right edge — the same
+            // place on every row, never wherever the text happened to wrap.
+            const row = document.createElement("div");
+            row.className = "predrow";
             const pbadge = document.createElement("span");
             pbadge.className = badgeClass(p.status);
             pbadge.textContent = p.status;
-            li.appendChild(pbadge);
+            row.appendChild(pbadge);
+            // The decisive outcomes cite what was observed — every test-result
+            // ref opens (02 §2.8).
+            const trefs = p.testResultRefs || [];
+            for (const r of trefs) row.appendChild(refChip(r));
             if (p.status === "UNTESTED") {
               const test = document.createElement("button");
-              test.className = "testbtn";
+              test.className = "testbtn predact";
               test.textContent = "Test this";
               test.title = p.testQuery && p.testQuery.queryText
                 ? "Stage just this test in the composer: " + p.testQuery.queryText
                 : "Stage a test of just this prediction in the composer";
               test.addEventListener("click", () => stageInComposer(predictionTestText(p)));
-              li.appendChild(test);
-            }
-            // The decisive outcomes cite what was observed — every test-result
-            // ref opens (02 §2.8), and a decided prediction is pinnable as
-            // evidence: statement + outcome + its citations, prefilled. The
-            // pin cites the PREDICTION NODE too, so an active pin is
-            // detectable and the affordance goes inert instead of minting
-            // duplicates (un-pin brings it back — supersession, not deletion).
-            const trefs = p.testResultRefs || [];
-            for (const r of trefs) li.appendChild(refChip(r));
-            if (trefs.length && p.status !== "UNTESTED") {
+              row.appendChild(test);
+            } else if (trefs.length) {
+              // A decided prediction is pinnable: statement + outcome + its
+              // citations, prefilled. The pin cites the PREDICTION NODE too,
+              // so an active pin is detectable and the affordance goes inert
+              // instead of minting duplicates (un-pin brings it back —
+              // supersession, not deletion).
               const alreadyPinned = lastPins.some((x) => !x.superseded && (
                 (x.inputRefs || []).includes(p.id) ||
                 trefs.every((r) => (x.inputRefs || []).includes(r))));
               const pin = document.createElement("button");
-              pin.className = "pincta testbtn";
+              pin.className = "pincta testbtn predact";
               if (alreadyPinned) {
                 pin.textContent = "📌 pinned";
                 pin.disabled = true;
@@ -2643,8 +2657,9 @@ export class InvestigationDocuments {
                 pin.addEventListener("click", () =>
                   openPinDialog([p.id].concat(trefs), "[" + p.status + "] " + p.statement));
               }
-              li.appendChild(pin);
+              row.appendChild(pin);
             }
+            li.appendChild(row);
             ul.appendChild(li);
           }
           card.appendChild(ul);
