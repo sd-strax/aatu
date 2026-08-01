@@ -83,6 +83,7 @@ type InboundMessage =
   | { type: "hyp.ack"; hypothesisRef: string }
   | { type: "hyp.new"; statement: string }
   | { type: "hyp.proposeTests"; hypothesisRef: string; statement: string }
+  | { type: "hyp.runTests"; hypothesisRef: string; statement: string }
   | { type: "enablement.apply"; adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] }
   | { type: "comms.act"; threadId: string; verb: "ack" | "done" }
   | { type: "comms.snooze"; threadId: string; hours: number }
@@ -158,6 +159,8 @@ export class InvestigationDocuments {
         void this.newHypothesis(id, panel, msg.statement);
       } else if (msg.type === "hyp.proposeTests") {
         void this.proposeTests(id, panel, msg.hypothesisRef, msg.statement);
+      } else if (msg.type === "hyp.runTests") {
+        void this.runTests(id, panel, msg.hypothesisRef, msg.statement);
       } else if (msg.type === "enablement.apply") {
         void this.applyEnablement(id, panel, msg);
       } else if (msg.type === "comms.act") {
@@ -739,6 +742,21 @@ export class InvestigationDocuments {
     await this.runTurn(id, panel, instruction, { label: `⚡ propose tests · ${clipped}` });
   }
 
+  /**
+   * Run the untested predictions — the execute half of the drivable loop.
+   * They are independent claims, so the agent runs them in parallel where
+   * possible; outcomes must cite what was observed (the aggregate refuses a
+   * CONFIRMED/DISCONFIRMED without test_result_refs).
+   */
+  private async runTests(id: string, panel: vscode.WebviewPanel, hypothesisRef: string, statement: string): Promise<void> {
+    const clipped = statement.length > 60 ? statement.slice(0, 59) + "…" : statement;
+    const instruction = `⚡ Run tests: execute the UNTESTED predictions under the hypothesis "${statement}" (${hypothesisRef}). `
+      + "They are independent — run their declared test queries in parallel where possible, then record each "
+      + "outcome (CONFIRMED / DISCONFIRMED / INCONCLUSIVE) citing the observed evidence as test_result_refs. "
+      + "Keep your final message to one or two sentences on what was decisive — do not restate the outcomes; the tracker renders them.";
+    await this.runTurn(id, panel, instruction, { label: `⚡ run tests · ${clipped}` });
+  }
+
   /** Drive one analyst turn through the transport, streaming progress to the webview. */
   private async runTurn(id: string, panel: vscode.WebviewPanel, text: string, aside?: { label: string }): Promise<void> {
     if (aside) {
@@ -1172,15 +1190,6 @@ export class InvestigationDocuments {
     .clamp.c2 { -webkit-line-clamp: 2; }
     .clamp.c4 { -webkit-line-clamp: 4; }
     .clamp.expanded { -webkit-line-clamp: unset; display: inline; }
-    /* the suggested next move (02 §2.9), marked IN PLACE — one surface */
-    .predictions li.next {
-      border-left-color: var(--he-primary);
-      background: color-mix(in srgb, var(--he-primary) 6%, transparent);
-    }
-    .nexttag {
-      font-size: 10px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.07em; color: var(--he-primary-soft); margin: 0 4px;
-    }
     .hyphead { display: flex; align-items: baseline; gap: 6px; }
     .hyphead .statement { flex: 1; min-width: 0; }
     .cardmeta { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; word-break: break-word; }
@@ -2323,13 +2332,18 @@ export class InvestigationDocuments {
       // An aside turn (the ⚡ marker on its user line) reconstructs COLLAPSED —
       // the same record, the same quieter lens it had live.
       let wasAside = false;
+      let asideLabel = "⚡ aside";
 
       const rows = new Map(); // tool call id → row, for result matching
       for (const line of String(t.body).split("\\n")) {
         let m;
         if ((m = line.match(/^\\[user\\] ([^]*)$/))) {
           const utext = unescapeT(m[1]);
-          if (utext.indexOf("⚡ Propose tests:") === 0) wasAside = true;
+          if (utext.indexOf("⚡ ") === 0) {
+            wasAside = true;
+            const colon = utext.indexOf(":");
+            asideLabel = (colon > 0 && colon < 40 ? utext.slice(0, colon) : utext.slice(0, 24)).toLowerCase();
+          }
           const u = document.createElement("div");
           u.className = "msg user";
           const b = document.createElement("span");
@@ -2359,7 +2373,7 @@ export class InvestigationDocuments {
         const det = document.createElement("details");
         det.className = "aside";
         const sum = document.createElement("summary");
-        sum.textContent = "⚡ propose tests · committed aside"
+        sum.textContent = asideLabel + " · committed aside"
           + (t.occurredAt ? " · " + new Date(t.occurredAt).toLocaleString() : "");
         det.append(sum, wrap);
         return det;
@@ -2491,18 +2505,6 @@ export class InvestigationDocuments {
         return;
       }
 
-      // The suggested next move: the first UNTESTED prediction under a live
-      // hypothesis. Marked IN PLACE on its row (a "next" tag + primary Test
-      // this) — one authoritative surface, emphasis instead of repetition.
-      let suggestedId = null;
-      for (const h of hs) {
-        if (h.status !== "PROPOSED" && h.status !== "OPEN") continue;
-        for (const p of h.predictions || []) {
-          if (p.status === "UNTESTED") { suggestedId = p.id; break; }
-        }
-        if (suggestedId) break;
-      }
-
       for (const h of hs) {
         const card = document.createElement("div");
         card.className = "card";
@@ -2535,56 +2537,60 @@ export class InvestigationDocuments {
           });
           decide.appendChild(ack);
         }
-        // An OWNED hypothesis with nothing left to test is a dead end the
-        // scoreboard framing exists to prevent (02 §2.9). One click fires the
-        // scoped aside turn — the analyst's order, executed now; the
-        // predictions land back on this card. Sequencing is deliberate: on
-        // PROPOSED the one decision is ownership (Acknowledge); the drive
-        // affordance appears once the hypothesis is OPEN.
-        if (h.status === "OPEN" && !hasUntested) {
-          const ask = document.createElement("button");
-          ask.className = "askdecide";
-          ask.textContent = "⚡ Propose tests";
-          ask.title = "Runs a scoped agent turn: record the falsifiable predictions that would decide this. Lands as a collapsed aside in the conversation; predictions appear here.";
-          ask.addEventListener("click", () => {
-            if (sendBtn.disabled) return; // a turn is already running
-            ask.disabled = true;
-            ask.textContent = "⚡ proposing…";
-            vscode.postMessage({ type: "hyp.proposeTests", hypothesisRef: h.id, statement: h.statement });
-          });
-          decide.appendChild(ask);
+        // The drive affordances (02 §2.9), sequenced: on PROPOSED the one
+        // decision is ownership (Acknowledge). Once OPEN with nothing to
+        // test → Propose tests; with untested predictions → Run tests, which
+        // executes them ALL in one aside (they are independent — the per-row
+        // Test this stays for running just one).
+        if (h.status === "OPEN") {
+          const mkAside = (label, working, title, type) => {
+            const b = document.createElement("button");
+            b.className = "askdecide";
+            b.textContent = label;
+            b.title = title;
+            b.addEventListener("click", () => {
+              if (sendBtn.disabled) return; // a turn is already running
+              b.disabled = true;
+              b.textContent = working;
+              vscode.postMessage({ type, hypothesisRef: h.id, statement: h.statement });
+            });
+            decide.appendChild(b);
+          };
+          if (!hasUntested) {
+            mkAside("⚡ Propose tests", "⚡ proposing…",
+              "Runs a scoped agent turn: record the falsifiable predictions that would decide this. Lands as a collapsed aside; predictions appear here.",
+              "hyp.proposeTests");
+          } else {
+            mkAside("⚡ Run tests", "⚡ testing…",
+              "Runs the untested predictions — they are independent, so they run in parallel where possible. Outcomes and evidence land back on these rows.",
+              "hyp.runTests");
+          }
         }
         if (decide.childElementCount) card.appendChild(decide);
         if (preds.length) {
           const ul = document.createElement("ul");
           ul.className = "predictions";
           for (const p of preds) {
+            // Predictions are INDEPENDENT, parallel-testable claims — every
+            // row renders as an equal peer; no implied ordering.
             const li = document.createElement("li");
-            const isNext = p.id === suggestedId;
-            if (isNext) li.classList.add("next");
             const ptext = document.createElement("span");
             ptext.className = "clamp c2";
             ptext.textContent = p.statement;
             ptext.title = p.statement;
             ptext.addEventListener("click", () => ptext.classList.toggle("expanded"));
             li.appendChild(ptext);
-            if (isNext) {
-              const tag = document.createElement("span");
-              tag.className = "nexttag";
-              tag.textContent = "next";
-              li.appendChild(tag);
-            }
             const pbadge = document.createElement("span");
             pbadge.className = badgeClass(p.status);
             pbadge.textContent = p.status;
             li.appendChild(pbadge);
             if (p.status === "UNTESTED") {
               const test = document.createElement("button");
-              test.className = "testbtn" + (isNext ? " primary" : "");
+              test.className = "testbtn";
               test.textContent = "Test this";
               test.title = p.testQuery && p.testQuery.queryText
-                ? "Stage the declared test in the composer: " + p.testQuery.queryText
-                : "Stage a test of this prediction in the composer";
+                ? "Stage just this test in the composer: " + p.testQuery.queryText
+                : "Stage a test of just this prediction in the composer";
               test.addEventListener("click", () => stageInComposer(predictionTestText(p)));
               li.appendChild(test);
             }
