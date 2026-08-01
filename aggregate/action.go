@@ -239,6 +239,33 @@ type actionState struct {
 	PrimaryApprover       string
 	RequiredMode          string   // Gate 2 requirement, frozen at request time
 	SecondaryApproverPool []string // who may be the secondary approver (TWO_PARTY)
+	ActionType            string   // e.g. "notify.slack" — for human-readable summaries
+	TargetLabel           string   // e.g. "#it-operations (+2)" — the target set, condensed
+}
+
+// label renders the action as "<type> → <target>" (or just the type when
+// target-less), so lifecycle summaries read as the act rather than a UUID.
+func (s actionState) label() string {
+	if s.TargetLabel == "" {
+		return s.ActionType
+	}
+	return s.ActionType + " → " + s.TargetLabel
+}
+
+// targetLabel condenses a target set to its first resolved identifier plus a
+// count of the rest ("#it-operations (+2)"), for summaries.
+func targetLabel(targets []TargetSpec) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	first := targets[0].ResolvedIdentifier
+	if first == "" {
+		first = targets[0].EntityRef
+	}
+	if len(targets) > 1 {
+		return fmt.Sprintf("%s (+%d)", first, len(targets)-1)
+	}
+	return first
 }
 
 // foldActionEvent applies one action event to the per-action state map. Kept
@@ -259,6 +286,7 @@ func foldActionEvent(actions map[uuid.UUID]actionState, e Event) error {
 		set(p.ActionID, actionState{
 			Status: ActionStatusRequested, Tier: p.Tier, IsReversal: p.IsReversal,
 			RequiredMode: p.RequiredMode, SecondaryApproverPool: p.SecondaryApproverPool,
+			ActionType: p.ActionType, TargetLabel: targetLabel(p.Targets),
 		})
 	case EventTypeActionApproved:
 		var p ActionApproved
@@ -706,7 +734,7 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionApproved, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionApproval,
-		fmt.Sprintf("action %s approved (%s/%s)", c.ActionID, c.Authorization.Mode, stage), nil)
+		fmt.Sprintf("%s: approved (%s/%s)", act.label(), c.Authorization.Mode, stage), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -786,7 +814,7 @@ func applyDispatchAction(env Envelope, state aggregateState, c DispatchAction) (
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionDispatched, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionDispatch,
-		fmt.Sprintf("dispatched via %s (%s)", c.Adapter, c.AdapterRequestID), nil)
+		fmt.Sprintf("%s: dispatched via %s", act.label(), c.Adapter), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +846,7 @@ func applyResultAction(env Envelope, state aggregateState, c ResultAction) ([]Ev
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionResulted, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionResult,
-		fmt.Sprintf("action %s: %s", c.ActionID, c.FinalOutcome), nil)
+		fmt.Sprintf("%s: %s", act.label(), c.FinalOutcome), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -848,7 +876,7 @@ func applyReverseAction(env Envelope, state aggregateState, c ReverseAction) ([]
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionReversed, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionReversal,
-		fmt.Sprintf("action %s reversed by %s", c.OriginalActionID, c.ReversingActionID), nil)
+		fmt.Sprintf("%s: reversed", orig.label()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -881,8 +909,7 @@ func applyReversalAttempt(env Envelope, state aggregateState, c RecordReversalAt
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionReversalAttempted, payload)
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionReversal,
-		fmt.Sprintf("reversal of action %s attempted by %s; effect unverified — original stays SUCCEEDED",
-			c.OriginalActionID, c.ReversingActionID), nil)
+		fmt.Sprintf("%s: reversal attempted — effect unverified, original stays SUCCEEDED", orig.label()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -906,7 +933,8 @@ func applyExpireAction(env Envelope, state aggregateState, c ExpireAction) ([]Ev
 		return nil, err
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionExpired, payload)
-	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionExpiry, "action expired", nil)
+	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionExpiry,
+		fmt.Sprintf("%s: expired (no approval before the window closed)", act.label()), nil)
 	if err != nil {
 		return nil, err
 	}

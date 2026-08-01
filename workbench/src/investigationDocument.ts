@@ -39,10 +39,11 @@ type RenderMessage =
   | { type: "pins"; pins: PinRow[] }
   // The comms/external-work threads (Phase F, binding §4).
   | { type: "comms"; threads: CommsThread[] }
-  // The committed conversation, reconstructed: one entry per transcript-
-  // bearing thread act, in sequence order. The webview parses the line-framed
-  // transcript bodies back into the conversation rendering (cold restore).
-  | { type: "history.turns"; turns: { sequenceNo: number; occurredAt: string; body: string }[] }
+  // The committed chronicle (design/ui/00 §7): the full thread in sequence
+  // order — every reasoning turn AND every act (approval, dispatch, result,
+  // pin, verdict, lifecycle). The webview interleaves transcript-bearing turns
+  // (reconstructed from the line-framed bodies) with compact act lines.
+  | { type: "chronicle"; thread: ThreadEntry[]; turns: { sequenceNo: number; occurredAt: string; body: string }[] }
   // A resolved human label for an evidence ref (e.g. "host · WIN-FILE01"),
   // so the chips read as evidence instead of opaque STIX ids.
   | { type: "evidence.label"; ref: string; label: string }
@@ -121,6 +122,10 @@ export class InvestigationDocuments {
   // Full evidence docs, cached for the same reason (null = unfetchable). Feeds
   // both label resolution and the event-time strip without duplicate fetches.
   private readonly docCache = new Map<string, EvidenceDoc | null>();
+  // Committed turn transcripts, keyed by interpretation id — immutable once
+  // committed, so the chronicle re-renders (after every act) reuse them instead
+  // of re-fetching. Shared across panels (content-addressed).
+  private readonly transcriptCache = new Map<string, string>();
 
   constructor(
     private readonly client: BackendClient,
@@ -310,22 +315,6 @@ export class InvestigationDocuments {
         .then((data) => this.post(panel, { type: "enablement", data }))
         .catch(() => this.post(panel, { type: "enablement", data: null }));
 
-      // Cold restore (07 cross-cutting acceptance): fetch the committed
-      // transcripts and let the webview reconstruct the conversation. Bounded
-      // to the most recent turns; failures skip silently (the compact thread
-      // remains the fallback lens).
-      const withTranscript = (thread ?? []).filter((e) => e.hasTranscript).slice(-30);
-      if (withTranscript.length) {
-        const turns = (await Promise.all(withTranscript.map(async (e) => {
-          try {
-            const t = await this.client.transcript(e.interpretationId);
-            return { sequenceNo: e.sequenceNo, occurredAt: e.occurredAt, body: t.body };
-          } catch {
-            return null;
-          }
-        }))).filter((t): t is { sequenceNo: number; occurredAt: string; body: string } => t !== null);
-        void this.post(panel, { type: "history.turns", turns });
-      }
     } catch (err) {
       const message = errText(err);
       this.log.error(`load investigation ${id}: ${message}`);
@@ -358,6 +347,39 @@ export class InvestigationDocuments {
     } catch (err) {
       // A 503 just means the comms layer is off — not a broken panel.
       this.log.debug(`list comms ${id}: ${errText(err)}`);
+    }
+    // The chronicle rides the same refresh cycle: every act (approve, dispatch,
+    // result, pin, verdict) is a sequenced interpretation, so re-fetching the
+    // thread after any rail action keeps the reading surface complete.
+    await this.postChronicle(id, panel);
+  }
+
+  /**
+   * Fetch the thread and its committed turn transcripts and post them as one
+   * chronicle render (design/ui/00 §7 "structural navigation"): the reading
+   * surface interleaves agent turns with the compact act lines (approvals,
+   * dispatches, results, pins, verdicts) in sequence order. Transcripts are
+   * cached, so this is one thread query plus only newly-committed turns.
+   */
+  private async postChronicle(id: string, panel: vscode.WebviewPanel): Promise<void> {
+    try {
+      const thread = await this.client.thread(id);
+      const withTranscript = thread.filter((e) => e.hasTranscript).slice(-40);
+      const turns = (await Promise.all(withTranscript.map(async (e) => {
+        let body = this.transcriptCache.get(e.interpretationId);
+        if (body === undefined) {
+          try {
+            body = (await this.client.transcript(e.interpretationId)).body;
+            this.transcriptCache.set(e.interpretationId, body);
+          } catch {
+            return null;
+          }
+        }
+        return { sequenceNo: e.sequenceNo, occurredAt: e.occurredAt, body };
+      }))).filter((t): t is { sequenceNo: number; occurredAt: string; body: string } => t !== null);
+      void this.post(panel, { type: "chronicle", thread, turns });
+    } catch (err) {
+      this.log.debug(`chronicle ${id}: ${errText(err)}`);
     }
   }
 
@@ -1502,6 +1524,23 @@ export class InvestigationDocuments {
     }
     .seedchip b { color: var(--vscode-foreground); font-weight: 600; }
 
+    /* ---- chronicle act lines: the connective tissue between turns ---- */
+    .actline {
+      display: flex; align-items: baseline; gap: 8px;
+      padding: 3px 4px 3px 8px; margin: 1px 0;
+      font-size: 0.9em; color: var(--vscode-descriptionForeground);
+      border-left: 2px solid var(--border);
+    }
+    .actline.ai { border-left-color: var(--ai, var(--vscode-charts-purple)); }
+    .actline.strong {
+      color: var(--vscode-foreground); font-weight: 600;
+      border-left-color: var(--accent, var(--vscode-textLink-foreground));
+    }
+    .actline .acticon { flex: none; width: 1.1em; text-align: center; opacity: 0.85; }
+    .actline .acttext { flex: 1; min-width: 0; }
+    .actline .acttime { flex: none; font-size: 0.85em; opacity: 0.6; }
+    .actline .refchip { flex: none; }
+
     /* ---- the unseeded (draft) state: root this investigation ---- */
     #draftView {
       position: fixed; inset: 0; z-index: 60; display: flex;
@@ -1564,10 +1603,6 @@ export class InvestigationDocuments {
       <details id="graphWrap" style="display:none">
         <summary id="graphSummary">Evidence graph</summary>
         <div id="graphBox"></div>
-      </details>
-      <details id="historyWrap" style="display:none">
-        <summary id="historySummary">How this investigation got here</summary>
-        <div id="history"></div>
       </details>
       <div id="restored"></div>
       <div id="conversation"></div>
@@ -1705,6 +1740,14 @@ export class InvestigationDocuments {
     // The enablement view (11 §5.1): gap hints + form schemas. Null = layer
     // off or unreachable — hints simply absent.
     let lastEnablement = null;
+
+    // The chronicle (design/ui/00 §7): the committed thread + its turn bodies,
+    // and whether a turn is actively streaming. #restored renders the whole
+    // committed thread (turns interleaved with act lines); #conversation holds
+    // ONLY the in-flight streaming turn, cleared into the chronicle once idle.
+    let lastThread = [];
+    const restoredBodies = new Map(); // sequenceNo → { occurredAt, body }
+    let streaming = false;
 
     // A clickable citation (02 §2.8): every ref opens. The chip reads as
     // evidence — a type label immediately (from the id prefix), enriched with
@@ -2389,112 +2432,10 @@ export class InvestigationDocuments {
       box.appendChild(svg);
     }
 
-    // ---- reasoning history -------------------------------------------------
-    // Frozen at the sequence seen on FIRST load: acts recorded later arrive
-    // through the live conversation (or the rail), so re-fetches never
-    // duplicate what a live turn already rendered below.
-    let historyCutoff = null;
-
-    function renderHistory(entries) {
-      const wrap = $("historyWrap");
-      const box = $("history");
-      if (!entries || !entries.length) {
-        wrap.style.display = "none";
-        return;
-      }
-      if (historyCutoff === null) {
-        historyCutoff = entries[entries.length - 1].sequenceNo;
-      }
-      const shown = entries.filter((e) => e.sequenceNo <= historyCutoff);
-      if (!shown.length) {
-        wrap.style.display = "none";
-        return;
-      }
-      wrap.style.display = "";
-      $("historySummary").textContent =
-        "How this investigation got here · " + shown.length + " step" + (shown.length === 1 ? "" : "s");
-      box.textContent = "";
-      for (const e of shown) {
-        const step = document.createElement("div");
-        step.className = "step" + (e.actor.kind === "AI_DELEGATED" ? " ai" : "");
-
-        const head = document.createElement("div");
-        head.className = "stephead";
-        const who = document.createElement("span");
-        who.className = "who";
-        who.textContent = e.actor.kind === "AI_DELEGATED" ? "AI" + (e.actor.model ? " · " + e.actor.model : "")
-          : e.actor.kind === "SYSTEM" ? "system" : "analyst";
-        who.title = e.actor.principal;
-        const typ = document.createElement("span");
-        typ.textContent = e.interpretationType;
-        const when = document.createElement("span");
-        when.textContent = e.occurredAt ? new Date(e.occurredAt).toLocaleString() : "";
-        head.append(who, typ, when);
-        const extras = [];
-        if (e.confidence) extras.push(e.confidence.toLowerCase() + " confidence");
-        if (e.toolCalls) extras.push(e.toolCalls + " tool call" + (e.toolCalls === 1 ? "" : "s"));
-        if (extras.length) {
-          const ex = document.createElement("span");
-          ex.textContent = extras.join(" · ");
-          head.append(ex);
-        }
-
-        const body = document.createElement("div");
-        body.className = "stepbody md";
-        body.innerHTML = md(e.summary);
-
-        step.append(head, body);
-
-        // The step's citations, as CHIPS (02 §2.8 — every citation opens),
-        // not a count: after a reload, the thread is the only lens on the
-        // conversation, so its refs must stay clickable and pinnable.
-        const allRefs = [];
-        for (const r of (e.inputRefs || []).concat(e.outputRefs || [])) {
-          if (r && !allRefs.includes(r)) allRefs.push(r);
-        }
-        if (allRefs.length) {
-          const refsRow = document.createElement("div");
-          const shown = allRefs.slice(0, 8);
-          for (const r of shown) refsRow.appendChild(refChip(r));
-          if (allRefs.length > shown.length) {
-            const more = document.createElement("span");
-            more.className = "cardmeta";
-            more.textContent = "+" + (allRefs.length - shown.length) + " more";
-            refsRow.appendChild(more);
-          }
-          const pin = document.createElement("button");
-          pin.className = "pincta stepPin";
-          pin.textContent = "📌 Pin…";
-          pin.title = "Pin this step's cited evidence (" + allRefs.length + " refs)";
-          pin.addEventListener("click", () => openPinDialog(allRefs));
-          refsRow.appendChild(pin);
-          step.appendChild(refsRow);
-        }
-
-        // Knowledge provenance chips (02 §2.11): followed vs consulted.
-        if (e.consultedSops && e.consultedSops.length) {
-          const sops = document.createElement("div");
-          for (const c of e.consultedSops) {
-            const chip = document.createElement("span");
-            chip.className = "sopchip" + (c.used ? "" : " consulted");
-            chip.textContent = (c.used ? "followed SOP: " : "consulted: ") + (c.title || c.sopId);
-            chip.title = c.used ? "the turn's text references this SOP" : "retrieved, not applied";
-            sops.appendChild(chip);
-          }
-          step.appendChild(sops);
-        }
-        // The full committed turn record, one click away (02 §2.9's data).
-        if (e.hasTranscript) {
-          const tl = document.createElement("span");
-          tl.className = "translink";
-          tl.textContent = "open transcript";
-          tl.addEventListener("click", () =>
-            vscode.postMessage({ type: "transcript.open", interpretationId: e.interpretationId }));
-          step.appendChild(tl);
-        }
-        box.appendChild(step);
-      }
-    }
+    // ---- reasoning history: superseded by the interleaved chronicle -------
+    // The old collapsed "how this investigation got here" fold rendered acts
+    // in a separate surface; the chronicle (#restored) now interleaves them
+    // with the turns in one reading order, so the fold is gone.
 
     // ---- cold restore: the committed conversation --------------------------
     // Transcripts are line-framed ([user]/[assistant]/[tool_use]/[tool_result]
@@ -2506,14 +2447,74 @@ export class InvestigationDocuments {
       return String(s ?? "").replace(/\\\\n/g, "\\n").replace(/\\\\r/g, "\\r");
     }
 
-    function renderRestored(turns) {
-      if (historyCutoff === null) return;
+    // The act types that render as compact chronicle lines (everything else is
+    // either a full agent turn, rendered from its transcript, or an agent
+    // sub-record — hypothesis/prediction — that already lives in the tracker).
+    const CHRONICLE_ACTS = {
+      "action-request":   { icon: "▹", verb: "requested" },
+      "action-approval":  { icon: "✔", verb: "approved" },
+      "action-rejection": { icon: "✕", verb: "rejected" },
+      "action-dispatch":  { icon: "→", verb: "dispatched" },
+      "action-result":    { icon: "●", verb: "" },
+      "action-reversal":  { icon: "↺", verb: "reversed" },
+      "action-expiry":    { icon: "⌛", verb: "expired" },
+      "evidence-pin":     { icon: "📌", verb: "pinned" },
+      "verdict":          { icon: "⚖", verb: "verdict" },
+      "lifecycle":        { icon: "◆", verb: "" },
+      "conclusion":       { icon: "■", verb: "concluded" },
+    };
+
+    function actLine(e) {
+      const spec = CHRONICLE_ACTS[e.interpretationType];
+      const row = document.createElement("div");
+      row.className = "actline"
+        + (e.actor.kind === "AI_DELEGATED" ? " ai" : "")
+        + (e.interpretationType === "verdict" || e.interpretationType === "conclusion" ? " strong" : "");
+
+      const icon = document.createElement("span");
+      icon.className = "acticon";
+      icon.textContent = spec ? spec.icon : "·";
+      row.appendChild(icon);
+
+      const text = document.createElement("span");
+      text.className = "acttext";
+      // The interpretation's own summary is the authoritative description; the
+      // verb prefixes it only when the summary doesn't already read as a phrase.
+      text.textContent = e.summary || (spec ? spec.verb : e.interpretationType);
+      row.appendChild(text);
+
+      // Any cited refs stay clickable — the chronicle is a working lens, not a
+      // dead log (02 §2.8). Kept to a couple so the line stays a line.
+      const refs = [];
+      for (const r of (e.inputRefs || []).concat(e.outputRefs || [])) {
+        if (r && !refs.includes(r)) refs.push(r);
+      }
+      for (const r of refs.slice(0, 2)) row.appendChild(refChip(r));
+
+      const when = document.createElement("span");
+      when.className = "acttime";
+      when.textContent = e.occurredAt ? new Date(e.occurredAt).toLocaleTimeString() : "";
+      row.appendChild(when);
+      return row;
+    }
+
+    // Render the committed chronicle into #restored: the whole thread in
+    // sequence order, transcript-bearing entries as full turns, act-typed
+    // entries as one-line entries. When no turn is streaming, the live
+    // #conversation has all been committed into this chronicle, so clear it.
+    function renderChronicle() {
       const box = $("restored");
       box.textContent = "";
-      const shown = (turns || [])
-        .filter((t) => t.sequenceNo <= historyCutoff)
-        .sort((a, b) => a.sequenceNo - b.sequenceNo);
-      for (const t of shown) box.appendChild(restoredTurn(t));
+      const entries = (lastThread || []).slice().sort((a, b) => a.sequenceNo - b.sequenceNo);
+      for (const e of entries) {
+        const body = restoredBodies.get(e.sequenceNo);
+        if (body) {
+          box.appendChild(restoredTurn({ sequenceNo: e.sequenceNo, occurredAt: e.occurredAt, body: body.body }));
+        } else if (CHRONICLE_ACTS[e.interpretationType]) {
+          box.appendChild(actLine(e));
+        }
+      }
+      if (!streaming) conversation.textContent = "";
     }
 
     function restoredTurn(t) {
@@ -3611,14 +3612,6 @@ export class InvestigationDocuments {
           $("banner").textContent = "";
           $("title").textContent = msg.investigation.title;
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
-          // Freeze the restore/live boundary at the sequence seen on the FIRST
-          // load — the investigation's last event, not the last thread entry.
-          // A fresh investigation has an empty thread, so keying off entries
-          // left the cutoff unset until the first live turn had already
-          // committed, which then cold-restored it on top of its live copy.
-          if (historyCutoff === null) {
-            historyCutoff = msg.investigation.lastEventSequence ?? 0;
-          }
           lastHyps = msg.hypotheses || [];
           lastCaps = msg.capabilities;
           lastVerdict = msg.investigation.verdict || null;
@@ -3626,7 +3619,6 @@ export class InvestigationDocuments {
           renderSeedChip(msg.investigation.seed);
           renderHypotheses(msg.hypotheses);
           renderCapabilities(msg.capabilities);
-          renderHistory(msg.thread);
           break;
         case "pins":
           renderPins(msg.pins);
@@ -3636,8 +3628,10 @@ export class InvestigationDocuments {
         case "comms":
           renderComms(msg.threads);
           break;
-        case "history.turns":
-          renderRestored(msg.turns);
+        case "chronicle":
+          lastThread = msg.thread || [];
+          for (const t of (msg.turns || [])) restoredBodies.set(t.sequenceNo, { occurredAt: t.occurredAt, body: t.body });
+          renderChronicle();
           break;
         case "evidence.label": {
           // Enrich every chip for this ref, in place (chips added later read
@@ -3669,9 +3663,11 @@ export class InvestigationDocuments {
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');
           break;
         case "turn.start":
+          streaming = true;
           turn = { wrap: el("msg assistant"), seg: null, buf: "", tools: [], reasoningEl: null };
           break;
         case "aside.start": {
+          streaming = true;
           // The "btw" lens: the full exchange streams into a COLLAPSED
           // disclosure — expandable live for anyone watching; the working
           // surface is the tracker, where the results land.
@@ -3723,9 +3719,11 @@ export class InvestigationDocuments {
           renderPending(msg.actions);
           break;
         case "turn.error":
+          streaming = false;
           el("error", esc(msg.message));
           break;
         case "turn.end": {
+          streaming = false;
           if (msg.usage && turn) {
             const u = msg.usage;
             const parts = [];
