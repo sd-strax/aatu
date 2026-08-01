@@ -3594,6 +3594,14 @@ export class InvestigationDocuments {
           $("banner").textContent = "";
           $("title").textContent = msg.investigation.title;
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
+          // Freeze the restore/live boundary at the sequence seen on the FIRST
+          // load — the investigation's last event, not the last thread entry.
+          // A fresh investigation has an empty thread, so keying off entries
+          // left the cutoff unset until the first live turn had already
+          // committed, which then cold-restored it on top of its live copy.
+          if (historyCutoff === null) {
+            historyCutoff = msg.investigation.lastEventSequence ?? 0;
+          }
           lastHyps = msg.hypotheses || [];
           lastCaps = msg.capabilities;
           lastVerdict = msg.investigation.verdict || null;
