@@ -989,6 +989,20 @@ export class InvestigationDocuments {
       overflow-x: auto; white-space: pre;
     }
     .md pre.codeblock code { background: none; padding: 0; }
+    /* markdown pipe tables (ui/02 §2.3 result-table treatment) */
+    .md .tblwrap { overflow-x: auto; margin: var(--sp-2) 0; }
+    .md table.mdtable {
+      border-collapse: collapse; font-size: var(--fs-sm); line-height: 1.45;
+    }
+    .md .mdtable th, .md .mdtable td {
+      border: 1px solid var(--border); padding: 4px 9px;
+      text-align: left; vertical-align: top;
+    }
+    .md .mdtable th {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; background: var(--fill); color: var(--text-2);
+      white-space: nowrap;
+    }
 
     /* tool rows: one-line summary, args behind the disclosure — data is mono */
     details.tool {
@@ -1844,6 +1858,31 @@ export class InvestigationDocuments {
       out = out.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
       return out;
     }
+    // Pipe tables (ui/02 §2.3 result-table treatment). Cells go through
+    // inlineMd, so they stay escape-first like every other path.
+    function mdRow(line) {
+      let s = line.trim();
+      if (s.charAt(0) === "|") s = s.slice(1);
+      if (s.charAt(s.length - 1) === "|") s = s.slice(0, -1);
+      return s.split("|").map((c) => c.trim());
+    }
+    function mdTable(block) {
+      const rows = block.map(mdRow);
+      let header = null, body = rows;
+      if (rows.length >= 2 && rows[1].length > 0 && rows[1].every((c) => /^:?-{2,}:?$/.test(c))) {
+        header = rows[0];
+        body = rows.slice(2);
+      }
+      let html = '<div class="tblwrap"><table class="mdtable">';
+      if (header) {
+        html += "<thead><tr>" + header.map((c) => "<th>" + inlineMd(c) + "</th>").join("") + "</tr></thead>";
+      }
+      html += "<tbody>"
+        + body.map((r) => "<tr>" + r.map((c) => "<td>" + inlineMd(c) + "</td>").join("") + "</tr>").join("")
+        + "</tbody></table></div>";
+      return html;
+    }
+
     function md(src) {
       const lines = String(src ?? "").split("\\n");
       const out = [];
@@ -1867,6 +1906,14 @@ export class InvestigationDocuments {
           // An unclosed fence (mid-stream) still renders as a block — the
           // re-render on the next delta keeps it live.
           out.push('<pre class="codeblock"><code>' + esc(buf.join("\\n")) + "</code></pre>");
+          continue;
+        }
+        if (/^\\s*\\|/.test(line)) {
+          flushPara(); flushList();
+          const block = [line];
+          for (i++; i < lines.length && /^\\s*\\|/.test(lines[i]); i++) block.push(lines[i]);
+          i--;
+          out.push(mdTable(block));
           continue;
         }
         const ul = line.match(/^\\s*[-*•]\\s+(.*)$/);
