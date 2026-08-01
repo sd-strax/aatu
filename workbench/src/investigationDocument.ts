@@ -58,6 +58,9 @@ type RenderMessage =
   | { type: "entity.info"; ref: string; appearances: Appearance[] }
   | { type: "turn.start" }
   | { type: "turn.user"; text: string }
+  // An aside (the "btw" lens): a scoped agent turn rendered as a collapsed
+  // one-liner in the conversation. Same thread of record — different lens.
+  | { type: "aside.start"; label: string }
   | { type: "turn.reasoning"; delta: string }
   | { type: "turn.text"; delta: string }
   | { type: "turn.step"; round: number }
@@ -79,6 +82,7 @@ type InboundMessage =
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "hyp.ack"; hypothesisRef: string }
   | { type: "hyp.new"; statement: string }
+  | { type: "hyp.proposeTests"; hypothesisRef: string; statement: string }
   | { type: "enablement.apply"; adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] }
   | { type: "comms.act"; threadId: string; verb: "ack" | "done" }
   | { type: "comms.snooze"; threadId: string; hours: number }
@@ -152,6 +156,8 @@ export class InvestigationDocuments {
         void this.ackHypothesis(id, panel, msg.hypothesisRef);
       } else if (msg.type === "hyp.new") {
         void this.newHypothesis(id, panel, msg.statement);
+      } else if (msg.type === "hyp.proposeTests") {
+        void this.proposeTests(id, panel, msg.hypothesisRef, msg.statement);
       } else if (msg.type === "enablement.apply") {
         void this.applyEnablement(id, panel, msg);
       } else if (msg.type === "comms.act") {
@@ -716,10 +722,29 @@ export class InvestigationDocuments {
     }
   }
 
+  /**
+   * Fire the propose-tests aside (ui/02 §2.9, the "btw" lens): a scoped
+   * agent turn the analyst ordered with one click. Same audit record as any
+   * turn — the transcript commits to the one thread — but rendered collapsed
+   * in the conversation; the predictions it records land on the tracker.
+   * The "⚡ Propose tests:" prefix doubles as the cold-restore marker.
+   */
+  private async proposeTests(id: string, panel: vscode.WebviewPanel, hypothesisRef: string, statement: string): Promise<void> {
+    const clipped = statement.length > 60 ? statement.slice(0, 59) + "…" : statement;
+    const instruction = `⚡ Propose tests: for the hypothesis "${statement}" (${hypothesisRef}), `
+      + "record the falsifiable predictions that would decide it — one prediction per test, "
+      + "each with a concrete test query against the available capability verbs. Prove it or break it.";
+    await this.runTurn(id, panel, instruction, { label: `⚡ propose tests · ${clipped}` });
+  }
+
   /** Drive one analyst turn through the transport, streaming progress to the webview. */
-  private async runTurn(id: string, panel: vscode.WebviewPanel, text: string): Promise<void> {
-    void this.post(panel, { type: "turn.user", text });
-    void this.post(panel, { type: "turn.start" });
+  private async runTurn(id: string, panel: vscode.WebviewPanel, text: string, aside?: { label: string }): Promise<void> {
+    if (aside) {
+      void this.post(panel, { type: "aside.start", label: aside.label });
+    } else {
+      void this.post(panel, { type: "turn.user", text });
+      void this.post(panel, { type: "turn.start" });
+    }
     try {
       const outcome = await this.transport.turn(id, text, {
         // Both text paths land on the same appendable turn.text case: deltas
@@ -1103,13 +1128,26 @@ export class InvestigationDocuments {
       font-size: var(--fs-xs); padding: 0 7px; margin-left: 5px;
       text-transform: none; letter-spacing: normal; vertical-align: 1px;
     }
-    /* the staged-question affordance: reads as the suggested move, not chrome */
+    /* the drive affordance: reads as the suggested move, not chrome */
     button.askdecide {
       color: var(--he-primary-soft);
       border: 1px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
       background: color-mix(in srgb, var(--he-primary) 8%, transparent);
     }
     button.askdecide:hover { background: color-mix(in srgb, var(--he-primary) 15%, transparent); }
+    /* asides: a scoped turn as a collapsed one-liner (same record, quieter lens) */
+    details.aside {
+      margin: var(--sp-2) 0; max-width: 78ch; font-size: var(--fs-sm);
+      border-left: 2px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
+      padding-left: 10px;
+    }
+    details.aside > summary {
+      cursor: pointer; list-style: none; color: var(--text-2);
+      font-size: var(--fs-sm);
+    }
+    details.aside > summary::-webkit-details-marker { display: none; }
+    details.aside > summary:hover { color: var(--text); }
+    details.aside .asidebody { padding: 4px 0 2px; }
     /* the suggested next move (02 §2.9): what would decide this, one click to stage */
     .nextmove {
       border: 1px dashed color-mix(in srgb, var(--he-primary) 45%, transparent);
@@ -2227,15 +2265,21 @@ export class InvestigationDocuments {
       hdr.textContent = (t.occurredAt ? new Date(t.occurredAt).toLocaleString() + " · " : "") + "committed turn";
       wrap.appendChild(hdr);
 
+      // An aside turn (the ⚡ marker on its user line) reconstructs COLLAPSED —
+      // the same record, the same quieter lens it had live.
+      let wasAside = false;
+
       const rows = new Map(); // tool call id → row, for result matching
       for (const line of String(t.body).split("\\n")) {
         let m;
         if ((m = line.match(/^\\[user\\] ([^]*)$/))) {
+          const utext = unescapeT(m[1]);
+          if (utext.indexOf("⚡ Propose tests:") === 0) wasAside = true;
           const u = document.createElement("div");
           u.className = "msg user";
           const b = document.createElement("span");
           b.className = "bubble";
-          b.textContent = unescapeT(m[1]);
+          b.textContent = utext;
           u.appendChild(b);
           wrap.appendChild(u);
         } else if ((m = line.match(/^\\[assistant\\] ([^]*)$/))) {
@@ -2255,6 +2299,15 @@ export class InvestigationDocuments {
           d.textContent = m[1];
           wrap.appendChild(d);
         }
+      }
+      if (wasAside) {
+        const det = document.createElement("details");
+        det.className = "aside";
+        const sum = document.createElement("summary");
+        sum.textContent = "⚡ propose tests · committed aside"
+          + (t.occurredAt ? " · " + new Date(t.occurredAt).toLocaleString() : "");
+        det.append(sum, wrap);
+        return det;
       }
       return wrap;
     }
@@ -2437,18 +2490,23 @@ export class InvestigationDocuments {
           });
           decide.appendChild(ack);
         }
-        // A live hypothesis with nothing left to test is a dead end the
-        // scoreboard framing exists to prevent (02 §2.9): stage an IMPERATIVE
-        // instruction — the analyst commands, the AI produces the falsifiable
-        // predictions. Staged, never auto-fired; styled as the suggested-move
-        // affordance, not a neutral button.
-        if (live && !hasUntested) {
+        // An OWNED hypothesis with nothing left to test is a dead end the
+        // scoreboard framing exists to prevent (02 §2.9). One click fires the
+        // scoped aside turn — the analyst's order, executed now; the
+        // predictions land back on this card. Sequencing is deliberate: on
+        // PROPOSED the one decision is ownership (Acknowledge); the drive
+        // affordance appears once the hypothesis is OPEN.
+        if (h.status === "OPEN" && !hasUntested) {
           const ask = document.createElement("button");
           ask.className = "askdecide";
           ask.textContent = "⚡ Propose tests";
-          ask.title = "Stage the order in the composer: propose falsifiable tests (with concrete queries) for this hypothesis — you review and send";
-          ask.addEventListener("click", () => stageInComposer(
-            'Propose falsifiable tests for: "' + h.statement + '" — one prediction per test, each with a concrete query against the available verbs. Prove it or break it.'));
+          ask.title = "Runs a scoped agent turn: record the falsifiable predictions that would decide this. Lands as a collapsed aside in the conversation; predictions appear here.";
+          ask.addEventListener("click", () => {
+            if (sendBtn.disabled) return; // a turn is already running
+            ask.disabled = true;
+            ask.textContent = "⚡ proposing…";
+            vscode.postMessage({ type: "hyp.proposeTests", hypothesisRef: h.id, statement: h.statement });
+          });
           decide.appendChild(ask);
         }
         if (decide.childElementCount) card.appendChild(decide);
@@ -3186,6 +3244,22 @@ export class InvestigationDocuments {
         case "turn.start":
           turn = { wrap: el("msg assistant"), seg: null, buf: "", tools: [], reasoningEl: null };
           break;
+        case "aside.start": {
+          // The "btw" lens: the full exchange streams into a COLLAPSED
+          // disclosure — expandable live for anyone watching; the working
+          // surface is the tracker, where the results land.
+          setComposerEnabled(false);
+          const det = document.createElement("details");
+          det.className = "aside";
+          const sum = document.createElement("summary");
+          sum.textContent = msg.label + " · working…";
+          const body = document.createElement("div");
+          body.className = "asidebody";
+          det.append(sum, body);
+          conversation.appendChild(det);
+          turn = { wrap: body, seg: null, buf: "", tools: [], reasoningEl: null, asideSum: sum, asideLabel: msg.label };
+          break;
+        }
         case "turn.reasoning":
           if (turn) {
             if (!turn.reasoningEl) {
@@ -3237,6 +3311,9 @@ export class InvestigationDocuments {
             turn.wrap.appendChild(line);
           }
           closeSeg();
+          if (turn && turn.asideSum) {
+            turn.asideSum.textContent = turn.asideLabel + " · done — see the tracker";
+          }
           turn = null;
           setComposerEnabled(true);
           break;
