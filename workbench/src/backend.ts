@@ -74,6 +74,8 @@ export interface Seed {
   source?: string;
   detectionFindingRef?: string;
   entityRef?: string;
+  /** The human identifier an entity seed was rooted on (hostname/IP/hash). */
+  entityIdentifier?: string;
   hypothesisStatement?: string;
 }
 
@@ -327,9 +329,24 @@ interface RawInvestigation {
   verdict?: { disposition?: string; rationale?: string; verdict_at?: string };
   seed?: {
     type?: string; alert_id?: string; source?: string;
-    detection_finding_ref?: string; entity_ref?: string; hypothesis_statement?: string;
+    detection_finding_ref?: string; entity_ref?: string;
+    entity_identifier?: string; hypothesis_statement?: string;
   };
   seed_summary?: string;
+}
+
+/** Map a raw seed body to the client Seed shape (shared by list/get/create). */
+function mapSeed(s: RawInvestigation["seed"]): Seed | undefined {
+  if (!s || !s.type) return undefined;
+  return {
+    type: s.type,
+    alertId: s.alert_id,
+    source: s.source,
+    detectionFindingRef: s.detection_finding_ref,
+    entityRef: s.entity_ref,
+    entityIdentifier: s.entity_identifier,
+    hypothesisStatement: s.hypothesis_statement,
+  };
 }
 
 /** Raw server.HypothesisView, as served under {hypotheses: [...]}. */
@@ -591,14 +608,7 @@ export class BackendClient {
         rationale: r.verdict.rationale,
         verdictAt: r.verdict.verdict_at ?? "",
       } : undefined,
-      seed: r.seed?.type ? {
-        type: r.seed.type,
-        alertId: r.seed.alert_id,
-        source: r.seed.source,
-        detectionFindingRef: r.seed.detection_finding_ref,
-        entityRef: r.seed.entity_ref,
-        hypothesisStatement: r.seed.hypothesis_statement,
-      } : undefined,
+      seed: mapSeed(r.seed),
       seedSummary: r.seed_summary,
     };
   }
@@ -1013,15 +1023,34 @@ export class BackendClient {
         source: seed.source,
         detection_finding_ref: seed.detectionFindingRef,
         entity_ref: seed.entityRef,
+        entity_identifier: seed.entityIdentifier,
         hypothesis_statement: seed.hypothesisStatement,
       };
     }
-    const r = await this.authedPost<RawInvestigation>("/api/investigations", body);
+    return this.mapCreated(await this.authedPost<RawInvestigation>("/api/investigations", body));
+  }
+
+  /**
+   * POST /api/investigations from a raw analyst-typed seed (design/ui/02 §2.7):
+   * the value the analyst rooted on plus their confirmed kind ("entity" |
+   * "question"). The server classifies, mints the STIX id for an entity, and
+   * derives the title — the workbench never handles ids. Title is optional; the
+   * server derives it from the seed's display line.
+   */
+  async createInvestigationFromInput(value: string, kind: string, title?: string): Promise<InvestigationDetail> {
+    const body: Record<string, unknown> = { seed_input: { value, kind } };
+    if (title) body.title = title;
+    return this.mapCreated(await this.authedPost<RawInvestigation>("/api/investigations", body));
+  }
+
+  private mapCreated(r: RawInvestigation): InvestigationDetail {
     return {
       id: r.aggregate_id,
       title: r.title || "(untitled)",
       state: r.status,
       lastEventSequence: r.last_event_sequence ?? 0,
+      seed: mapSeed(r.seed),
+      seedSummary: r.seed_summary,
     };
   }
 

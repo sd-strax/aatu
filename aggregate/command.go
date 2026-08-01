@@ -50,6 +50,11 @@ type Seed struct {
 
 	// EntitySeed
 	EntityRef string `json:"entity_ref,omitempty"` // STIX SCO id
+	// EntityIdentifier is the human identifier the analyst rooted on (a
+	// hostname, IP, or hash), carried alongside the resolved STIX id so the
+	// seed has a human label before any SCO exists in the store. The ref is
+	// identity; this is display + provenance of what was typed.
+	EntityIdentifier string `json:"entity_identifier,omitempty"`
 
 	// QuestionSeed (the hunt entry: hypothesis-rooted)
 	HypothesisStatement string `json:"hypothesis_statement,omitempty"`
@@ -72,6 +77,9 @@ func (s Seed) Summary() string {
 		}
 		return s.AlertID
 	case SeedEntity:
+		if s.EntityIdentifier != "" {
+			return s.EntityIdentifier
+		}
 		return s.EntityRef
 	case SeedQuestion:
 		return s.HypothesisStatement

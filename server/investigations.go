@@ -45,7 +45,7 @@ func seedBody(s *aggregate.Seed) *SeedBody {
 	return &SeedBody{
 		Type: s.Type, AlertID: s.AlertID, Source: s.Source,
 		DetectionFindingRef: s.DetectionFindingRef, EntityRef: s.EntityRef,
-		HypothesisStatement: s.HypothesisStatement,
+		EntityIdentifier: s.EntityIdentifier, HypothesisStatement: s.HypothesisStatement,
 	}
 }
 
@@ -64,13 +64,28 @@ type SeedBody struct {
 	Source              string `json:"source,omitempty"`
 	DetectionFindingRef string `json:"detection_finding_ref,omitempty"`
 	EntityRef           string `json:"entity_ref,omitempty"`
+	EntityIdentifier    string `json:"entity_identifier,omitempty"`
 	HypothesisStatement string `json:"hypothesis_statement,omitempty"`
 }
 
-// CreateInvestigationRequest is the body of POST /api/investigations.
+// SeedInputBody is the raw analyst-typed seed (design/ui/02 §2.7): the value the
+// analyst rooted on plus their confirmed kind. The server resolves it to a full
+// seed — minting the STIX id for an entity — so the workbench never handles ids.
+// Kind is "entity" | "question" (empty = infer); alerts carry an explicit Seed.
+type SeedInputBody struct {
+	Value string `json:"value"`
+	Kind  string `json:"kind,omitempty"`
+}
+
+// CreateInvestigationRequest is the body of POST /api/investigations. Exactly
+// one of Seed (a fully-formed root, e.g. an alert) or SeedInput (a raw typed
+// value the server resolves) is supplied by the product; both absent is a
+// pre-seed investigation. Title may be empty when a seed is present — it is
+// derived from the seed's display line.
 type CreateInvestigationRequest struct {
-	Title string    `json:"title"`
-	Seed  *SeedBody `json:"seed,omitempty"`
+	Title     string         `json:"title"`
+	Seed      *SeedBody      `json:"seed,omitempty"`
+	SeedInput *SeedInputBody `json:"seed_input,omitempty"`
 }
 
 // CreateInvestigationResponse is the body of a successful POST.
@@ -187,19 +202,39 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Title) == "" {
-		writeJSONError(w, http.StatusBadRequest, "title is required")
-		return
-	}
 
-	cmd := aggregate.CreateInvestigation{Title: req.Title}
-	if req.Seed != nil {
+	cmd := aggregate.CreateInvestigation{Title: strings.TrimSpace(req.Title)}
+	// The workbench's seed surface (design/ui/02 §2.7) sends a raw typed value;
+	// the server resolves it to a full seed here, minting the STIX id for an
+	// entity so the analyst never handles ids. A fully-formed Seed (alerts)
+	// bypasses resolution.
+	switch {
+	case req.SeedInput != nil && req.Seed == nil:
+		resolved, err := resolveSeedInput(b.identityResolver(), req.SeedInput.Value, req.SeedInput.Kind)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "resolve seed: "+err.Error())
+			return
+		}
+		seed := resolved.Seed
+		cmd.Seed = &seed
+		if cmd.Title == "" {
+			cmd.Title = deriveSeedTitle(resolved.Display)
+		}
+	case req.Seed != nil:
 		cmd.Seed = &aggregate.Seed{
 			Type: req.Seed.Type, AlertID: req.Seed.AlertID, Source: req.Seed.Source,
 			DetectionFindingRef: req.Seed.DetectionFindingRef, EntityRef: req.Seed.EntityRef,
-			HypothesisStatement: req.Seed.HypothesisStatement,
+			EntityIdentifier: req.Seed.EntityIdentifier, HypothesisStatement: req.Seed.HypothesisStatement,
+		}
+		if cmd.Title == "" {
+			cmd.Title = deriveSeedTitle(cmd.Seed.Summary())
 		}
 	}
+	if cmd.Title == "" {
+		writeJSONError(w, http.StatusBadRequest, "title is required (or supply a seed to derive it from)")
+		return
+	}
+
 	env := newEnvelope(uuid.New(), aggregate.Actor{PrincipalID: claims.Subject}, commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
@@ -211,9 +246,11 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, CreateInvestigationResponse{
 		InvestigationView: InvestigationView{
 			AggregateID:       res.AggregateID.String(),
-			Title:             req.Title,
+			Title:             cmd.Title,
 			Status:            aggregate.StatusDraft,
 			LastEventSequence: res.NewSequenceNo,
+			Seed:              seedBody(cmd.Seed),
+			SeedSummary:       seedSummaryOf(cmd.Seed),
 		},
 		NewSequenceNo: res.NewSequenceNo,
 	})

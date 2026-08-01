@@ -21,6 +21,12 @@ import { AgentTransport } from "./agentTransport";
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
   | { type: "loading" }
+  // The unseeded state (design/ui/02 §2.7): render the "root this investigation"
+  // surface instead of a document. "seeded" flips back once the seed persists;
+  // "draft.error" reports a failed create without leaving the draft.
+  | { type: "draft" }
+  | { type: "seeded" }
+  | { type: "draft.error"; message: string }
   // capabilities is null when the capability layer is off/unreachable — the
   // rail renders that honestly instead of an empty list. thread is the
   // chronological reasoning history (13 §4); null when its fetch failed.
@@ -73,6 +79,11 @@ type RenderMessage =
 /** What the webview posts back to the extension host. */
 type InboundMessage =
   | { type: "refresh" | "ready" }
+  // The seed surface (design/ui/02 §2.7): the analyst's confirmed root. kind is
+  // "entity" | "question" (the correction toggle); the alert variant carries an
+  // explicit id + source from the "From an alert…" affordance.
+  | { type: "seed.submit"; value: string; kind: string }
+  | { type: "seed.alert"; alertId: string; source: string }
   | { type: "send"; text: string }
   | { type: "action.approve"; actionId: string; tier: string; actionType: string; challenge?: string }
   | { type: "action.reject"; actionId: string; actionType: string; reason: string }
@@ -100,6 +111,10 @@ type InboundMessage =
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
+  // Monotonic key for not-yet-seeded draft panels (design/ui/02 §2.7): a draft
+  // has no investigation id until its seed is typed, so it lives under a
+  // synthetic key until seedDraft re-keys it to the real aggregate id.
+  private draftSeq = 0;
   // Resolved evidence-ref labels, shared across panels — deterministic ids
   // mean a ref resolves to the same thing everywhere, so cache once.
   private readonly labelCache = new Map<string, string>();
@@ -135,64 +150,131 @@ export class InvestigationDocuments {
       { enableScripts: true, retainContextWhenHidden: true },
     );
     this.open.set(id, panel);
+    const ref = { id };
     panel.webview.html = this.html(panel.webview);
+    panel.webview.onDidReceiveMessage((msg: InboundMessage) => this.route(ref, panel, msg));
+    panel.onDidDispose(() => this.open.delete(ref.id));
+  }
 
-    panel.webview.onDidReceiveMessage((msg: InboundMessage) => {
-      if (msg.type === "refresh" || msg.type === "ready") {
+  /**
+   * Open a not-yet-seeded investigation (design/ui/02 §2.7): the same document,
+   * rendered in its unseeded state, where the analyst roots the investigation by
+   * typing a host/IP/hash or a question into the composer. Nothing is persisted
+   * until that first act — which keeps "an investigation always begins from
+   * something concrete" honest without a wizard.
+   */
+  showDraft(): void {
+    const key = `__draft__${++this.draftSeq}`;
+    const panel = vscode.window.createWebviewPanel(
+      "reckon.investigation",
+      "New investigation",
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true },
+    );
+    this.open.set(key, panel);
+    const ref = { id: key };
+    panel.webview.html = this.html(panel.webview);
+    // The webview asks for its initial state via "ready"; a draft key answers
+    // with the unseeded render instead of a load().
+    panel.webview.onDidReceiveMessage((msg: InboundMessage) => this.route(ref, panel, msg));
+    panel.onDidDispose(() => this.open.delete(ref.id));
+  }
+
+  private static isDraft(key: string): boolean {
+    return key.startsWith("__draft__");
+  }
+
+  /** Route one webview message using the panel's current (mutable) id. */
+  private route(ref: { id: string }, panel: vscode.WebviewPanel, msg: InboundMessage): void {
+    const id = ref.id;
+    if (msg.type === "ready" || msg.type === "refresh") {
+      if (InvestigationDocuments.isDraft(id)) {
+        void this.post(panel, { type: "draft" });
+      } else {
         void this.load(id, panel);
-      } else if (msg.type === "send") {
-        void this.runTurn(id, panel, msg.text);
-      } else if (msg.type === "action.approve") {
-        void this.approve(id, panel, msg);
-      } else if (msg.type === "action.reject") {
-        void this.reject(id, panel, msg);
-      } else if (msg.type === "action.rerequest") {
-        void this.rerequest(id, panel, msg);
-      } else if (msg.type === "pin.add") {
-        void this.pinCommit(id, panel, msg.refs, msg.finding);
-      } else if (msg.type === "pin.unpin") {
-        void this.unpin(id, panel, msg.interpretationId, msg.reason);
-      } else if (msg.type === "verdict.submit") {
-        void this.submitVerdict(id, panel, msg);
-      } else if (msg.type === "hyp.ack") {
-        void this.ackHypothesis(id, panel, msg.hypothesisRef);
-      } else if (msg.type === "hyp.new") {
-        void this.newHypothesis(id, panel, msg.statement);
-      } else if (msg.type === "hyp.proposeTests") {
-        void this.proposeTests(id, panel, msg.hypothesisRef, msg.statement);
-      } else if (msg.type === "hyp.runTests") {
-        void this.runTests(id, panel, msg.hypothesisRef, msg.statement);
-      } else if (msg.type === "hyp.decide") {
-        void this.decideHypothesis(id, panel, msg.hypothesisRef, msg.statement);
-      } else if (msg.type === "enablement.apply") {
-        void this.applyEnablement(id, panel, msg);
-      } else if (msg.type === "comms.act") {
-        void this.commsAct(id, panel, msg.threadId, msg.verb);
-      } else if (msg.type === "comms.snooze") {
-        void this.commsSnooze(id, panel, msg.threadId, msg.hours);
-      } else if (msg.type === "comms.followup") {
-        void this.commsFollowUp(id, panel, msg);
-      } else if (msg.type === "lifecycle") {
-        void this.lifecycleTransition(id, panel, msg);
-      } else if (msg.type === "evidence.open") {
-        void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
-      } else if (msg.type === "evidence.resolve") {
-        void this.resolveLabel(panel, msg.ref);
-      } else if (msg.type === "entity.info") {
-        void this.entityInfo(id, panel, msg.ref);
-      } else if (msg.type === "export.open") {
-        void this.openMarkdownExport(id);
-      } else if (msg.type === "copy") {
-        void vscode.env.clipboard.writeText(msg.text);
-      } else if (msg.type === "investigation.open") {
-        void vscode.commands.executeCommand("reckon.openInvestigation", msg.id, msg.title);
-      } else if (msg.type === "transcript.open") {
-        void this.openTranscript(msg.interpretationId);
       }
-    });
-    panel.onDidDispose(() => {
-      this.open.delete(id);
-    });
+    } else if (msg.type === "seed.submit") {
+      void this.seedDraft(ref, panel, { value: msg.value, kind: msg.kind });
+    } else if (msg.type === "seed.alert") {
+      void this.seedDraft(ref, panel, { alertId: msg.alertId, source: msg.source });
+    } else if (msg.type === "send") {
+      void this.runTurn(id, panel, msg.text);
+    } else if (msg.type === "action.approve") {
+      void this.approve(id, panel, msg);
+    } else if (msg.type === "action.reject") {
+      void this.reject(id, panel, msg);
+    } else if (msg.type === "action.rerequest") {
+      void this.rerequest(id, panel, msg);
+    } else if (msg.type === "pin.add") {
+      void this.pinCommit(id, panel, msg.refs, msg.finding);
+    } else if (msg.type === "pin.unpin") {
+      void this.unpin(id, panel, msg.interpretationId, msg.reason);
+    } else if (msg.type === "verdict.submit") {
+      void this.submitVerdict(id, panel, msg);
+    } else if (msg.type === "hyp.ack") {
+      void this.ackHypothesis(id, panel, msg.hypothesisRef);
+    } else if (msg.type === "hyp.new") {
+      void this.newHypothesis(id, panel, msg.statement);
+    } else if (msg.type === "hyp.proposeTests") {
+      void this.proposeTests(id, panel, msg.hypothesisRef, msg.statement);
+    } else if (msg.type === "hyp.runTests") {
+      void this.runTests(id, panel, msg.hypothesisRef, msg.statement);
+    } else if (msg.type === "hyp.decide") {
+      void this.decideHypothesis(id, panel, msg.hypothesisRef, msg.statement);
+    } else if (msg.type === "enablement.apply") {
+      void this.applyEnablement(id, panel, msg);
+    } else if (msg.type === "comms.act") {
+      void this.commsAct(id, panel, msg.threadId, msg.verb);
+    } else if (msg.type === "comms.snooze") {
+      void this.commsSnooze(id, panel, msg.threadId, msg.hours);
+    } else if (msg.type === "comms.followup") {
+      void this.commsFollowUp(id, panel, msg);
+    } else if (msg.type === "lifecycle") {
+      void this.lifecycleTransition(id, panel, msg);
+    } else if (msg.type === "evidence.open") {
+      void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
+    } else if (msg.type === "evidence.resolve") {
+      void this.resolveLabel(panel, msg.ref);
+    } else if (msg.type === "entity.info") {
+      void this.entityInfo(id, panel, msg.ref);
+    } else if (msg.type === "export.open") {
+      void this.openMarkdownExport(id);
+    } else if (msg.type === "copy") {
+      void vscode.env.clipboard.writeText(msg.text);
+    } else if (msg.type === "investigation.open") {
+      void vscode.commands.executeCommand("reckon.openInvestigation", msg.id, msg.title);
+    } else if (msg.type === "transcript.open") {
+      void this.openTranscript(msg.interpretationId);
+    }
+  }
+
+  /**
+   * Persist a draft's seed and become the live investigation. On success the
+   * panel is re-keyed from its synthetic draft key to the real aggregate id and
+   * loaded in place — the surface never closes, it transforms.
+   */
+  private async seedDraft(
+    ref: { id: string },
+    panel: vscode.WebviewPanel,
+    seed: { value?: string; kind?: string; alertId?: string; source?: string },
+  ): Promise<void> {
+    try {
+      const created = seed.alertId !== undefined
+        ? await this.client.createInvestigation("", {
+            type: "alert", alertId: seed.alertId, source: seed.source,
+          })
+        : await this.client.createInvestigationFromInput(seed.value ?? "", seed.kind ?? "");
+      this.open.delete(ref.id);
+      ref.id = created.id;
+      this.open.set(created.id, panel);
+      panel.title = `⚖ ${created.title}`;
+      void this.post(panel, { type: "seeded" });
+      void this.load(created.id, panel);
+      // The tree should show the new investigation immediately.
+      void vscode.commands.executeCommand("reckon.refreshInvestigations");
+    } catch (err) {
+      void this.post(panel, { type: "draft.error", message: errText(err) });
+    }
   }
 
   /** Refresh every open document (e.g. after sign-out flips to sign-in). */
@@ -1410,6 +1492,50 @@ export class InvestigationDocuments {
       transition: border-color var(--dur-fast) var(--ease);
     }
     #send { align-self: flex-end; }
+
+    /* ---- seed chip: the investigation's root, at the document head ---- */
+    .seedchip {
+      margin: 2px 0 10px; padding: 6px 10px; font-size: 0.92em;
+      border: 1px solid var(--border); border-left: 3px solid var(--accent, var(--vscode-textLink-foreground));
+      border-radius: var(--r-sm); background: var(--fill, var(--vscode-editorWidget-background));
+      color: var(--vscode-descriptionForeground);
+    }
+    .seedchip b { color: var(--vscode-foreground); font-weight: 600; }
+
+    /* ---- the unseeded (draft) state: root this investigation ---- */
+    #draftView {
+      position: fixed; inset: 0; z-index: 60; display: flex;
+      align-items: center; justify-content: center; padding: 24px;
+      background: var(--vscode-editor-background);
+    }
+    .draftCard { width: 100%; max-width: 560px; }
+    .draftCard h2 { margin: 0 0 4px; font-size: 1.25em; }
+    .draftLead { margin: 0 0 14px; color: var(--vscode-descriptionForeground); }
+    #draftInput {
+      width: 100%; box-sizing: border-box; resize: none; font: inherit; font-size: 1.15em;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: var(--r-sm); padding: 10px 12px; min-height: 2.6rem; max-height: 8rem;
+    }
+    #draftInput:focus { outline: none; border-color: var(--vscode-focusBorder); }
+    .draftInterp { min-height: 24px; margin: 8px 2px 0; font-size: 0.95em; color: var(--vscode-descriptionForeground); }
+    .draftInterp b { color: var(--vscode-foreground); font-weight: 600; }
+    .draftInterp .toggle {
+      margin-left: 8px; cursor: pointer; color: var(--vscode-textLink-foreground);
+      border-bottom: 1px dashed currentColor;
+    }
+    .draftActions { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+    .linklike {
+      background: none; border: none; padding: 0; cursor: pointer;
+      color: var(--vscode-textLink-foreground); text-decoration: underline;
+    }
+    #draftAlertForm { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+    #draftAlertForm input {
+      font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border)); border-radius: var(--r-sm); padding: 7px 10px;
+    }
+    #draftAlertForm button { align-self: flex-start; }
+    .draftErr { margin-top: 12px; color: var(--vscode-errorForeground); min-height: 18px; }
   </style>
 </head>
 <body class="loading">
@@ -1429,6 +1555,7 @@ export class InvestigationDocuments {
 
     <div id="scroll">
       <div id="banner"></div>
+      <div id="seedChip" class="seedchip" style="display:none"></div>
       <details id="stripWrap" style="display:none">
         <summary id="stripSummary">Event time</summary>
         <div id="strip"></div>
@@ -1513,6 +1640,29 @@ export class InvestigationDocuments {
         <button class="primary" id="enableConfirm"></button>
         <button id="enableCancel">Cancel</button>
       </div>
+    </div>
+  </div>
+
+  <!-- The unseeded state (design/ui/02 §2.7): a full-cover overlay where the
+       analyst roots the investigation. NOT a wizard — one line in the same kind
+       of composer, with a live interpretation and a one-click correction. The
+       "From an alert…" path stays explicit (no ingestion to infer from at v0). -->
+  <div id="draftView" style="display:none">
+    <div class="draftCard">
+      <h2>Root this investigation</h2>
+      <p class="draftLead">Name what you're looking at — a host, an IP, a hash — or ask a question to hunt.</p>
+      <textarea id="draftInput" rows="1" placeholder="WIN-FILE01   ·   185.220.101.5   ·   a file hash   —   or a question"></textarea>
+      <div id="draftInterp" class="draftInterp"></div>
+      <div class="draftActions">
+        <button class="primary" id="draftStart" disabled>Start investigation</button>
+        <button id="draftAlertToggle" class="linklike">From an alert…</button>
+      </div>
+      <div id="draftAlertForm" style="display:none">
+        <input id="draftAlertId" type="text" placeholder="alert id in its tool (e.g. EDR-ALERT-7741)">
+        <input id="draftAlertSource" type="text" placeholder="which tool raised it (e.g. crowdstrike-edr)">
+        <button class="primary" id="draftAlertStart" disabled>Start from alert</button>
+      </div>
+      <div id="draftErr" class="draftErr"></div>
     </div>
   </div>
 
@@ -3137,6 +3287,115 @@ export class InvestigationDocuments {
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
     $("exportBtn").addEventListener("click", () => vscode.postMessage({ type: "export.open" }));
 
+    // ---- the seed chip: the investigation's root, at the document head ------
+    function seedTypeLabel(ref) {
+      const t = String(ref || "").split("--")[0];
+      if (t === "x-host") return "host";
+      if (t === "ipv4-addr" || t === "ipv6-addr") return "IP";
+      if (t === "file") return "file";
+      if (t === "user-account") return "account";
+      if (t === "domain-name") return "domain";
+      return "entity";
+    }
+    function renderSeedChip(seed) {
+      const el = $("seedChip");
+      if (!seed || !seed.type) { el.style.display = "none"; el.innerHTML = ""; return; }
+      let html = "";
+      if (seed.type === "entity") {
+        const label = seedTypeLabel(seed.entityRef);
+        const who = seed.entityIdentifier || seed.entityRef || "";
+        html = "Rooted on " + label + " <b>" + esc(who) + "</b>";
+      } else if (seed.type === "question") {
+        html = "Hunting — <b>" + esc(seed.hypothesisStatement || "") + "</b>";
+      } else if (seed.type === "alert") {
+        const src = seed.source ? esc(seed.source) + ": " : "";
+        html = "From alert <b>" + src + esc(seed.alertId || "") + "</b>";
+      }
+      el.innerHTML = html;
+      el.style.display = html ? "" : "none";
+    }
+
+    // ---- the unseeded (draft) state: root this investigation ---------------
+    // Two rules, mirrored from the server so the live hint matches what will be
+    // persisted: whitespace or a trailing "?" is a question; anything else is an
+    // entity (a host/IP/hash). The entity sub-label is cosmetic — the server
+    // mints the id.
+    let draftOverride = null; // "entity" | "question" when the analyst corrects
+    function classifyDraft(v) {
+      const s = v.trim();
+      if (!s) return "";
+      if (/\\s/.test(s) || s.endsWith("?")) return "question";
+      return "entity";
+    }
+    function entitySubLabel(v) {
+      if (/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(v) || v.includes(":")) return "IP";
+      if (/^[0-9a-fA-F]+$/.test(v) && (v.length === 32 || v.length === 40 || v.length === 64)) return "file";
+      return "host";
+    }
+    function effectiveDraftKind(v) {
+      const inferred = classifyDraft(v);
+      if (!inferred) return "";
+      return draftOverride || inferred;
+    }
+    function renderDraftInterp() {
+      const v = $("draftInput").value.trim();
+      const interp = $("draftInterp");
+      $("draftStart").disabled = v === "";
+      if (!v) { interp.innerHTML = ""; return; }
+      const kind = effectiveDraftKind(v);
+      const singleToken = !/\\s/.test(v) && !v.endsWith("?");
+      if (kind === "entity") {
+        interp.innerHTML = "→ root on " + entitySubLabel(v) + " <b>" + esc(v) + "</b>"
+          + '<span class="toggle" id="draftToQuestion">ask this as a question instead</span>';
+        const t = $("draftToQuestion");
+        if (t) t.onclick = () => { draftOverride = "question"; renderDraftInterp(); };
+      } else {
+        interp.innerHTML = "→ a hunt (question)"
+          + (singleToken ? '<span class="toggle" id="draftToEntity">root on the host instead</span>' : "");
+        const t = $("draftToEntity");
+        if (t) t.onclick = () => { draftOverride = "entity"; renderDraftInterp(); };
+      }
+    }
+    function showDraft() {
+      draftOverride = null;
+      $("draftView").style.display = "flex";
+      $("draftInput").value = "";
+      $("draftErr").textContent = "";
+      $("draftInterp").innerHTML = "";
+      $("draftAlertForm").style.display = "none";
+      $("draftStart").disabled = true;
+      $("draftInput").focus();
+    }
+    function hideDraft() { $("draftView").style.display = "none"; }
+    function submitDraft() {
+      const v = $("draftInput").value.trim();
+      if (!v) return;
+      $("draftStart").disabled = true;
+      $("draftErr").textContent = "";
+      vscode.postMessage({ type: "seed.submit", value: v, kind: effectiveDraftKind(v) });
+    }
+    $("draftInput").addEventListener("input", () => { draftOverride = null; renderDraftInterp(); });
+    $("draftInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitDraft(); }
+    });
+    $("draftStart").addEventListener("click", submitDraft);
+    $("draftAlertToggle").addEventListener("click", () => {
+      const f = $("draftAlertForm");
+      f.style.display = f.style.display === "none" ? "flex" : "none";
+      if (f.style.display === "flex") $("draftAlertId").focus();
+    });
+    function alertReady() {
+      $("draftAlertStart").disabled = !($("draftAlertId").value.trim() && $("draftAlertSource").value.trim());
+    }
+    $("draftAlertId").addEventListener("input", alertReady);
+    $("draftAlertSource").addEventListener("input", alertReady);
+    $("draftAlertStart").addEventListener("click", () => {
+      const alertId = $("draftAlertId").value.trim(), source = $("draftAlertSource").value.trim();
+      if (!alertId || !source) return;
+      $("draftAlertStart").disabled = true;
+      vscode.postMessage({ type: "seed.alert", alertId, source });
+    });
+
     // ---- resizable rail ----------------------------------------------------
     // Drag the grip to size the rail; the width persists in webview state so
     // a reload (and retainContextWhenHidden round-trips) keep it.
@@ -3315,6 +3574,17 @@ export class InvestigationDocuments {
         case "loading":
           document.body.classList.add("loading");
           break;
+        case "draft":
+          showDraft();
+          break;
+        case "seeded":
+          hideDraft();
+          break;
+        case "draft.error":
+          $("draftErr").textContent = msg.message;
+          $("draftStart").disabled = false;
+          $("draftAlertStart").disabled = false;
+          break;
         case "error":
           document.body.classList.remove("loading");
           $("banner").textContent = "Could not load: " + msg.message;
@@ -3328,6 +3598,7 @@ export class InvestigationDocuments {
           lastCaps = msg.capabilities;
           lastVerdict = msg.investigation.verdict || null;
           renderHeaderState(msg.investigation.state);
+          renderSeedChip(msg.investigation.seed);
           renderHypotheses(msg.hypotheses);
           renderCapabilities(msg.capabilities);
           renderHistory(msg.thread);

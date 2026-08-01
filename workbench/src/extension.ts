@@ -10,7 +10,7 @@
 // filesystem.
 
 import * as vscode from "vscode";
-import { BackendClient, InvestigationSummary, Seed } from "./backend";
+import { BackendClient, InvestigationSummary } from "./backend";
 import { Session } from "./auth";
 import { SidecarTransport } from "./agentTransport";
 import { InvestigationDocuments } from "./investigationDocument";
@@ -72,86 +72,19 @@ export function activate(context: vscode.ExtensionContext): void {
       documents.show(id, title);
     }),
 
-    // The seed picker (02 §2.7): an investigation always begins from
-    // something concrete — an alert, an entity, or a question. Never an
-    // empty chat.
-    vscode.commands.registerCommand("reckon.newInvestigation", async () => {
+    // Seed a new investigation (design/ui/02 §2.7): open the document in its
+    // unseeded state and let the analyst root it by typing a host/IP/hash or a
+    // question into the composer — the seed surface IS the document, not a
+    // wizard. Nothing is persisted until that first line, which keeps "an
+    // investigation always begins from something concrete" honest. The server
+    // resolves the typed value (minting the STIX id for an entity), so the
+    // analyst never handles ids.
+    vscode.commands.registerCommand("reckon.newInvestigation", () => {
       if (!session.signedIn) {
         void vscode.window.showWarningMessage("reckon: sign in before seeding an investigation");
         return;
       }
-      const pick = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(bell) Alert",
-            description: "rooted at an alert in one of your tools",
-            detail: "e.g. an EDR detection id — reckon stores the pointer, the alert stays in the tool",
-            type: "alert",
-          },
-          {
-            label: "$(symbol-variable) Entity",
-            description: "rooted at a host, account, IP…",
-            detail: "an investigation about a concrete thing",
-            type: "entity",
-          },
-          {
-            label: "$(question) Hypothesis",
-            description: "a hunt: rooted at a question",
-            detail: "e.g. \"is anyone abusing service accounts for RDP?\"",
-            type: "question",
-          },
-        ] as (vscode.QuickPickItem & { type: string })[],
-        { title: "reckon — what does this investigation begin from?", ignoreFocusOut: true },
-      );
-      if (!pick) {
-        return;
-      }
-
-      const ask = (prompt: string, placeHolder: string) =>
-        vscode.window.showInputBox({
-          title: "reckon — new investigation",
-          prompt, placeHolder, ignoreFocusOut: true,
-          validateInput: (v) => (v.trim() === "" ? "required" : undefined),
-        });
-
-      let seed: Seed | undefined;
-      let suggestedTitle = "";
-      if (pick.type === "alert") {
-        const alertId = await ask("The alert's id in its tool", "EDR-ALERT-7741");
-        if (!alertId) return;
-        const source = await ask("Which tool raised it (connector id)", "crowdstrike-edr");
-        if (!source) return;
-        seed = { type: "alert", alertId: alertId.trim(), source: source.trim() };
-        suggestedTitle = `${source.trim()}: ${alertId.trim()}`;
-      } else if (pick.type === "entity") {
-        const entityRef = await ask("The entity's STIX id (from a chip or dossier)", "x-host--…");
-        if (!entityRef) return;
-        seed = { type: "entity", entityRef: entityRef.trim() };
-        suggestedTitle = entityRef.trim();
-      } else {
-        const statement = await ask("The question this hunt tests", "Is anyone abusing service accounts for RDP?");
-        if (!statement) return;
-        seed = { type: "question", hypothesisStatement: statement.trim() };
-        suggestedTitle = statement.trim();
-      }
-
-      const title = await vscode.window.showInputBox({
-        title: "reckon — new investigation",
-        prompt: "A short title for the investigation.",
-        value: suggestedTitle,
-        ignoreFocusOut: true,
-        validateInput: (v) => (v.trim() === "" ? "a title is required" : undefined),
-      });
-      if (title === undefined || title.trim() === "") {
-        return; // cancelled
-      }
-      try {
-        const created = await client.createInvestigation(title.trim(), seed);
-        investigations.refresh();
-        documents.show(created.id, created.title);
-      } catch (err) {
-        void vscode.window.showErrorMessage(`reckon: could not seed investigation: ${errText(err)}`);
-      }
+      documents.showDraft();
     }),
 
     vscode.commands.registerCommand("reckon.signIn", async () => {

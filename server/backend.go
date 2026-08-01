@@ -28,6 +28,7 @@ import (
 	"github.com/sd-strax/reckon/authz"
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/comms"
+	"github.com/sd-strax/reckon/identity"
 	"github.com/sd-strax/reckon/knowledge"
 	"github.com/sd-strax/reckon/supervisor"
 	"github.com/sd-strax/reckon/temporal"
@@ -180,6 +181,26 @@ type Backend struct {
 	// capOverride, when set (under mu), supersedes cfg.CapabilityResolver/
 	// Catalog — the enablement endpoint's hot swap after a config rewrite.
 	capOverride *capabilitySurface
+
+	// identityOnce/identityRes memoize the tenant identity resolver used to
+	// mint STIX ids for entity seeds (createInvestigation). Built lazily from
+	// cfg.TenantNamespace; nil when the namespace is unset/invalid, which
+	// leaves seed_input entity resolution a clean 400 rather than a panic.
+	identityOnce sync.Once
+	identityRes  *identity.Resolver
+}
+
+// identityResolver returns the memoized tenant identity resolver, or nil when
+// cfg.TenantNamespace is empty or not a UUID.
+func (b *Backend) identityResolver() *identity.Resolver {
+	b.identityOnce.Do(func() {
+		ns, err := uuid.Parse(b.cfg.TenantNamespace)
+		if err != nil {
+			return
+		}
+		b.identityRes = identity.NewResolver(ns)
+	})
+	return b.identityRes
 }
 
 // NewBackend constructs the Backend (not yet started). The supervisor
