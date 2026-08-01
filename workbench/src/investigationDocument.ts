@@ -2620,8 +2620,19 @@ export class InvestigationDocuments {
               li.appendChild(test);
             }
             // The decisive outcomes cite what was observed — every test-result
-            // ref opens (02 §2.8).
-            for (const r of p.testResultRefs || []) li.appendChild(refChip(r));
+            // ref opens (02 §2.8), and a decided prediction is pinnable as
+            // evidence: statement + outcome + its citations, prefilled.
+            const trefs = p.testResultRefs || [];
+            for (const r of trefs) li.appendChild(refChip(r));
+            if (trefs.length && p.status !== "UNTESTED") {
+              const pin = document.createElement("button");
+              pin.className = "pincta testbtn";
+              pin.textContent = "📌 Pin";
+              pin.title = "Pin this decided prediction + its test evidence (feeds the verdict gate)";
+              pin.addEventListener("click", () =>
+                openPinDialog(trefs, "[" + p.status + "] " + p.statement));
+              li.appendChild(pin);
+            }
             ul.appendChild(li);
           }
           card.appendChild(ul);
@@ -3143,7 +3154,7 @@ export class InvestigationDocuments {
       $("promptLabel").textContent = opts.label || "";
       $("promptHelper").textContent = opts.helper || "";
       const input = $("promptInput");
-      input.value = "";
+      input.value = opts.value || "";
       input.placeholder = opts.placeholder || "";
       const box = $("promptRefs");
       box.textContent = "";
@@ -3156,7 +3167,7 @@ export class InvestigationDocuments {
       }
       const confirm = $("promptConfirm");
       confirm.textContent = opts.confirm || "Confirm";
-      confirm.disabled = promptRequire;
+      confirm.disabled = promptRequire && input.value.trim() === "";
       $("promptDialog").style.display = "flex";
       input.focus();
     }
@@ -3179,7 +3190,9 @@ export class InvestigationDocuments {
     $("promptConfirm").addEventListener("click", submitPrompt);
 
     // Pin evidence: the finding note + cited refs, in the prompt card.
-    function openPinDialog(refs) {
+    // suggested prefills the finding (visible and editable — a suggestion,
+    // never a silently-applied value).
+    function openPinDialog(refs, suggested) {
       openPrompt({
         title: "Pin as evidence",
         label: "What does this evidence show?",
@@ -3187,6 +3200,7 @@ export class InvestigationDocuments {
         helper: "Recorded on the investigation thread and cited by your verdict.",
         confirm: "📌 Pin evidence",
         refs: refs || [],
+        value: suggested || "",
         onConfirm: (finding) => vscode.postMessage({ type: "pin.add", refs: refs || [], finding }),
       });
     }
