@@ -84,6 +84,7 @@ type InboundMessage =
   | { type: "hyp.new"; statement: string }
   | { type: "hyp.proposeTests"; hypothesisRef: string; statement: string }
   | { type: "hyp.runTests"; hypothesisRef: string; statement: string }
+  | { type: "hyp.decide"; hypothesisRef: string; statement: string }
   | { type: "enablement.apply"; adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] }
   | { type: "comms.act"; threadId: string; verb: "ack" | "done" }
   | { type: "comms.snooze"; threadId: string; hours: number }
@@ -161,6 +162,8 @@ export class InvestigationDocuments {
         void this.proposeTests(id, panel, msg.hypothesisRef, msg.statement);
       } else if (msg.type === "hyp.runTests") {
         void this.runTests(id, panel, msg.hypothesisRef, msg.statement);
+      } else if (msg.type === "hyp.decide") {
+        void this.decideHypothesis(id, panel, msg.hypothesisRef, msg.statement);
       } else if (msg.type === "enablement.apply") {
         void this.applyEnablement(id, panel, msg);
       } else if (msg.type === "comms.act") {
@@ -755,6 +758,22 @@ export class InvestigationDocuments {
       + "outcome (CONFIRMED / DISCONFIRMED / INCONCLUSIVE) citing the observed evidence as test_result_refs. "
       + "Keep your final message to one or two sentences on what was decisive — do not restate the outcomes; the tracker renders them.";
     await this.runTurn(id, panel, instruction, { label: `⚡ run tests · ${clipped}` });
+  }
+
+  /**
+   * Decide the hypothesis — the judgment rung, ordered by the analyst once
+   * every prediction is decided. The agent weighs the outcomes and records
+   * support / refutation / inconclusive citing the decisive test evidence.
+   * Terminal in v0 (01): a changed judgment later is a NEW hypothesis
+   * chained via parent_ref, keeping every reversal auditable.
+   */
+  private async decideHypothesis(id: string, panel: vscode.WebviewPanel, hypothesisRef: string, statement: string): Promise<void> {
+    const clipped = statement.length > 60 ? statement.slice(0, 59) + "…" : statement;
+    const instruction = `⚡ Decide: every prediction under the hypothesis "${statement}" (${hypothesisRef}) has been tested. `
+      + "Weigh the outcomes and record the hypothesis outcome — support, refutation, or inconclusive — citing the "
+      + "decisive test evidence. Be honest about mixed results: confirmed predictions support only what they actually tested. "
+      + "Keep your final message to one or two sentences on the judgment and why — the tracker renders the status.";
+    await this.runTurn(id, panel, instruction, { label: `⚡ decide · ${clipped}` });
   }
 
   /** Drive one analyst turn through the transport, streaming progress to the webview. */
@@ -2537,11 +2556,13 @@ export class InvestigationDocuments {
           });
           decide.appendChild(ack);
         }
-        // The drive affordances (02 §2.9), sequenced: on PROPOSED the one
-        // decision is ownership (Acknowledge). Once OPEN with nothing to
-        // test → Propose tests; with untested predictions → Run tests, which
-        // executes them ALL in one aside (they are independent — the per-row
-        // Test this stays for running just one).
+        // The drive affordance (02 §2.9) follows the state of the work — one
+        // rung at a time. PROPOSED: the only decision is ownership
+        // (Acknowledge). OPEN with no predictions: Propose tests. Untested
+        // predictions remain: Run tests (independent → parallel; per-row
+        // Test this runs just one). All decided: Decide — record the
+        // hypothesis outcome from the evidence (terminal in v0: a changed
+        // judgment later is a NEW hypothesis chained via parent_ref).
         if (h.status === "OPEN") {
           const mkAside = (label, working, title, type) => {
             const b = document.createElement("button");
@@ -2556,14 +2577,18 @@ export class InvestigationDocuments {
             });
             decide.appendChild(b);
           };
-          if (!hasUntested) {
+          if (!preds.length) {
             mkAside("⚡ Propose tests", "⚡ proposing…",
               "Runs a scoped agent turn: record the falsifiable predictions that would decide this. Lands as a collapsed aside; predictions appear here.",
               "hyp.proposeTests");
-          } else {
+          } else if (hasUntested) {
             mkAside("⚡ Run tests", "⚡ testing…",
               "Runs the untested predictions — they are independent, so they run in parallel where possible. Outcomes and evidence land back on these rows.",
               "hyp.runTests");
+          } else {
+            mkAside("⚡ Decide", "⚡ deciding…",
+              "Weighs the tested predictions and records the hypothesis outcome (supported / refuted / inconclusive) citing the decisive evidence. Terminal in v0 — a later change of judgment is a new hypothesis.",
+              "hyp.decide");
           }
         }
         if (decide.childElementCount) card.appendChild(decide);
