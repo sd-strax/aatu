@@ -942,7 +942,7 @@ export class InvestigationDocuments {
     }
     body.railDragging { cursor: col-resize; user-select: none; }
     #rail {
-      flex: none; width: var(--rail-w, 272px); min-width: 200px; max-width: 60vw;
+      flex: none; width: var(--rail-w, 400px); min-width: 200px; max-width: 60vw;
       overflow-y: auto; padding: var(--sp-3) var(--sp-3) var(--sp-4);
       background: var(--vscode-sideBar-background, transparent);
     }
