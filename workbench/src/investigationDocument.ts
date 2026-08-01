@@ -78,6 +78,7 @@ type InboundMessage =
   | { type: "pin.unpin"; interpretationId: string; reason: string }
   | { type: "verdict.submit"; disposition: string; rationale: string; refs: string[] }
   | { type: "hyp.ack"; hypothesisRef: string }
+  | { type: "hyp.new"; statement: string }
   | { type: "enablement.apply"; adapter: string; enabled: boolean; config: Record<string, string>; secretFields: string[] }
   | { type: "comms.act"; threadId: string; verb: "ack" | "done" }
   | { type: "comms.snooze"; threadId: string; hours: number }
@@ -149,6 +150,8 @@ export class InvestigationDocuments {
         void this.submitVerdict(id, panel, msg);
       } else if (msg.type === "hyp.ack") {
         void this.ackHypothesis(id, panel, msg.hypothesisRef);
+      } else if (msg.type === "hyp.new") {
+        void this.newHypothesis(id, panel, msg.statement);
       } else if (msg.type === "enablement.apply") {
         void this.applyEnablement(id, panel, msg);
       } else if (msg.type === "comms.act") {
@@ -503,6 +506,23 @@ export class InvestigationDocuments {
       await this.client.acknowledgeHypothesis(id, hypothesisRef);
     } catch (err) {
       void vscode.window.showErrorMessage(`reckon: acknowledge failed — ${errText(err)}`);
+    }
+    await this.load(id, panel);
+  }
+
+  /**
+   * Record an analyst-authored hypothesis — e.g. the alternate explanation
+   * that competes with the AI's. Lands OPEN (human-authored); rejections
+   * surface verbatim.
+   */
+  private async newHypothesis(id: string, panel: vscode.WebviewPanel, statement: string): Promise<void> {
+    if (statement.trim() === "") {
+      return;
+    }
+    try {
+      await this.client.recordHypothesis(id, statement.trim());
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: hypothesis failed — ${errText(err)}`);
     }
     await this.load(id, panel);
   }
@@ -1079,6 +1099,10 @@ export class InvestigationDocuments {
       margin: 4px 0; font-size: var(--fs-sm);
     }
     .testbtn { font-size: var(--fs-xs); padding: 0 8px; margin-left: 6px; }
+    .railadd {
+      font-size: var(--fs-xs); padding: 0 7px; margin-left: 5px;
+      text-transform: none; letter-spacing: normal; vertical-align: 1px;
+    }
     /* the staged-question affordance: reads as the suggested move, not chrome */
     button.askdecide {
       color: var(--he-primary-soft);
@@ -1346,7 +1370,7 @@ export class InvestigationDocuments {
       <div id="pending"></div>
     </section>
     <section>
-      <h2>Hypotheses</h2>
+      <h2>Hypotheses <button id="hypNew" class="railadd" title="Frame your own hypothesis — e.g. the alternate (benign or different-attacker) explanation. Lands OPEN, tested like any other.">+ new…</button></h2>
       <div id="hyps"><div class="empty">None yet</div></div>
     </section>
     <section>
@@ -2333,6 +2357,18 @@ export class InvestigationDocuments {
       }
       return "Test the prediction: " + p.statement;
     }
+
+    // Frame your own hypothesis — the competing-explanation move. Analyst-
+    // authored ones land OPEN (no acknowledgment step: that exists only for
+    // AI proposals); the tracker then scores the alternates side by side.
+    $("hypNew").addEventListener("click", () => openPrompt({
+      title: "New hypothesis",
+      label: "The claim to test — often the ALTERNATE explanation",
+      placeholder: "e.g. The svc_backup RDP logon was legitimate maintenance by the backup team, not lateral movement.",
+      helper: "Recorded as yours, OPEN immediately. Then use “What would decide this?” to get falsifiable predictions for it — competing hypotheses are decided by evidence, not argument.",
+      confirm: "Record hypothesis",
+      onConfirm: (statement) => vscode.postMessage({ type: "hyp.new", statement }),
+    }));
 
     // The hypothesis tracker — the drivable loop (02 §2.9). Hypotheses are the
     // unit of work: PROPOSED cards carry Acknowledge (a human act the engine

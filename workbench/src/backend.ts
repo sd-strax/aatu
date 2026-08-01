@@ -842,6 +842,21 @@ export class BackendClient {
   }
 
   /**
+   * Record an analyst-authored hypothesis (01 §x-hypothesis): lands OPEN
+   * immediately (acknowledgment is only for AI proposals). An alternate
+   * explanation is simply a sibling hypothesis — the tracker scores them
+   * against each other. Human token; the node id is minted server-side.
+   */
+  async recordHypothesis(investigationId: string, statement: string): Promise<void> {
+    await this.authedPost("/api/interpretations", {
+      investigation_ref: investigationId,
+      interpretation_type: "hypothesis",
+      hypothesis: { statement },
+      rationale: statement,
+    });
+  }
+
+  /**
    * Acknowledge an AI-PROPOSED hypothesis into OPEN — the human taking
    * ownership of the line of inquiry (01 §Interpretation types). The aggregate
    * refuses this from an AI delegate; always the human token.
