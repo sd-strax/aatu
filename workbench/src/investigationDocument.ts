@@ -2369,9 +2369,12 @@ export class InvestigationDocuments {
         head.append(st, badge);
         card.appendChild(head);
 
+        const preds = h.predictions || [];
+        const live = h.status === "PROPOSED" || h.status === "OPEN";
+        const hasUntested = preds.some((p) => p.status === "UNTESTED");
+        const decide = document.createElement("div");
+        decide.className = "decide";
         if (h.status === "PROPOSED") {
-          const own = document.createElement("div");
-          own.className = "decide";
           const ack = document.createElement("button");
           ack.textContent = "Acknowledge";
           ack.title = "Take ownership of this AI-proposed line of inquiry (PROPOSED → OPEN). A human act — the engine refuses it from the AI.";
@@ -2379,11 +2382,21 @@ export class InvestigationDocuments {
             ack.disabled = true;
             vscode.postMessage({ type: "hyp.ack", hypothesisRef: h.id });
           });
-          own.appendChild(ack);
-          card.appendChild(own);
+          decide.appendChild(ack);
         }
-
-        const preds = h.predictions || [];
+        // A live hypothesis with nothing left to test is a dead end the
+        // scoreboard framing exists to prevent (02 §2.9): stage the
+        // "what would decide this?" question so the agent declares
+        // falsifiable predictions — staged, never auto-fired.
+        if (live && !hasUntested) {
+          const ask = document.createElement("button");
+          ask.textContent = "What would decide this?";
+          ask.title = "Stage a request for falsifiable predictions (with concrete test queries) in the composer — you send it";
+          ask.addEventListener("click", () => stageInComposer(
+            'For the hypothesis "' + h.statement + '": declare the falsifiable predictions that would decide it, each with a concrete test query against the available capability verbs.'));
+          decide.appendChild(ask);
+        }
+        if (decide.childElementCount) card.appendChild(decide);
         if (preds.length) {
           const ul = document.createElement("ul");
           ul.className = "predictions";
