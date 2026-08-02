@@ -155,7 +155,8 @@ type hypothesisState struct {
 }
 
 type predictionState struct {
-	Status string
+	Status        string
+	HypothesisRef string // parent — so an outcome can check the hypothesis is acknowledged
 }
 
 // foldReasoningEvent applies one interpretation.recorded event's node content to
@@ -169,10 +170,11 @@ func foldReasoningEvent(s *aggregateState, rec InterpretationRecorded) {
 		s.Hypotheses[rec.HypothesisTransition.Ref] = hypothesisState{Status: rec.HypothesisTransition.To}
 	}
 	if rec.Prediction != nil {
-		s.Predictions[rec.Prediction.ID] = predictionState{Status: rec.Prediction.Status}
+		s.Predictions[rec.Prediction.ID] = predictionState{Status: rec.Prediction.Status, HypothesisRef: rec.Prediction.HypothesisRef}
 	}
 	if rec.PredictionTransition != nil {
-		s.Predictions[rec.PredictionTransition.Ref] = predictionState{Status: rec.PredictionTransition.To}
+		prev := s.Predictions[rec.PredictionTransition.Ref]
+		s.Predictions[rec.PredictionTransition.Ref] = predictionState{Status: rec.PredictionTransition.To, HypothesisRef: prev.HypothesisRef}
 	}
 }
 
@@ -341,20 +343,20 @@ func applyReasoningNodes(env Envelope, state aggregateState, c RecordInterpretat
 		}
 		return applyHypothesisAck(env, state, c.HypothesisRef, rec)
 	case InterpretationSupport:
-		return applyHypothesisOutcome(state, c.HypothesisRef, HypothesisSupported, rec)
+		return applyHypothesisOutcome(env, state, c.HypothesisRef, HypothesisSupported, c, rec)
 	case InterpretationRefutation:
-		return applyHypothesisOutcome(state, c.HypothesisRef, HypothesisRefuted, rec)
+		return applyHypothesisOutcome(env, state, c.HypothesisRef, HypothesisRefuted, c, rec)
 	case InterpretationInconclusive:
 		to := HypothesisInconclusive
 		if c.Abandoned {
 			to = HypothesisAbandoned
 		}
-		return applyHypothesisOutcome(state, c.HypothesisRef, to, rec)
+		return applyHypothesisOutcome(env, state, c.HypothesisRef, to, c, rec)
 	case InterpretationPrediction:
 		if c.Prediction != nil {
 			return applyPredictionCreate(state, *c.Prediction, rec)
 		}
-		return applyPredictionOutcome(state, c, rec)
+		return applyPredictionOutcome(env, state, c, rec)
 	default:
 		return nil
 	}
@@ -409,7 +411,26 @@ func applyHypothesisAck(env Envelope, state aggregateState, ref string, rec *Int
 	return nil
 }
 
-func applyHypothesisOutcome(state aggregateState, ref, to string, rec *InterpretationRecorded) error {
+// aiReasoningGate enforces the human-in-the-loop rung (01 §Interpretation types,
+// "AI-PROPOSED → OPEN acknowledgment"): an AI delegate may not record an
+// evidential OUTCOME — a prediction result or a hypothesis evaluation — on a
+// hypothesis that is still PROPOSED (never human-acknowledged). A human passes
+// freely (engaging with an AI proposal is itself the human taking the loop), and
+// an OPEN hypothesis passes freely. The tenant dial trust.ai_reasoning reopens
+// full automation: the server stamps AIReasoningConfigRef only when it is on, so
+// absent stamp + AI actor + PROPOSED = denied on every path (structural
+// default-deny, mirroring the AI-verdict dial).
+func aiReasoningGate(env Envelope, c RecordInterpretation, hypStatus string) error {
+	if hypStatus != HypothesisProposed || !env.Actor.IsAIDelegated() {
+		return nil
+	}
+	if c.AIReasoningConfigRef == "" {
+		return errors.New("RecordInterpretation rejected: an AI delegate cannot record an outcome on an unacknowledged (PROPOSED) hypothesis — a human must Acknowledge it first, or enable the tenant dial trust.ai_reasoning")
+	}
+	return nil
+}
+
+func applyHypothesisOutcome(env Envelope, state aggregateState, ref, to string, c RecordInterpretation, rec *InterpretationRecorded) error {
 	hs, ok := state.Hypotheses[ref]
 	if !ok {
 		return fmt.Errorf("RecordInterpretation rejected: hypothesis %s does not exist", ref)
@@ -419,6 +440,9 @@ func applyHypothesisOutcome(state aggregateState, ref, to string, rec *Interpret
 	// hypothesis chained via parent_ref, keeping every reversal auditable.
 	if hs.Status != HypothesisProposed && hs.Status != HypothesisOpen {
 		return fmt.Errorf("RecordInterpretation rejected: hypothesis %s is %s (terminal), cannot move to %s", ref, hs.Status, to)
+	}
+	if err := aiReasoningGate(env, c, hs.Status); err != nil {
+		return err
 	}
 	rec.HypothesisTransition = &HypothesisTransitionRecorded{Ref: ref, From: hs.Status, To: to}
 	rec.OutputRefs = append(rec.OutputRefs, ref)
@@ -449,13 +473,18 @@ func applyPredictionCreate(state aggregateState, p PredictionNode, rec *Interpre
 	return nil
 }
 
-func applyPredictionOutcome(state aggregateState, c RecordInterpretation, rec *InterpretationRecorded) error {
+func applyPredictionOutcome(env Envelope, state aggregateState, c RecordInterpretation, rec *InterpretationRecorded) error {
 	ps, ok := state.Predictions[c.PredictionRef]
 	if !ok {
 		return fmt.Errorf("RecordInterpretation rejected: prediction %s does not exist", c.PredictionRef)
 	}
 	if ps.Status != PredictionUntested {
 		return fmt.Errorf("RecordInterpretation rejected: prediction %s is %s, only UNTESTED takes an outcome", c.PredictionRef, ps.Status)
+	}
+	// Running a test is an evidential outcome — gated on the parent hypothesis
+	// being human-acknowledged when the actor is an AI delegate.
+	if err := aiReasoningGate(env, c, state.Hypotheses[ps.HypothesisRef].Status); err != nil {
+		return err
 	}
 	rec.PredictionTransition = &PredictionTransitionRecorded{
 		Ref:            c.PredictionRef,

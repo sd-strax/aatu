@@ -251,6 +251,13 @@ type RecordInterpretation struct {
 	Verdict            *VerdictNode `json:"verdict,omitempty"`
 	AIVerdictConfigRef string       `json:"ai_verdict_config_ref,omitempty"`
 
+	// AIReasoningConfigRef is the autonomous-reasoning dial's stamp: the SERVER
+	// sets it exclusively when the tenant enables trust.ai_reasoning, and the
+	// aggregate rejects an AI-delegated evidential OUTCOME on an unacknowledged
+	// (PROPOSED) hypothesis without it (structural default-deny). Human actors
+	// and OPEN hypotheses never need it.
+	AIReasoningConfigRef string `json:"ai_reasoning_config_ref,omitempty"`
+
 	// ConsultedSOPs carries the turn's knowledge-retrieval provenance onto the
 	// event (01 schema). The caller (the agent loop) supplies what it
 	// retrieved and what it actually built on.

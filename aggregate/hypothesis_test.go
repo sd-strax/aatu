@@ -218,20 +218,31 @@ func TestHypothesisLifecycle_Apply(t *testing.T) {
 		t.Error("outcome on a terminal hypothesis accepted")
 	}
 
-	// Adjudication semantics (01 §x-hypothesis notes): acknowledgment is an
-	// endorsement, not a gate — an AI delegate may record a decisive outcome on
-	// its own un-acknowledged (PROPOSED) hypothesis. This pins v0's `autonomous`
-	// behavior; the planned `vetted` tenant config (01 open questions) tightens
-	// exactly this guard when it lands.
-	aiSup, err := applyCommand(ai, sup, proposed())
+	// Human-in-the-loop by default (01 §Interpretation types): an AI delegate may
+	// NOT record a decisive outcome on its own un-acknowledged (PROPOSED)
+	// hypothesis — a human must Acknowledge it into OPEN first.
+	if _, err := applyCommand(ai, sup, proposed()); err == nil {
+		t.Error("AI decisive outcome on an un-acknowledged (PROPOSED) hypothesis should be denied by default")
+	}
+	// A human may, though — engaging with the AI's proposal is the human taking
+	// the loop.
+	if _, err := applyCommand(human, sup, proposed()); err != nil {
+		t.Errorf("human outcome on a PROPOSED hypothesis should be allowed: %v", err)
+	}
+	// The trust.ai_reasoning dial reopens full automation: with the enabling ref
+	// stamped (server sets it only when the tenant enables the dial), the AI
+	// drives PROPOSED→SUPPORTED autonomously.
+	autoSup := sup
+	autoSup.AIReasoningConfigRef = "trust.ai_reasoning"
+	aiSup, err := applyCommand(ai, autoSup, proposed())
 	if err != nil {
-		t.Fatalf("AI decisive outcome on its own PROPOSED hypothesis rejected: %v", err)
+		t.Fatalf("AI outcome on PROPOSED with trust.ai_reasoning enabled rejected: %v", err)
 	}
 	if tr := recFromEvents(t, aiSup).HypothesisTransition; tr == nil || tr.From != HypothesisProposed || tr.To != HypothesisSupported {
-		t.Errorf("AI adjudication transition = %+v; want PROPOSED→SUPPORTED", tr)
+		t.Errorf("AI adjudication (dial on) transition = %+v; want PROPOSED→SUPPORTED", tr)
 	}
-	// And once decided pre-acknowledgment, the hypothesis can never be acked —
-	// analyst disagreement chains a new hypothesis via parent_ref instead.
+	// And once decided, the hypothesis can never be acked — analyst disagreement
+	// chains a new hypothesis via parent_ref instead.
 	if _, err := applyCommand(human, ack, terminal); err == nil {
 		t.Error("acknowledgment of a terminal hypothesis accepted")
 	}
@@ -251,6 +262,51 @@ func TestHypothesisLifecycle_Apply(t *testing.T) {
 
 // TestPredictionLifecycle_Apply covers prediction creation (live hypotheses
 // only) and the once-only test outcome.
+// TestPredictionOutcome_AIReasoningGate: recording a prediction OUTCOME (the
+// "run tests" rung) is gated the same way as hypothesis evaluation — an AI
+// delegate can't record it while the parent hypothesis is still PROPOSED, unless
+// trust.ai_reasoning is enabled.
+func TestPredictionOutcome_AIReasoningGate(t *testing.T) {
+	human := newTestEnvelope("analyst-1")
+	ai := newTestEnvelope("analyst-1")
+	ai.Actor.Kind = ActorAIDelegated
+	ai.Actor.Delegate = &AIDelegate{Vendor: "claude"}
+
+	hRef := HypothesisSTIXID(uuid.New())
+	pRef := PredictionSTIXID(uuid.New())
+	// Parent hypothesis is PROPOSED (AI-authored, not yet acknowledged); its
+	// prediction is UNTESTED and linked to it.
+	state := reasoningState(
+		map[string]hypothesisState{hRef: {Status: HypothesisProposed}},
+		map[string]predictionState{pRef: {Status: PredictionUntested, HypothesisRef: hRef}},
+	)
+	outcome := func() RecordInterpretation {
+		return RecordInterpretation{
+			InterpretationID:   uuid.New(),
+			InterpretationType: InterpretationPrediction,
+			Rationale:          "query returned matches",
+			PredictionRef:      pRef,
+			PredictionStatus:   PredictionConfirmed,
+			TestResultRefs:     []string{"observed-data--1"},
+		}
+	}
+
+	// AI, dial off → denied.
+	if _, err := applyCommand(ai, outcome(), state); err == nil {
+		t.Error("AI prediction outcome on a PROPOSED-parent hypothesis should be denied by default")
+	}
+	// Human → allowed.
+	if _, err := applyCommand(human, outcome(), state); err != nil {
+		t.Errorf("human prediction outcome should be allowed: %v", err)
+	}
+	// AI with the dial enabled → allowed.
+	auto := outcome()
+	auto.AIReasoningConfigRef = "trust.ai_reasoning"
+	if _, err := applyCommand(ai, auto, state); err != nil {
+		t.Errorf("AI prediction outcome with trust.ai_reasoning enabled rejected: %v", err)
+	}
+}
+
 func TestPredictionLifecycle_Apply(t *testing.T) {
 	env := newTestEnvelope("analyst-1")
 	hRef := HypothesisSTIXID(uuid.New())

@@ -188,6 +188,14 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 		}
 		cmd.AIVerdictConfigRef = "trust.ai_verdict"
 	}
+	// The autonomous-reasoning dial (01 §Interpretation types): when the tenant
+	// enables it, stamp the enabling ref so the aggregate permits an AI delegate
+	// to record outcomes on a still-PROPOSED hypothesis. Absent the stamp the
+	// aggregate blocks that specific case only (an OPEN hypothesis is unaffected),
+	// so no 403 here — the state-dependent gate lives at the aggregate boundary.
+	if actor.IsAIDelegated() && b.cfg.AllowAIReasoning {
+		cmd.AIReasoningConfigRef = "trust.ai_reasoning"
+	}
 
 	// Node creations: mint the id server-side and report it back as node_id.
 	var nodeID string

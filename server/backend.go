@@ -152,6 +152,13 @@ type BackendConfig struct {
 	// here AND at the aggregate (the command carries the enabling config ref
 	// only when this is true — structural default-deny).
 	AllowAIVerdict bool
+
+	// AllowAIReasoning is the autonomous-reasoning trust dial (01 §Interpretation
+	// types; config trust.ai_reasoning). Default false: an AI delegate cannot
+	// record an evidential outcome on an unacknowledged (PROPOSED) hypothesis —
+	// a human must Acknowledge it first. When true, the server stamps the
+	// enabling ref so the aggregate permits full AI-driven hypothesis analysis.
+	AllowAIReasoning bool
 }
 
 // Backend is the in-process HTTP server.

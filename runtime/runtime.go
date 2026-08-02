@@ -321,6 +321,7 @@ func serve(cfg config.Config) error {
 		ExportIncludeSideStores: cfg.Export.IncludeSideStores,
 		ExportAutoOnConclude:    cfg.Export.AutoOnConclude,
 		AllowAIVerdict:          cfg.Trust.AIVerdict,
+		AllowAIReasoning:        cfg.Trust.AIReasoning,
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()

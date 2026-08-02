@@ -35,6 +35,14 @@ type Trust struct {
 	// configuration, never by code change, and the enabling ref is recorded on
 	// the verdict event.
 	AIVerdict bool `yaml:"ai_verdict"`
+
+	// AIReasoning opens the autonomous-reasoning dial (01 §Interpretation types):
+	// when true, an AI-delegated actor may drive a hypothesis to an evidential
+	// outcome (run tests / decide) without a human acknowledgment. Default false —
+	// an AI-proposed hypothesis is PROPOSED and a human must Acknowledge it into
+	// OPEN before any outcome is recorded; the door to full automation opens by
+	// configuration, never by code change, and the enabling ref rides the event.
+	AIReasoning bool `yaml:"ai_reasoning"`
 }
 
 // Export configures the post-conclusion export bundle (design 07). Tenant
