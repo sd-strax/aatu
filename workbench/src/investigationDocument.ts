@@ -35,6 +35,12 @@ type RenderMessage =
   // from. Null when the layer is off or the fetch failed — hints just absent.
   | { type: "enablement"; data: Enablement | null }
   | { type: "error"; message: string }
+  // Open the in-document rename card (never the top-of-window quick input) —
+  // sent when rename is invoked from the tree, so the modal lives on the
+  // document surface like every other text action.
+  | { type: "rename.begin"; title: string }
+  // Applied rename: update the title in place without a full reload.
+  | { type: "renamed"; title: string }
   | { type: "pending"; actions: ActionRow[] }
   | { type: "pins"; pins: PinRow[] }
   // The comms/external-work threads (Phase F, binding §4).
@@ -119,6 +125,9 @@ export class InvestigationDocuments {
   // has no investigation id until its seed is typed, so it lives under a
   // synthetic key until seedDraft re-keys it to the real aggregate id.
   private draftSeq = 0;
+  // Investigations whose rename card should pop once their panel goes live
+  // (set by beginRename from the tree; consumed in the ready handshake).
+  private readonly pendingRename = new Map<string, string>();
   // Resolved evidence-ref labels, shared across panels — deterministic ids
   // mean a ref resolves to the same thing everywhere, so cache once.
   private readonly labelCache = new Map<string, string>();
@@ -192,6 +201,39 @@ export class InvestigationDocuments {
     return key.startsWith("__draft__");
   }
 
+  /**
+   * Rename an investigation on its own document surface: reveal the panel and
+   * pop the in-document rename card (never the top-of-window quick input). Used
+   * by the tree's context menu; the document header's pencil opens the card
+   * directly in the webview. An already-open panel gets the card now; a freshly
+   * opened one gets it after the webview's ready handshake.
+   */
+  beginRename(id: string, titleHint?: string): void {
+    const existing = this.open.get(id);
+    this.show(id, titleHint);
+    if (existing) {
+      void this.post(existing, { type: "rename.begin", title: titleHint ?? "" });
+    } else {
+      this.pendingRename.set(id, titleHint ?? "");
+    }
+  }
+
+  /** Apply a confirmed rename, then update the tab + webview title in place. */
+  private async applyRename(id: string, panel: vscode.WebviewPanel, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      return;
+    }
+    try {
+      const applied = await this.client.renameInvestigation(id, trimmed);
+      panel.title = `⚖ ${applied}`;
+      void this.post(panel, { type: "renamed", title: applied });
+      void vscode.commands.executeCommand("reckon.refreshInvestigations");
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: rename failed — ${errText(err)}`);
+    }
+  }
+
   /** Route one webview message using the panel's current (mutable) id. */
   private route(ref: { id: string }, panel: vscode.WebviewPanel, msg: InboundMessage): void {
     const id = ref.id;
@@ -200,6 +242,14 @@ export class InvestigationDocuments {
         void this.post(panel, { type: "draft" });
       } else {
         void this.load(id, panel);
+        // A rename invoked from the tree opened this panel; once the webview is
+        // live, pop its in-document rename card (the modal lives on the document,
+        // never the top-of-window quick input).
+        const pending = this.pendingRename.get(id);
+        if (pending !== undefined) {
+          this.pendingRename.delete(id);
+          void this.post(panel, { type: "rename.begin", title: pending });
+        }
       }
     } else if (msg.type === "seed.submit") {
       void this.seedDraft(ref, panel, { value: msg.value, kind: msg.kind });
@@ -252,10 +302,11 @@ export class InvestigationDocuments {
     } else if (msg.type === "investigation.open") {
       void vscode.commands.executeCommand("reckon.openInvestigation", msg.id, msg.title);
     } else if (msg.type === "rename") {
-      // Drafts have no aggregate id yet — the pencil is hidden there, but guard
-      // anyway so a synthetic __draft__ key never reaches the rename command.
-      if (!id.startsWith("__draft__")) {
-        void vscode.commands.executeCommand("reckon.renameInvestigation", id, msg.title);
+      // The in-document rename card confirmed. Drafts have no aggregate id yet
+      // (the pencil is hidden there), but guard so a synthetic __draft__ key
+      // never reaches the backend.
+      if (!InvestigationDocuments.isDraft(id)) {
+        void this.applyRename(id, panel, msg.title);
       }
     } else if (msg.type === "transcript.open") {
       void this.openTranscript(msg.interpretationId);
@@ -3760,7 +3811,20 @@ export class InvestigationDocuments {
       $("verdictSubmit").disabled = !(disp && rationale && pinsOk);
     }
     $("verdictBtn").addEventListener("click", openVerdictDialog);
-    $("renameBtn").addEventListener("click", () => vscode.postMessage({ type: "rename", title: CUR_TITLE }));
+    $("renameBtn").addEventListener("click", () => openRenameDialog(CUR_TITLE));
+
+    // Rename in the same in-document card as every other text action — never
+    // the top-of-window quick input. Confirming posts the new title; the host
+    // applies it and echoes back a "renamed" to update the title in place.
+    function openRenameDialog(current) {
+      openPrompt({
+        title: "Rename investigation",
+        placeholder: "Investigation name",
+        value: current || "",
+        confirm: "Rename",
+        onConfirm: (name) => vscode.postMessage({ type: "rename", title: name }),
+      });
+    }
     $("verdictCancel").addEventListener("click", () => { $("verdictDialog").style.display = "none"; });
     $("verdictRationale").addEventListener("input", updateVerdictSubmit);
     $("dispositions").addEventListener("change", updateVerdictSubmit);
@@ -3826,6 +3890,13 @@ export class InvestigationDocuments {
           break;
         case "comms":
           renderComms(msg.threads);
+          break;
+        case "rename.begin":
+          openRenameDialog(msg.title || CUR_TITLE);
+          break;
+        case "renamed":
+          CUR_TITLE = msg.title;
+          $("title").textContent = msg.title;
           break;
         case "chronicle":
           lastThread = msg.thread || [];

@@ -96,51 +96,21 @@ export function activate(context: vscode.ExtensionContext): void {
       documents.showDraft();
     }),
 
-    // Rename an investigation (human curation — the aggregate bars an AI
-    // delegate). Invoked from the tree's context menu (arg is the row item) or
-    // the document header pencil (arg is the id, plus the current title).
-    vscode.commands.registerCommand(
-      "reckon.renameInvestigation",
-      async (arg?: unknown, maybeTitle?: string) => {
-        if (!session.signedIn) {
-          void vscode.window.showWarningMessage("reckon: sign in before renaming an investigation");
-          return;
-        }
-        let id: string | undefined;
-        let current = "";
-        if (typeof arg === "string") {
-          id = arg;
-          current = maybeTitle ?? "";
-        } else if (arg && typeof arg === "object" && "invId" in arg) {
-          id = (arg as { invId: string }).invId;
-          current = (arg as { invTitle?: string }).invTitle ?? "";
-        }
-        if (!id) {
-          return; // no target (e.g. palette) — nothing to rename
-        }
-        const next = await vscode.window.showInputBox({
-          title: "Rename investigation",
-          prompt: "A human-facing title — the seed and evidence are unchanged",
-          value: current,
-          valueSelection: [0, current.length],
-          validateInput: (v) => (v.trim() ? undefined : "Title cannot be empty"),
-        });
-        if (next === undefined) {
-          return; // cancelled
-        }
-        const trimmed = next.trim();
-        if (!trimmed || trimmed === current) {
-          return;
-        }
-        try {
-          await client.renameInvestigation(id, trimmed);
-          investigations.refresh();
-          documents.refreshAll();
-        } catch (err) {
-          void vscode.window.showErrorMessage(`reckon: rename failed — ${errText(err)}`);
-        }
-      },
-    ),
+    // Rename an investigation from the tree's context menu (human curation — the
+    // aggregate bars an AI delegate). Renaming happens ON the document: this
+    // reveals the panel and pops its in-document rename card, so the input is
+    // never the top-of-window quick input. The header pencil opens the same card
+    // directly. Applying the rename + refreshing the tree is handled there.
+    vscode.commands.registerCommand("reckon.renameInvestigation", (arg?: unknown) => {
+      if (!session.signedIn) {
+        void vscode.window.showWarningMessage("reckon: sign in before renaming an investigation");
+        return;
+      }
+      if (arg && typeof arg === "object" && "invId" in arg) {
+        const row = arg as { invId: string; invTitle?: string };
+        documents.beginRename(row.invId, row.invTitle);
+      }
+    }),
 
     vscode.commands.registerCommand("reckon.signIn", async () => {
       try {
