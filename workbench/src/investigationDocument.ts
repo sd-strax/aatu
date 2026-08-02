@@ -241,15 +241,16 @@ export class InvestigationDocuments {
       if (InvestigationDocuments.isDraft(id)) {
         void this.post(panel, { type: "draft" });
       } else {
-        void this.load(id, panel);
-        // A rename invoked from the tree opened this panel; once the webview is
-        // live, pop its in-document rename card (the modal lives on the document,
-        // never the top-of-window quick input).
+        // A rename invoked from the tree opened this panel; start the in-place
+        // edit only AFTER the load has posted its data (so the title field is
+        // populated), preserving message order to the webview.
         const pending = this.pendingRename.get(id);
-        if (pending !== undefined) {
-          this.pendingRename.delete(id);
-          void this.post(panel, { type: "rename.begin", title: pending });
-        }
+        this.pendingRename.delete(id);
+        void this.load(id, panel).then(() => {
+          if (pending !== undefined) {
+            void this.post(panel, { type: "rename.begin", title: pending });
+          }
+        });
       }
     } else if (msg.type === "seed.submit") {
       void this.seedDraft(ref, panel, { value: msg.value, kind: msg.kind });
@@ -1135,6 +1136,13 @@ export class InvestigationDocuments {
       border-radius: var(--r-sm, 4px);
     }
     .iconbtn:hover { color: var(--text); background: var(--fill-2); }
+    /* In-place title editor: looks like the title, edits like a file rename. */
+    .titleedit {
+      flex: 1; min-width: 0; font-size: var(--fs-lg); font-weight: 600;
+      font-family: inherit; color: var(--text); background: var(--fill-2);
+      border: 1px solid var(--he-primary); border-radius: var(--r-sm, 4px);
+      padding: 1px 6px; margin: 0; outline: none;
+    }
     /* status pill — tier/state pills are weight-800 micro-labels (01 §Scale) */
     .state {
       font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
@@ -1671,7 +1679,8 @@ export class InvestigationDocuments {
     <header>
       <div class="titlerow">
         <span class="titlename">
-          <h1 id="title">Investigation</h1>
+          <h1 id="title" title="Double-click to rename">Investigation</h1>
+          <input id="titleEdit" class="titleedit" style="display:none" spellcheck="false" />
           <button id="renameBtn" class="iconbtn" title="Rename this investigation" style="display:none">✎</button>
         </span>
         <span class="state" id="state"></span>
@@ -3811,20 +3820,37 @@ export class InvestigationDocuments {
       $("verdictSubmit").disabled = !(disp && rationale && pinsOk);
     }
     $("verdictBtn").addEventListener("click", openVerdictDialog);
-    $("renameBtn").addEventListener("click", () => openRenameDialog(CUR_TITLE));
-
-    // Rename in the same in-document card as every other text action — never
-    // the top-of-window quick input. Confirming posts the new title; the host
-    // applies it and echoes back a "renamed" to update the title in place.
-    function openRenameDialog(current) {
-      openPrompt({
-        title: "Rename investigation",
-        placeholder: "Investigation name",
-        value: current || "",
-        confirm: "Rename",
-        onConfirm: (name) => vscode.postMessage({ type: "rename", title: name }),
-      });
+    // In-place rename, like a file rename: the title becomes an editable field
+    // right where it sits. Enter commits, Escape cancels, blur commits. The host
+    // applies it and echoes "renamed" to update the title text.
+    function startInlineRename() {
+      const inp = $("titleEdit");
+      if (inp.style.display !== "none") return; // already editing
+      inp.value = CUR_TITLE;
+      $("title").style.display = "none";
+      $("renameBtn").style.display = "none";
+      inp.style.display = "";
+      inp.focus();
+      inp.select();
     }
+    function endInlineRename(commit) {
+      const inp = $("titleEdit");
+      if (inp.style.display === "none") return; // already ended (guards Esc→blur)
+      const v = inp.value.trim();
+      inp.style.display = "none";
+      $("title").style.display = "";
+      $("renameBtn").style.display = "";
+      if (commit && v && v !== CUR_TITLE) {
+        vscode.postMessage({ type: "rename", title: v });
+      }
+    }
+    $("renameBtn").addEventListener("click", startInlineRename);
+    $("title").addEventListener("dblclick", startInlineRename);
+    $("titleEdit").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); endInlineRename(true); }
+      else if (e.key === "Escape") { e.preventDefault(); endInlineRename(false); }
+    });
+    $("titleEdit").addEventListener("blur", () => endInlineRename(true));
     $("verdictCancel").addEventListener("click", () => { $("verdictDialog").style.display = "none"; });
     $("verdictRationale").addEventListener("input", updateVerdictSubmit);
     $("dispositions").addEventListener("change", updateVerdictSubmit);
@@ -3892,7 +3918,7 @@ export class InvestigationDocuments {
           renderComms(msg.threads);
           break;
         case "rename.begin":
-          openRenameDialog(msg.title || CUR_TITLE);
+          startInlineRename();
           break;
         case "renamed":
           CUR_TITLE = msg.title;
