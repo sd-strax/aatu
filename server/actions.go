@@ -313,9 +313,23 @@ func (b *Backend) dispatchActionRequest(w http.ResponseWriter, r *http.Request, 
 		MatchedPolicyRef: decision.MatchedPolicyRef,
 		Status:           "PENDING_MANUAL",
 	}
+	// Invisible activate at the action boundary (04 §Extension 2): the first
+	// action of a DRAFT investigation always gets a human — that approval is the
+	// activation moment (applyApproveAction transitions draft→active) — so
+	// auto-approve is suppressed until the investigation is active. The policy
+	// still evaluated and was recorded (would-have-fired); it just doesn't drive
+	// this first decision.
+	draft := false
+	if ic, ierr := aggregate.LoadInvestigationCurrent(r.Context(), b.cfg.Handler.DB(), investigationID); ierr == nil {
+		draft = ic.Status == aggregate.StatusDraft
+	}
 	switch decision.Mode {
 	case action.ModeAutoPolicy:
-		resp.Status, resp.WorkflowID = b.autoApproveAndDispatch(r.Context(), env, cmd, decision, now)
+		if draft {
+			resp.Status = "PENDING_MANUAL" // held for the activating human approval
+		} else {
+			resp.Status, resp.WorkflowID = b.autoApproveAndDispatch(r.Context(), env, cmd, decision, now)
+		}
 	case action.ModeTwoParty:
 		// SEAM OBLIGATION (Phase D approve endpoint): Gate 2's REQUIRE_TWO_PARTY
 		// demand lives in the policy_evaluated event and this response — the

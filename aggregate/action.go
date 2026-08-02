@@ -619,9 +619,12 @@ func systemOnly(cmd Command) bool {
 func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]Event, error) {
 	switch {
 	case state.Status == StatusActive:
+	case state.Status == StatusDraft: // invisible activate (04 §Extension 2): a
+	// draft accepts an action REQUEST; the investigation activates when that
+	// action is first approved (applyApproveAction), the reasoning→acting boundary.
 	case state.Status == StatusConcluded && c.IsReversal:
 	default:
-		return nil, fmt.Errorf("RequestAction rejected: investigation %s is %s (actions require ACTIVE, or CONCLUDED for a reversal)", env.AggregateID, state.Status)
+		return nil, fmt.Errorf("RequestAction rejected: investigation %s is %s (actions require ACTIVE or DRAFT, or CONCLUDED for a reversal)", env.AggregateID, state.Status)
 	}
 	if _, exists := state.Actions[c.ActionID]; exists {
 		return nil, fmt.Errorf("RequestAction rejected: action %s already exists", c.ActionID)
@@ -723,6 +726,26 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 		}
 	}
 
+	// Invisible activate at the action boundary (04 §Extension 2): approving the
+	// first action of a DRAFT investigation is the activation — the human
+	// clearing the first external action clears the investigation to act on the
+	// world. Only a FULLY-approved action activates (a two-party primary leaves
+	// it PENDING_SECONDARY, still not cleared to dispatch). Attributed to the
+	// approving human, in the same transaction, so no path activates without a
+	// real approval. Auto-approve is suppressed while draft (server side), so
+	// this is always human-driven.
+	var events []Event
+	seq := state.Seq
+	fullyApproved := c.Authorization.Mode != AuthModeTwoParty || stage != AuthStagePrimary
+	if fullyApproved && state.Status == StatusDraft {
+		activate, err := statusTransition(env, state, StatusDraft, StatusActive, "first action approved")
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, activate...)
+		seq += int64(len(activate))
+	}
+
 	interpID := uuid.New()
 	payload, err := json.Marshal(ActionApproved{
 		ActionID:                 c.ActionID,
@@ -732,13 +755,13 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 	if err != nil {
 		return nil, err
 	}
-	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionApproved, payload)
-	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionApproval,
+	domain := lifecycleDomainEvent(env, seq+1, EventTypeActionApproved, payload)
+	interp, err := interpretationEvent(env, seq+2, interpID, InterpretationActionApproval,
 		fmt.Sprintf("%s: approved (%s/%s)", act.label(), c.Authorization.Mode, stage), nil)
 	if err != nil {
 		return nil, err
 	}
-	return []Event{domain, interp}, nil
+	return append(events, domain, interp), nil
 }
 
 // checkApprover enforces the actor/approver invariant for the recorded stage.

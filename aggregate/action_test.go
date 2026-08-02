@@ -111,15 +111,19 @@ func TestRequestAction_EmitsPolicyEvaluated(t *testing.T) {
 	}
 }
 
-// TestRequestAction_StatePreconditions: allowed only on ACTIVE, or CONCLUDED for
-// a reversal.
+// TestRequestAction_StatePreconditions: allowed on ACTIVE or DRAFT (invisible
+// activate — the request is recorded, activation happens at first approval), or
+// CONCLUDED for a reversal.
 func TestRequestAction_StatePreconditions(t *testing.T) {
 	env := newTestEnvelope("alice")
 	id := uuid.New()
 
+	// A DRAFT investigation accepts an action REQUEST (04 §Extension 2, invisible
+	// activate): it is recorded, and the investigation stays DRAFT until the
+	// action is approved.
 	draft := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusDraft, Actions: map[uuid.UUID]actionState{}}
-	if _, err := applyCommand(env, sampleRequest(id), draft); err == nil {
-		t.Error("RequestAction on DRAFT should be rejected")
+	if _, err := applyCommand(env, sampleRequest(id), draft); err != nil {
+		t.Errorf("RequestAction on DRAFT should be allowed (invisible activate): %v", err)
 	}
 
 	concluded := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusConcluded, Actions: map[uuid.UUID]actionState{}}
@@ -130,6 +134,57 @@ func TestRequestAction_StatePreconditions(t *testing.T) {
 	rev.IsReversal = true
 	if _, err := applyCommand(env, rev, concluded); err != nil {
 		t.Errorf("reversal RequestAction on CONCLUDED should be allowed: %v", err)
+	}
+}
+
+// TestApproveAction_InvisibleActivate: approving the first action of a DRAFT
+// investigation activates it (04 §Extension 2, action boundary) — but only a
+// FULLY-approved action; a two-party primary (still PENDING_SECONDARY) does not.
+func TestApproveAction_InvisibleActivate(t *testing.T) {
+	env := newTestEnvelope("alice")
+	id := uuid.New()
+
+	draftWithRequested := func(mode string) aggregateState {
+		return aggregateState{
+			Seq: 4, Exists: true, TenantID: env.TenantID, Status: StatusDraft,
+			Actions: map[uuid.UUID]actionState{id: {Status: ActionStatusRequested, Tier: TierT2, RequiredMode: mode}},
+		}
+	}
+	activated := func(events []Event) bool {
+		for _, e := range events {
+			if e.Type == EventTypeStatusChanged {
+				var p InvestigationStatusChanged
+				if err := json.Unmarshal(e.Payload, &p); err == nil && p.From == StatusDraft && p.To == StatusActive {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// A solo approval fully approves → activates.
+	solo := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeManual, Stage: AuthStageSolo, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+	}}
+	events, err := applyCommand(env, solo, draftWithRequested(""))
+	if err != nil {
+		t.Fatalf("solo approve on draft: %v", err)
+	}
+	if !activated(events) {
+		t.Error("solo approval of the first action should activate the DRAFT investigation")
+	}
+
+	// A two-party PRIMARY only reaches PENDING_SECONDARY — not cleared to act, so
+	// it must NOT activate.
+	primary := ApproveAction{ActionID: id, Authorization: Authorization{
+		Mode: AuthModeTwoParty, Stage: AuthStagePrimary, PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+	}}
+	ev2, err := applyCommand(env, primary, draftWithRequested(AuthModeTwoParty))
+	if err != nil {
+		t.Fatalf("two-party primary on draft: %v", err)
+	}
+	if activated(ev2) {
+		t.Error("a two-party primary approval (still PENDING_SECONDARY) must not activate the draft")
 	}
 }
 

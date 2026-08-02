@@ -1541,6 +1541,9 @@ export class InvestigationDocuments {
     .actline .acttime { flex: none; font-size: 0.85em; opacity: 0.6; }
     .actline .refchip { flex: none; }
 
+    /* The invisible-activate note on a draft's first-action approval card. */
+    .actnote { font-style: italic; opacity: 0.85; margin: 2px 0 6px; }
+
     /* ---- the unseeded (draft) state: root this investigation ---- */
     #draftView {
       position: fixed; inset: 0; z-index: 60; display: flex;
@@ -2005,7 +2008,10 @@ export class InvestigationDocuments {
         vscode.postMessage({ type: "lifecycle", transition, reason });
       switch (engine) {
         case "DRAFT":
-          mk("Activate", "Move to ACTIVE — clears the investigation to request external actions", () => send("activate"));
+          // No explicit Activate (04 §Extension 2, invisible activate): a draft
+          // activates automatically when its first external action is approved —
+          // the reasoning→acting boundary. Reasoning flows freely meanwhile, so
+          // there is nothing to click here.
           break;
         case "ACTIVE":
           mk("Pause", "A reversible hold — resume any time", () => send("pause"));
@@ -3231,6 +3237,16 @@ export class InvestigationDocuments {
           decide.append(again);
           row.append(decide);
         } else {
+          // Invisible activate (04 §Extension 2): any pending action on a DRAFT
+          // investigation is its first action on the world, and approving it is
+          // the activation moment — surface that so the transition is understood,
+          // not silent.
+          if (($("state").dataset.engine || "") === "DRAFT") {
+            const note = document.createElement("div");
+            note.className = "cardmeta actnote";
+            note.textContent = "First action on the world — approving activates the investigation.";
+            row.append(note);
+          }
           const decide = document.createElement("div");
           decide.className = "decide";
           const isNotify = a.actionType && a.actionType.indexOf("notify.") === 0;

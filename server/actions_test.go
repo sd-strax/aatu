@@ -123,6 +123,65 @@ func TestRequestAction_ManualFallThrough(t *testing.T) {
 	}
 }
 
+// TestRequestAction_InvisibleActivateOnDraft: an action requested against a
+// DRAFT investigation is accepted (not rejected) but auto-approve is suppressed
+// even when a policy matches — the first action always gets a human — and that
+// human's approval activates the investigation (04 §Extension 2).
+func TestRequestAction_InvisibleActivateOnDraft(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetInvestigations(t)
+	invID := draftInvestigation(t) // NOT activated
+
+	// A policy that WOULD auto-approve host.isolate — suppressed while draft.
+	b := actionBackend(t, action.Policy{
+		ID: "policy/auto-isolate/1.0.0", ActionMatch: []string{"host.isolate"},
+		Effect: action.EffectAutoApprove, Predicate: "true", SignedOffBy: []string{"secops-lead"},
+	})
+
+	resp, out := postAction(t, b, mintToken(t, nil), RequestActionBody{
+		ActionType:       "host.isolate",
+		Targets:          []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-A"}},
+		Rationale:        "contain",
+		InvestigationRef: invID.String(),
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d; want 201 (a draft accepts the request)", resp.StatusCode)
+	}
+	// Policy matched (AUTO_POLICY) but was NOT acted on — held for a human.
+	if out.Mode != action.ModeAutoPolicy || out.Status != "PENDING_MANUAL" {
+		t.Fatalf("mode=%q status=%q; want AUTO_POLICY/PENDING_MANUAL (auto-approve suppressed on draft)", out.Mode, out.Status)
+	}
+	// Still a draft — no action has been cleared yet.
+	ic, err := aggregate.LoadInvestigationCurrent(context.Background(), testDB, invID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ic.Status != aggregate.StatusDraft {
+		t.Fatalf("investigation status = %q before approval; want draft", ic.Status)
+	}
+
+	// The human approves → the investigation activates.
+	env := newEnvelope(invID, aggregate.Actor{PrincipalID: "test-subject"}, commandNow())
+	if _, err := testHandler.Handle(context.Background(), env, aggregate.ApproveAction{
+		ActionID: uuid.MustParse(out.ActionID),
+		Authorization: aggregate.Authorization{
+			Mode: aggregate.AuthModeManual, Stage: aggregate.AuthStageSolo,
+			PrimaryApproverRef: "test-subject", PrimaryApprovedAt: time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	ic, err = aggregate.LoadInvestigationCurrent(context.Background(), testDB, invID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ic.Status != aggregate.StatusActive {
+		t.Errorf("investigation status = %q after first approval; want active (invisible activate)", ic.Status)
+	}
+}
+
 // succeededAction drives an x-action through request → approve → dispatch →
 // result SUCCEEDED on the given investigation, returning its id.
 func succeededAction(t *testing.T, invID uuid.UUID) uuid.UUID {
