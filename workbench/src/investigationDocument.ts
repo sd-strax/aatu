@@ -51,14 +51,16 @@ type RenderMessage =
   // ordered by EVENT time — when it happened, not when we learned it (the two
   // clocks, binding §7). Each item opens its record.
   | { type: "events.strip"; items: { ref: string; time: string; label: string }[] }
-  // The minimal evidence graph (13 §7 step 7): the two-layer join rendered
-  // navigably — interpretation acts → interpretation-layer objects (STIX) →
-  // raw telemetry (OCSF). Edges are the actual citations; nothing is inferred.
+  // The minimal evidence graph (13 §7 step 7): the two-layer structure
+  // rendered navigably — interpretation-layer objects (STIX: reasoning nodes
+  // and SCOs) on the left, raw telemetry (OCSF) on the right. Acts are not
+  // nodes (the chronicle owns them); they collapse into grounding edges from a
+  // produced object to the evidence it cites. Edges are actual citations plus
+  // observed-data joins (`join`); nothing is inferred.
   | {
       type: "graph";
-      acts: { id: string; label: string; ai: boolean; seq: number; hasTranscript: boolean }[];
       refs: { id: string; kind: string; type: string }[];
-      edges: { from: string; to: string }[];
+      edges: { from: string; to: string; ai: boolean; join?: boolean }[];
     }
   // The entity popover's cross-investigation memory (ui/02 §2.4): other
   // investigations citing this ref, current one excluded.
@@ -534,25 +536,46 @@ export class InvestigationDocuments {
     items.sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     void this.post(panel, { type: "events.strip", items });
 
-    // --- the graph: acts + cited refs + observed-data joins ---------------
-    const acts: { id: string; label: string; ai: boolean; seq: number; hasTranscript: boolean }[] = [];
-    const edges: { from: string; to: string }[] = [];
+    // --- the graph: the two-layer evidence structure ----------------------
+    // Interpretation-layer objects (STIX: reasoning nodes AND SCOs) on the
+    // left, telemetry (OCSF) on the right. Acts are NOT nodes here — the
+    // chronicle owns "what happened, in order"; the graph owns "what grounds
+    // what." Each act collapses into grounding edges: every object it produced
+    // (outputRefs) points at every piece of evidence it consumed (inputRefs),
+    // tinted by whether a human or the AI asserted the link. A reasoning
+    // object that produces no such edge is floating on assertion — the alarm
+    // the graph exists to raise.
+    const edges: { from: string; to: string; ai: boolean; join?: boolean }[] = [];
     const inGraph = new Set<string>();
     for (const e of thread.slice(-40)) {
-      const actId = e.interpretationId || `seq-${e.sequenceNo}`;
-      acts.push({
-        id: actId,
-        label: e.interpretationType,
-        ai: e.actor.kind === "AI_DELEGATED",
-        seq: e.sequenceNo,
-        hasTranscript: e.hasTranscript,
-      });
-      for (const r of [...e.inputRefs, ...e.outputRefs]) {
-        if (!r) {
-          continue;
-        }
+      const ins = e.inputRefs.filter(Boolean);
+      const outs = e.outputRefs.filter(Boolean);
+      for (const r of [...ins, ...outs]) {
         inGraph.add(r);
-        edges.push({ from: actId, to: r });
+      }
+      const ai = e.actor.kind === "AI_DELEGATED";
+      for (const o of outs) {
+        for (const i of ins) {
+          if (o !== i) {
+            edges.push({ from: o, to: i, ai });
+          }
+        }
+      }
+    }
+    // The explicit two-layer join: observed-data → the entities it observed.
+    // Snapshot first — join targets are new nodes, not new observed-data.
+    for (const r of [...inGraph]) {
+      const doc = this.docCache.get(r) ?? null;
+      if (doc?.kind === "stix" && doc.type === "observed-data") {
+        const p = doc.payload as { object_refs?: unknown } | null;
+        const objRefs = Array.isArray(p?.object_refs) ? p.object_refs : [];
+        for (const or of objRefs) {
+          if (typeof or !== "string" || or === "") {
+            continue;
+          }
+          inGraph.add(or);
+          edges.push({ from: r, to: or, ai: false, join: true });
+        }
       }
     }
     const graphRefs: { id: string; kind: string; type: string }[] = [];
@@ -563,22 +586,8 @@ export class InvestigationDocuments {
         kind: doc?.kind ?? "",
         type: doc?.type ?? (r.includes("--") ? r.slice(0, r.indexOf("--")) : "event"),
       });
-      // The explicit two-layer join: observed-data → the entities it observed.
-      if (doc?.kind === "stix" && doc.type === "observed-data") {
-        const p = doc.payload as { object_refs?: unknown } | null;
-        const objRefs = Array.isArray(p?.object_refs) ? p.object_refs : [];
-        for (const or of objRefs) {
-          if (typeof or !== "string" || or === "") {
-            continue;
-          }
-          if (!inGraph.has(or)) {
-            inGraph.add(or); // Set iteration includes entries added mid-loop
-          }
-          edges.push({ from: r, to: or });
-        }
-      }
     }
-    void this.post(panel, { type: "graph", acts, refs: graphRefs, edges });
+    void this.post(panel, { type: "graph", refs: graphRefs, edges });
   }
 
   /**
@@ -1217,13 +1226,15 @@ export class InvestigationDocuments {
     #graphBox { overflow-x: auto; }
     #graphBox svg { display: block; font-family: var(--mono); }
     #graphBox .gedge { stroke: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); stroke-width: 1; fill: none; }
+    #graphBox .gedge.human { stroke: color-mix(in srgb, var(--ok-border) 55%, transparent); }
     #graphBox .gedge.join { stroke: color-mix(in srgb, var(--he-primary) 40%, transparent); stroke-dasharray: 3 2; }
     #graphBox .gnode { cursor: pointer; }
     #graphBox .gnode rect { rx: 4; fill: var(--fill-2); stroke: var(--border); }
-    #graphBox .gnode.act rect { stroke: color-mix(in srgb, var(--he-primary) 50%, transparent); }
-    #graphBox .gnode.act.human rect { stroke: var(--ok-border); }
+    #graphBox .gnode.reason rect { fill: color-mix(in srgb, var(--he-primary) 8%, transparent); stroke: color-mix(in srgb, var(--he-primary) 50%, transparent); }
+    #graphBox .gnode.ungrounded rect { stroke: var(--warn-border); stroke-dasharray: 3 2; }
     #graphBox .gnode.ocsf rect { fill: color-mix(in srgb, var(--info) 10%, transparent); stroke: var(--info-border); }
     #graphBox .gnode text { font-size: 10px; fill: var(--text); }
+    #graphBox .gnode.ungrounded text { fill: var(--warn); }
     #graphBox .gnode:hover rect { stroke-width: 2; }
     #graphBox .gcol { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; fill: var(--text-3); text-transform: uppercase; }
 
@@ -2395,70 +2406,96 @@ export class InvestigationDocuments {
     function renderGraph(msg) {
       const wrap = $("graphWrap");
       const box = $("graphBox");
-      const acts = msg.acts || [], refs = msg.refs || [], edges = msg.edges || [];
-      if (!acts.length || !refs.length) {
+      const refs = msg.refs || [], edges = msg.edges || [];
+      if (!refs.length) {
         wrap.style.display = "none";
         return;
       }
       wrap.style.display = "";
-      // Columns: acts | stix objects | ocsf events. Unfetched refs classify by
-      // shape (a STIX id has the "type--uuid" separator).
+      // Two layers, not three. The chronicle owns the acts (what happened, in
+      // order); the graph owns the structure (what grounds what). Left =
+      // interpretation-layer STIX objects (reasoning nodes + SCOs); right = raw
+      // telemetry (OCSF). Unfetched refs classify by shape — a STIX id has the
+      // "type--uuid" separator.
       const stix = refs.filter((r) => r.kind === "stix" || (r.kind === "" && r.id.includes("--")));
       const ocsf = refs.filter((r) => !stix.includes(r));
-      $("graphSummary").textContent = "Evidence graph · " + acts.length + " acts · "
-        + stix.length + " objects · " + ocsf.length + " events";
+      const isReason = (r) => r.type === "x-hypothesis" || r.type === "x-prediction";
 
-      const ROW = 24, TOP = 22, NW = [206, 196, 150], CX = [8, 250, 482];
-      const H = TOP + 10 + Math.max(acts.length, stix.length, ocsf.length) * ROW;
-      const svg = svgEl("svg", { viewBox: "0 0 640 " + H, width: "100%" });
+      // A reasoning object is grounded if it reaches ANY concrete evidence
+      // (observed-data, an SCO, or telemetry) by following citations — even
+      // through other reasoning objects. One that reaches nothing but its own
+      // kind is floating on assertion: the alarm this graph exists to raise.
+      const adj = {};
+      for (const e of edges) (adj[e.from] = adj[e.from] || []).push(e.to);
+      const reasonIds = new Set(stix.filter(isReason).map((r) => r.id));
+      const grounded = (id) => {
+        const seen = new Set([id]), stack = [id];
+        while (stack.length) {
+          for (const nxt of adj[stack.pop()] || []) {
+            if (!reasonIds.has(nxt)) return true;
+            if (!seen.has(nxt)) { seen.add(nxt); stack.push(nxt); }
+          }
+        }
+        return false;
+      };
+      const ungrounded = new Set(
+        stix.filter((r) => isReason(r) && !grounded(r.id)).map((r) => r.id));
 
-      const pos = {}; // node id → {x, y, w} (right/left anchor points)
-      const layNodes = (list, col, cls, label) => {
+      $("graphSummary").textContent = "Evidence graph · " + stix.length + " objects · "
+        + ocsf.length + " events"
+        + (ungrounded.size ? " · " + ungrounded.size + " ungrounded" : "");
+
+      const ROW = 24, TOP = 22, NW = [252, 240], CX = [30, 360];
+      const H = TOP + 10 + Math.max(stix.length, ocsf.length, 1) * ROW;
+      const svg = svgEl("svg", { viewBox: "0 0 620 " + H, width: "100%" });
+
+      const pos = {}; // node id → {x, y, w}
+      const layNodes = (list, col, base, label) => {
         svg.appendChild(Object.assign(svgEl("text", { x: CX[col], y: 12, class: "gcol" }),
           { textContent: label }));
         list.forEach((n, i) => {
           const y = TOP + i * ROW;
           pos[n.id] = { x: CX[col], y: y + 8, w: NW[col] };
-          const g = svgEl("g", { class: cls(n), transform: "translate(" + CX[col] + "," + y + ")" });
+          let cls = "gnode " + (base === "stix" && isReason(n) ? "reason" : base);
+          if (ungrounded.has(n.id)) cls += " ungrounded";
+          const g = svgEl("g", { class: cls, transform: "translate(" + CX[col] + "," + y + ")" });
           g.appendChild(svgEl("rect", { width: NW[col], height: 17 }));
           const t = svgEl("text", { x: 5, y: 12 });
           t.textContent = nodeLabel(n);
           g.appendChild(t);
-          g.addEventListener("click", () => nodeOpen(n));
+          g.addEventListener("click", () => vscode.postMessage({ type: "evidence.open", ref: n.id }));
           svg.appendChild(g);
         });
       };
       function nodeLabel(n) {
-        if (n.seq !== undefined) return "#" + n.seq + " " + n.label;
         const short = resolvedLabels[n.id] || (n.type + (n.id.includes("--") ? " " + n.id.slice(n.id.indexOf("--") + 2, n.id.indexOf("--") + 8) : ""));
-        return short.length > 30 ? short.slice(0, 29) + "…" : short;
-      }
-      function nodeOpen(n) {
-        if (n.seq !== undefined) {
-          if (n.hasTranscript) vscode.postMessage({ type: "transcript.open", interpretationId: n.id });
-        } else {
-          vscode.postMessage({ type: "evidence.open", ref: n.id });
-        }
+        return short.length > 32 ? short.slice(0, 31) + "…" : short;
       }
 
       // Edges under the nodes: draw first.
       const eg = svgEl("g", {});
       svg.appendChild(eg);
-      layNodes(acts, 0, (n) => "gnode act" + (n.ai ? "" : " human"), "reasoning acts");
-      layNodes(stix, 1, () => "gnode stix", "interpretation layer (stix)");
-      layNodes(ocsf, 2, () => "gnode ocsf", "telemetry (ocsf)");
+      layNodes(stix, 0, "stix", "interpretation layer (stix)");
+      layNodes(ocsf, 1, "ocsf", "telemetry (ocsf)");
 
-      const isJoin = new Set(stix.map((r) => r.id));
       for (const e of edges) {
         const a = pos[e.from], b2 = pos[e.to];
         if (!a || !b2) continue;
-        const x1 = a.x + a.w, y1 = a.y, x2 = b2.x, y2 = b2.y;
-        const mid = (x1 + x2) / 2;
-        const p = svgEl("path", {
-          d: "M" + x1 + "," + y1 + " C" + mid + "," + y1 + " " + mid + "," + y2 + " " + x2 + "," + y2,
-          class: "gedge" + (isJoin.has(e.from) ? " join" : ""),
-        });
-        eg.appendChild(p);
+        let d;
+        if (a.x === b2.x) {
+          // Intra-layer citation (e.g. hypothesis → observed-data, or the
+          // observed-data → SCO join): route it as a lobe to the LEFT of the
+          // column so it never crosses the STIX↔OCSF channel.
+          const bx = a.x - 20;
+          d = "M" + a.x + "," + a.y + " C" + bx + "," + a.y + " " + bx + "," + b2.y + " " + b2.x + "," + b2.y;
+        } else {
+          const x1 = a.x + a.w, mid = (x1 + b2.x) / 2;
+          d = "M" + x1 + "," + a.y + " C" + mid + "," + a.y + " " + mid + "," + b2.y + " " + b2.x + "," + b2.y;
+        }
+        eg.appendChild(svgEl("path", {
+          d,
+          class: "gedge" + (e.join ? " join" : (e.ai ? "" : " human")),
+        }));
       }
       box.textContent = "";
       box.appendChild(svg);
