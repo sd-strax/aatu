@@ -1031,6 +1031,18 @@ export class BackendClient {
   }
 
   /**
+   * POST /api/investigations/{id}/rename — change the title (analyst). Human
+   * curation; the aggregate bars an AI delegate. Returns the applied title.
+   */
+  async renameInvestigation(id: string, title: string): Promise<string> {
+    const r = await this.authedPost<{ title?: string }>(
+      `/api/investigations/${encodeURIComponent(id)}/rename`,
+      { title },
+    );
+    return r.title ?? title;
+  }
+
+  /**
    * POST /api/investigations from a raw analyst-typed seed (design/ui/02 §2.7):
    * the value the analyst rooted on plus their confirmed kind ("entity" |
    * "question"). The server classifies, mints the STIX id for an entity, and

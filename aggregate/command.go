@@ -349,6 +349,8 @@ func applyCommand(env Envelope, cmd Command, state aggregateState) ([]Event, err
 		return reopenEvents(env, state, c)
 	case ArchiveInvestigation:
 		return archiveEvents(env, state, c)
+	case RenameInvestigation:
+		return renameEvent(env, state, c)
 	case AddMember:
 		return membershipEvent(env, state, EventTypeMemberAdded, MemberAdded(c))
 	case RemoveMember:

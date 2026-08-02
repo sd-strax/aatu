@@ -96,6 +96,21 @@ func (InvestigationCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt 
 	case EventTypeArchived:
 		return setStatus(ctx, tx, evt, StatusArchived)
 
+	case EventTypeRenamed:
+		var p InvestigationRenamed
+		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+			return fmt.Errorf("unmarshal InvestigationRenamed payload: %w", err)
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE investigation_current
+			SET title = $2, last_event_sequence = $3, updated_at = $4
+			WHERE aggregate_id = $1
+		`, evt.AggregateID, p.To, evt.SequenceNo, evt.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("rename investigation_current: %w", err)
+		}
+		return nil
+
 	case EventTypeInterpretationRecorded, EventTypeInterpretationSuperseded,
 		EventTypeMemberAdded, EventTypeMemberRemoved, EventTypeEvidenceAttached:
 		// These don't change basic state (the reasoning thread and membership

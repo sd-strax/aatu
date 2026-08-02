@@ -70,6 +70,12 @@
         "title": "Open Investigation"
       },
       {
+        "command": "reckon.renameInvestigation",
+        "category": "reckon",
+        "title": "Rename Investigation…",
+        "icon": "$(edit)"
+      },
+      {
         "command": "reckon.applyPosture",
         "category": "reckon",
         "title": "Apply Workbench Posture"
@@ -105,9 +111,20 @@
           "group": "navigation@2"
         }
       ],
+      "view/item/context": [
+        {
+          "command": "reckon.renameInvestigation",
+          "when": "view == reckon.investigations && viewItem == reckon.investigation && reckon.signedIn",
+          "group": "inline@1"
+        }
+      ],
       "commandPalette": [
         {
           "command": "reckon.openInvestigation",
+          "when": "false"
+        },
+        {
+          "command": "reckon.renameInvestigation",
           "when": "false"
         },
         {

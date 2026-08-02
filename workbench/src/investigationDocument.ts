@@ -110,6 +110,7 @@ type InboundMessage =
   | { type: "export.open" }
   | { type: "copy"; text: string }
   | { type: "investigation.open"; id: string; title?: string }
+  | { type: "rename"; title: string }
   | { type: "transcript.open"; interpretationId: string };
 
 export class InvestigationDocuments {
@@ -250,6 +251,12 @@ export class InvestigationDocuments {
       void vscode.env.clipboard.writeText(msg.text);
     } else if (msg.type === "investigation.open") {
       void vscode.commands.executeCommand("reckon.openInvestigation", msg.id, msg.title);
+    } else if (msg.type === "rename") {
+      // Drafts have no aggregate id yet — the pencil is hidden there, but guard
+      // anyway so a synthetic __draft__ key never reaches the rename command.
+      if (!id.startsWith("__draft__")) {
+        void vscode.commands.executeCommand("reckon.renameInvestigation", id, msg.title);
+      }
     } else if (msg.type === "transcript.open") {
       void this.openTranscript(msg.interpretationId);
     }
@@ -1066,10 +1073,17 @@ export class InvestigationDocuments {
       border-bottom: 1px solid var(--border); flex: none;
     }
     .titlerow { display: flex; align-items: baseline; gap: var(--sp-3); }
+    .titlename { display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0; }
     header h1 {
-      font-size: var(--fs-lg); font-weight: 600; margin: 0; flex: 1;
+      font-size: var(--fs-lg); font-weight: 600; margin: 0; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    .iconbtn {
+      flex: none; background: none; border: none; color: var(--text-3);
+      cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1;
+      border-radius: var(--r-sm, 4px);
+    }
+    .iconbtn:hover { color: var(--text); background: var(--fill-2); }
     /* status pill — tier/state pills are weight-800 micro-labels (01 §Scale) */
     .state {
       font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
@@ -1605,7 +1619,10 @@ export class InvestigationDocuments {
   <div id="main">
     <header>
       <div class="titlerow">
-        <h1 id="title">Investigation</h1>
+        <span class="titlename">
+          <h1 id="title">Investigation</h1>
+          <button id="renameBtn" class="iconbtn" title="Rename this investigation" style="display:none">✎</button>
+        </span>
         <span class="state" id="state"></span>
         <span class="state verdictbadge" id="verdictBadge" style="display:none"></span>
         <button id="verdictBtn" title="Record the disposition of record">Verdict…</button>
@@ -1780,6 +1797,7 @@ export class InvestigationDocuments {
     let lastThread = [];
     const restoredBodies = new Map(); // sequenceNo → { occurredAt, body }
     let streaming = false;
+    let CUR_TITLE = ""; // current title, for the rename prefill
 
     // A clickable citation (02 §2.8): every ref opens. The chip reads as
     // evidence — a type label immediately (from the id prefix), enriched with
@@ -2101,6 +2119,9 @@ export class InvestigationDocuments {
         : engine === "CONCLUDED" ? "Concluded — reopen to continue the conversation."
         : "Ask reckon to investigate… (Enter to send, Shift+Enter for newline)";
       $("verdictBtn").style.display = closed ? "none" : "";
+      // Rename is refused on a settled record (concluded/archived) — hide the
+      // pencil rather than offer an affordance that can only fail.
+      $("renameBtn").style.display = closed ? "none" : "";
     }
 
     function esc(s) {
@@ -3739,6 +3760,7 @@ export class InvestigationDocuments {
       $("verdictSubmit").disabled = !(disp && rationale && pinsOk);
     }
     $("verdictBtn").addEventListener("click", openVerdictDialog);
+    $("renameBtn").addEventListener("click", () => vscode.postMessage({ type: "rename", title: CUR_TITLE }));
     $("verdictCancel").addEventListener("click", () => { $("verdictDialog").style.display = "none"; });
     $("verdictRationale").addEventListener("input", updateVerdictSubmit);
     $("dispositions").addEventListener("change", updateVerdictSubmit);
@@ -3784,6 +3806,8 @@ export class InvestigationDocuments {
           document.body.classList.remove("loading");
           $("banner").textContent = "";
           $("title").textContent = msg.investigation.title;
+          CUR_TITLE = msg.investigation.title;
+          $("renameBtn").style.display = "";
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
           lastHyps = msg.hypotheses || [];
           lastCaps = msg.capabilities;

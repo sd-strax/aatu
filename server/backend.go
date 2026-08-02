@@ -611,7 +611,7 @@ func (b *Backend) investigationsCollection(w http.ResponseWriter, r *http.Reques
 // sub-resource lists the chronological reasoning thread (13 §4); the /export
 // sub-resource triggers the post-conclusion export bundle (D.5); the /lifecycle
 // sub-resource drives the state machine (activate/pause/resume/conclude/reopen/
-// archive, D.6).
+// archive, D.6); the /rename sub-resource changes the title.
 func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimSuffix(r.URL.Path, "/")
 	if strings.HasSuffix(trimmed, "/hypotheses") {
@@ -683,6 +683,15 @@ func (b *Backend) investigationsItem(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.investigationLifecycle)
+		default:
+			methodNotAllowed(w, "POST")
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/rename") {
+		switch r.Method {
+		case http.MethodPost:
+			b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, b.renameInvestigation)
 		default:
 			methodNotAllowed(w, "POST")
 		}
