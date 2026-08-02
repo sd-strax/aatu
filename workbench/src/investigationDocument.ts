@@ -1433,6 +1433,7 @@ export class InvestigationDocuments {
     .toolrefs { padding: 6px 10px 8px; border-top: 1px solid var(--border); font-family: var(--sans); }
     .toolactions { margin-top: 6px; }
     .pincta { font-size: var(--fs-sm); padding: 2px 10px; border-radius: var(--r-sm); }
+    .pincta:disabled, .pincta.pinnedInert { opacity: 0.6; cursor: default; background: none; }
     .stepPin { font-size: var(--fs-xs); padding: 1px 8px; margin-left: 6px; }
     /* The pin sits at the right end of the always-visible tool summary. */
     .summaryPin { flex: none; margin-left: auto; font-size: var(--fs-xs); padding: 0 8px; }
@@ -2287,6 +2288,28 @@ export class InvestigationDocuments {
       container.appendChild(hint);
     }
 
+    // A tool result's refs are already pinned when some active pin cites all of
+    // them — the same dedup the tracker's pin uses, so the display never mints
+    // duplicate pins (the engine permits overlap; this is a UI guard).
+    function refsAlreadyPinned(refs) {
+      if (!refs || !refs.length) return false;
+      return lastPins.some((x) => !x.superseded && refs.every((r) => (x.inputRefs || []).includes(r)));
+    }
+    function setResultPinInert(pin) {
+      pin.textContent = "📌 pinned";
+      pin.disabled = true;
+      pin.classList.add("pinnedInert");
+      pin.title = "Already in the pinned evidence — un-pin there to revise";
+    }
+    // Re-evaluate every tool-result pin button against the current pins (called
+    // when the pin fold refreshes): a result pinned from the chat goes inert in
+    // place, so it can't be pinned again.
+    function syncResultPins() {
+      for (const pin of document.querySelectorAll(".summaryPin")) {
+        if (!pin.disabled && refsAlreadyPinned(pin._refs)) setResultPinInert(pin);
+      }
+    }
+
     // attachResultRefs puts a pin button on the row's summary (always visible)
     // and the citation chips in the expanded body. Shared by the live and the
     // reconstructed tool rows.
@@ -2294,13 +2317,16 @@ export class InvestigationDocuments {
       if (!refs || !refs.length) return;
       const pin = document.createElement("button");
       pin.className = "pincta summaryPin";
+      pin._refs = refs;
       pin.textContent = "📌 Pin";
       pin.title = "Pin this result as evidence (cites all " + refs.length + " refs)";
       pin.addEventListener("click", (e) => {
         e.stopPropagation();       // don't toggle the disclosure
         e.preventDefault();
+        if (pin.disabled) return;
         openPinDialog(refs);
       });
+      if (refsAlreadyPinned(refs)) setResultPinInert(pin);
       row.querySelector("summary").appendChild(pin);
 
       const box = document.createElement("div");
@@ -3638,8 +3664,10 @@ export class InvestigationDocuments {
           break;
         case "pins":
           renderPins(msg.pins);
-          // Pin state feeds the tracker's pin affordances — keep them honest.
+          // Pin state feeds the tracker's pin affordances AND the chat's
+          // tool-result pin buttons — keep both honest so nothing double-pins.
           if (lastHyps.length) renderHypotheses(lastHyps);
+          syncResultPins();
           break;
         case "comms":
           renderComms(msg.threads);
