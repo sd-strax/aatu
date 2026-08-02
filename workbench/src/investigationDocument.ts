@@ -1286,6 +1286,15 @@ export class InvestigationDocuments {
       background: currentColor; margin-right: 4px; vertical-align: 1px;
     }
     .badge.T3::before { transform: rotate(45deg); }
+    /* ---- action ledger rows (rail) ---- */
+    .actrow { padding: 6px 0; border-top: 1px solid var(--border); }
+    .actrow:first-child { border-top: none; }
+    .actrow.pend { opacity: 1; }
+    .actrow.settled { opacity: 0.82; }
+    .actrow .artop { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .actrow .atype { font-weight: 600; font-size: var(--fs-sm); }
+    .actrow .artgt { color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
+    .actrow .armeta { color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
     .predictions { list-style: none; padding: 0; margin: 6px 0 0; }
     .predictions li {
       padding: 3px 0 3px 10px; border-left: 2px solid var(--border);
@@ -1649,6 +1658,14 @@ export class InvestigationDocuments {
     <section>
       <h2 id="pinsHead">Pinned evidence</h2>
       <div id="pinsBox"><div class="empty">Nothing pinned yet</div></div>
+    </section>
+    <!-- The action ledger: the durable record of every action requested on this
+         investigation and where it landed — the current-state lens the chat
+         chronicle can't be. "Needs your approval" above is the urgent overlay;
+         this is the complete list, settled and pending alike. -->
+    <section id="actionsSection" style="display:none">
+      <h2 id="actionsHead">Actions</h2>
+      <div id="actionsBox"></div>
     </section>
     <section id="commsSection" style="display:none">
       <h2 id="commsHead">External work</h2>
@@ -3172,6 +3189,83 @@ export class InvestigationDocuments {
     // The action queue: rows are DOM-built (action_type/targets are
     // model-influenced — no innerHTML for them), each with Approve/Reject
     // posting to the host, which does the real call on the human token.
+    // The status badge for a settled or in-flight action: label + colour class.
+    // Pending rows keep their approval vocabulary; the rest map the engine's
+    // lifecycle status to an outcome colour.
+    function actionStatusBadge(a) {
+      if (a.pending) return { label: a.pendingLabel || "PENDING", cls: "warn" };
+      switch (a.status) {
+        case "SUCCEEDED": return { label: "SUCCEEDED", cls: "ok" };
+        case "PARTIAL":   return { label: "PARTIAL", cls: "warn" };
+        case "FAILED":    return { label: "FAILED", cls: "bad" };
+        case "TIMEOUT":   return { label: "TIMEOUT", cls: "bad" };
+        case "REVERSED":  return { label: "REVERSED", cls: "info" };
+        case "REJECTED":  return { label: "REJECTED", cls: "" };
+        case "EXPIRED":   return { label: "EXPIRED", cls: "warn" };
+        case "APPROVED":  return { label: "APPROVED", cls: "info" };
+        case "EXECUTING": return { label: "DISPATCHING", cls: "info" };
+        default:          return { label: a.status || "—", cls: "" };
+      }
+    }
+
+    // The action ledger (rail): every action on this investigation, newest
+    // first, with where it landed. Completed actions vanish from the "Needs
+    // your approval" interrupt — this is where they persist. Read-only: the
+    // approval affordances stay in the interrupt and the chat, so the ledger
+    // never becomes a second, competing place to act.
+    function renderActions(actions) {
+      const all = actions || [];
+      const box = $("actionsBox");
+      $("actionsSection").style.display = all.length ? "" : "none";
+      $("actionsHead").textContent = all.length ? "Actions · " + all.length : "Actions";
+      box.textContent = "";
+      if (!all.length) return;
+      for (const a of all.slice().reverse()) {
+        const row = document.createElement("div");
+        row.className = "actrow " + (a.pending ? "pend" : "settled");
+
+        const top = document.createElement("div");
+        top.className = "artop";
+        const name = document.createElement("span");
+        name.className = "atype";
+        name.textContent = a.actionType;
+        const tier = document.createElement("span");
+        tier.className = "badge " + a.tier;
+        tier.textContent = a.tier;
+        const sb = actionStatusBadge(a);
+        const st = document.createElement("span");
+        st.className = "badge " + sb.cls;
+        st.textContent = sb.label;
+        top.append(name, tier, st);
+
+        const tgt = document.createElement("div");
+        tgt.className = "artgt";
+        tgt.textContent = "→ " + (a.targets || []).join(", ");
+        row.append(top, tgt);
+
+        // Reversal lineage / classification, stated honestly for the record.
+        if (a.status === "REVERSED") {
+          const m = document.createElement("div");
+          m.className = "armeta";
+          m.textContent = "↺ reversed";
+          row.append(m);
+        } else if (a.status === "SUCCEEDED" && a.reversibility === "BEST_EFFORT") {
+          const m = document.createElement("div");
+          m.className = "armeta";
+          m.textContent = "↩? best-effort — cannot be verified undone";
+          row.append(m);
+        }
+        if (a.tierEscalated) {
+          const m = document.createElement("div");
+          m.className = "armeta";
+          m.textContent = "⚠ escalated to " + a.tier + " (blast radius)";
+          row.append(m);
+        }
+
+        box.appendChild(row);
+      }
+    }
+
     function renderPending(actions) {
       lastPending = actions || [];
       renderHeaderState();
@@ -3798,6 +3892,7 @@ export class InvestigationDocuments {
           break;
         case "pending":
           renderPending(msg.actions);
+          renderActions(msg.actions);
           break;
         case "turn.error":
           streaming = false;
