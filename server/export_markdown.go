@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -86,6 +88,7 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 		return "", err
 	}
 
+	rl := newRefLabeler(ctx, db)
 	var md strings.Builder
 
 	// --- frontmatter (ui/05 §5.1, engine vocabulary) -----------------------
@@ -139,7 +142,7 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 			}
 			fmt.Fprintf(&md, "- %s", finding)
 			if len(p.InputRefs) > 0 {
-				fmt.Fprintf(&md, " — cites %s", codeList(p.InputRefs))
+				fmt.Fprintf(&md, " — cites %s", labeledList(rl, p.InputRefs))
 			}
 			fmt.Fprintf(&md, " *(%s, %s)*\n", actorWord(p.Actor.Kind), p.PinnedAt.Time.UTC().Format(time.RFC3339))
 		}
@@ -158,7 +161,7 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 			for _, p := range byHyp[h.ID] {
 				fmt.Fprintf(&md, "  - prediction **[%s]** %s", p.Status, p.Statement)
 				if len(p.TestResultRefs) > 0 {
-					fmt.Fprintf(&md, " — tested against %s", codeList(p.TestResultRefs))
+					fmt.Fprintf(&md, " — tested against %s", labeledList(rl, p.TestResultRefs))
 				}
 				md.WriteString("\n")
 			}
@@ -174,10 +177,21 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 			if e.Actor.Model != "" {
 				who += " · " + e.Actor.Model
 			}
+			// A superseded act (e.g. a verdict a later one revised) stays in the
+			// trace — the record is append-only — but is marked so a reader never
+			// mistakes a retracted act for the current view.
+			typeLabel := e.InterpretationType
+			if e.Superseded {
+				typeLabel += " — superseded"
+			}
 			fmt.Fprintf(&md, "### %s — %s [%s]\n\n",
-				e.OccurredAt.UTC().Format(time.RFC3339), e.InterpretationType, who)
+				e.OccurredAt.UTC().Format(time.RFC3339), typeLabel, who)
 			if e.Summary != "" {
-				fmt.Fprintf(&md, "%s\n\n", e.Summary)
+				if e.Superseded {
+					fmt.Fprintf(&md, "~~%s~~\n\n", e.Summary)
+				} else {
+					fmt.Fprintf(&md, "%s\n\n", e.Summary)
+				}
 			}
 			var meta []string
 			if e.Confidence != "" {
@@ -187,7 +201,7 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 				meta = append(meta, fmt.Sprintf("%d tool call(s)", e.ToolCalls))
 			}
 			if len(e.InputRefs) > 0 {
-				meta = append(meta, "cites "+codeList(e.InputRefs))
+				meta = append(meta, "cites "+labeledList(rl, e.InputRefs))
 			}
 			for _, s := range e.ConsultedSOPs {
 				verb := "consulted"
@@ -215,7 +229,7 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 				if t.ResolvedIdentifier != "" {
 					targets = append(targets, t.ResolvedIdentifier)
 				} else {
-					targets = append(targets, t.EntityRef)
+					targets = append(targets, rl.label(t.EntityRef))
 				}
 			}
 			fmt.Fprintf(&md, "- **[%s]** %s (%s) → %s",
@@ -238,6 +252,41 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 		md.WriteString("\n")
 	}
 
+	// --- external work (comms) ---------------------------------------------
+	// The handoffs an investigation spawned — who was notified, and how they
+	// replied. Load-bearing for an IR handoff ("IT confirmed the reimage is
+	// scheduled"), and absent from the structured sections above. Best-effort:
+	// the layer may be off, in which case the section is simply omitted.
+	if b.cfg.Comms != nil {
+		threads, cerr := b.cfg.Comms.List(ctx, id, time.Now().UTC())
+		if cerr == nil && len(threads) > 0 {
+			md.WriteString("## External work\n\n")
+			for _, t := range threads {
+				subject := t.Subject
+				if subject == "" {
+					subject = t.ActionType
+				}
+				fmt.Fprintf(&md, "- **%s** → %s — *%s*", subject, t.Target, t.Status)
+				if t.FollowUps > 0 {
+					fmt.Fprintf(&md, " · %d follow-up(s)", t.FollowUps)
+				}
+				md.WriteString("\n")
+				for _, e := range t.Trail {
+					arrow := "→"
+					switch e.Direction {
+					case "inbound":
+						arrow = "←"
+					case "note":
+						arrow = "·"
+					}
+					fmt.Fprintf(&md, "  - %s %s %s: %s\n",
+						e.At.UTC().Format(time.RFC3339), arrow, e.Author, oneLine(e.Body))
+				}
+			}
+			md.WriteString("\n")
+		}
+	}
+
 	// --- conclusion --------------------------------------------------------
 	if ic.ConclusionRef != "" {
 		md.WriteString("## Conclusion\n\n")
@@ -255,13 +304,119 @@ func yamlString(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", " ").Replace(s) + `"`
 }
 
-// codeList renders refs as backticked code spans, comma-joined.
-func codeList(refs []string) string {
+// refLabeler resolves cited refs to human labels for the export (a raw
+// `x-host--65c1…` id is unreadable in a ticket; `WIN-FILE01` is not). Caches
+// within one render, and ALWAYS falls back to the raw ref — a missing or opaque
+// object degrades to the id, never a broken document.
+type refLabeler struct {
+	ctx   context.Context
+	db    *sql.DB
+	cache map[string]string
+}
+
+func newRefLabeler(ctx context.Context, db *sql.DB) *refLabeler {
+	return &refLabeler{ctx: ctx, db: db, cache: map[string]string{}}
+}
+
+func (rl *refLabeler) label(ref string) string {
+	if ref == "" {
+		return ref
+	}
+	if v, ok := rl.cache[ref]; ok {
+		return v
+	}
+	v := rl.resolve(ref)
+	rl.cache[ref] = v
+	return v
+}
+
+func (rl *refLabeler) resolve(ref string) string {
+	if strings.Contains(ref, "--") {
+		id, ok := stixRefUUID(ref)
+		if !ok {
+			return ref
+		}
+		var typ string
+		var payload []byte
+		if err := rl.db.QueryRowContext(rl.ctx,
+			`SELECT type, payload FROM stix_objects WHERE id = $1`, id).Scan(&typ, &payload); err != nil {
+			return ref
+		}
+		if lbl := stixLabel(typ, payload); lbl != "" {
+			return lbl
+		}
+		return ref
+	}
+	id, err := uuid.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	var class string
+	var t time.Time
+	if err := rl.db.QueryRowContext(rl.ctx,
+		`SELECT class_name, time FROM ocsf_events WHERE id = $1`, id).Scan(&class, &t); err != nil {
+		return ref
+	}
+	return fmt.Sprintf("%s @ %s", class, t.UTC().Format("15:04:05Z"))
+}
+
+// labeledList renders refs as their human labels in backticks, comma-joined.
+func labeledList(rl *refLabeler, refs []string) string {
 	out := make([]string, len(refs))
 	for i, r := range refs {
-		out[i] = "`" + r + "`"
+		out[i] = "`" + rl.label(r) + "`"
 	}
 	return strings.Join(out, ", ")
+}
+
+// stixLabel derives an identifying label from a persisted STIX object's payload
+// (id/type/properties/provenance). Identity-contributing fields live under
+// "properties" (03 §7); the switch mirrors the workbench evidence card. Returns
+// "" when nothing identifying is present, so the caller falls back to the ref.
+func stixLabel(typ string, payload []byte) string {
+	var obj struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return ""
+	}
+	get := func(k string) string {
+		if v, ok := obj.Properties[k].(string); ok {
+			return v
+		}
+		return ""
+	}
+	switch typ {
+	case "x-host":
+		return firstNonEmpty(get("hostname"), get("name"))
+	case "ipv4-addr", "ipv6-addr", "domain-name", "url", "email-addr":
+		return get("value")
+	case "user-account":
+		return firstNonEmpty(get("display_name"), get("user_id"), get("account_login"))
+	case "file":
+		return get("name")
+	case "process":
+		if cl := get("command_line"); cl != "" {
+			return oneLine(cl)
+		}
+		return get("pid")
+	default:
+		return firstNonEmpty(get("name"), get("value"))
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// oneLine collapses whitespace so a value never breaks a markdown list row.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // actorWord maps an actor kind to the reading word.
