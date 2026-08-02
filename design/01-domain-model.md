@@ -427,7 +427,10 @@ simply has no verdict (absence is the honest zero, not an enum value).
   Interpretation and the final Report **consume** the verdict of record at conclude time.
 - **Revisable by appending.** A later `verdict` Interpretation becomes the disposition of
   record (the fold takes the latest non-superseded act); the prior verdict remains visible in
-  the thread. Verdicts change on new evidence; history is never rewritten.
+  the thread. Recording a revised verdict **auto-supersedes** the prior disposition of record
+  in the same transaction (an `InterpretationSuperseded` naming the new act as its
+  replacement), so the thread reads as a revision — the retracted verdict struck, never two
+  co-equal live verdicts. Verdicts change on new evidence; history is never rewritten.
 - **Precondition — no verdict without evidence.** A `verdict` Interpretation is rejected
   unless its `input_refs` are non-empty and the investigation has at least one pinned
   evidence item. Enforced at the aggregate command boundary like every other guard, so no

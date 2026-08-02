@@ -18,6 +18,7 @@ func TestStixLabel(t *testing.T) {
 		{"user falls back to user_id", "user-account", `{"properties":{"user_id":"svc_backup"}}`, "svc_backup"},
 		{"file by name", "file", `{"properties":{"name":"evil.exe"}}`, "evil.exe"},
 		{"process command line collapses whitespace", "process", "{\"properties\":{\"command_line\":\"powershell   -enc\\n  AAA\"}}", "powershell -enc AAA"},
+		{"process numeric pid formatted", "process", `{"properties":{"pid":4321}}`, "pid 4321"},
 		{"unknown type, no identifier", "x-mystery", `{"properties":{"foo":"bar"}}`, ""},
 		{"malformed payload", "x-host", `not json`, ""},
 	}

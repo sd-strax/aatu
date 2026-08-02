@@ -14,7 +14,7 @@ import { BackendClient, InvestigationSummary } from "./backend";
 import { Session } from "./auth";
 import { SidecarTransport } from "./agentTransport";
 import { InvestigationDocuments } from "./investigationDocument";
-import { EVIDENCE_SCHEME, EvidenceProvider, openEvidence } from "./evidenceProvider";
+import { EVIDENCE_SCHEME, EvidenceProvider } from "./evidenceProvider";
 import { EvidenceView } from "./evidenceView";
 
 /** Where the BYOK Anthropic key lives — never in settings, never on disk in the clear. */
@@ -55,16 +55,9 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => transport.dispose() },
     // Citation-open: reckon-evidence:/<ref>.json virtual documents (02 §2.8).
     vscode.workspace.registerTextDocumentContentProvider(EVIDENCE_SCHEME, new EvidenceProvider(client)),
-    vscode.commands.registerCommand("reckon.openEvidence", (ref?: string) => {
+    vscode.commands.registerCommand("reckon.openEvidence", (ref?: string, currentInvestigationId?: string) => {
       if (typeof ref === "string" && ref !== "") {
-        void evidence.open(ref);
-      }
-    }),
-    // The raw JSON tab is still reachable directly ("editor-in-reach", 13 §5) —
-    // the rendered card's "Open raw JSON tab" button routes here too.
-    vscode.commands.registerCommand("reckon.openEvidenceRaw", (ref?: string) => {
-      if (typeof ref === "string" && ref !== "") {
-        void openEvidence(ref);
+        void evidence.open(ref, typeof currentInvestigationId === "string" ? currentInvestigationId : undefined);
       }
     }),
     session.onDidChange(() => {

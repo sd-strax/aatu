@@ -399,6 +399,10 @@ func stixLabel(typ string, payload []byte) string {
 		if cl := get("command_line"); cl != "" {
 			return oneLine(cl)
 		}
+		// pid is a JSON number, not a string — format it rather than drop it.
+		if pid, ok := obj.Properties["pid"].(float64); ok {
+			return fmt.Sprintf("pid %.0f", pid)
+		}
 		return get("pid")
 	default:
 		return firstNonEmpty(get("name"), get("value"))

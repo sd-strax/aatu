@@ -269,6 +269,8 @@ export interface ActionRow {
   expired: boolean;
   /** The approval deadline (ISO), for the live countdown. */
   expiresAt?: string;
+  /** True when this action IS a reversal of another (drives the ledger marker). */
+  isReversal: boolean;
   /** REVERSIBLE | BEST_EFFORT | IRREVERSIBLE — frozen at request time. */
   reversibility?: string;
   /** The blast-radius escalator raised this above the type's default tier. */
@@ -703,6 +705,7 @@ export class BackendClient {
       required_mode?: string;
       expires_at?: string;
       targets?: { entity_ref?: string; resolved_identifier?: string }[];
+      is_reversal?: boolean;
       reversibility?: string;
       tier_escalated?: boolean;
       evidence_refs?: string[];
@@ -736,6 +739,7 @@ export class BackendClient {
         // transition); the deadline comparison covers the moments it lags.
         expired: status === "EXPIRED" || (pending && Number.isFinite(expiry) && Date.now() > expiry),
         expiresAt: a.expires_at,
+        isReversal: a.is_reversal ?? false,
         reversibility: a.reversibility,
         tierEscalated: a.tier_escalated ?? false,
         evidenceRefs: a.evidence_refs ?? [],

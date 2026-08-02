@@ -83,12 +83,14 @@ func resolveSeedInput(res *identity.Resolver, value, kind string) (seedResolutio
 }
 
 // deriveSeedTitle turns a seed's display line into an investigation title,
-// clipped so a long hunt question does not become an unwieldy title.
+// clipped so a long hunt question does not become an unwieldy title. Clipped by
+// RUNES, not bytes — a byte slice could split a multi-byte character and stamp
+// an invalid-UTF-8 title.
 func deriveSeedTitle(display string) string {
 	t := strings.TrimSpace(display)
 	const max = 80
-	if len(t) > max {
-		t = strings.TrimSpace(t[:max]) + "…"
+	if r := []rune(t); len(r) > max {
+		t = strings.TrimSpace(string(r[:max])) + "…"
 	}
 	return t
 }

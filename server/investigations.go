@@ -235,7 +235,10 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env := newEnvelope(uuid.New(), aggregate.Actor{PrincipalID: claims.Subject}, commandNow())
+	// Actor derived from the claims like every other write path — a delegate
+	// token creating an investigation must be recorded AI_DELEGATED, never
+	// silently attributed as a bare human act.
+	env := newEnvelope(uuid.New(), actorFromClaims(claims), commandNow())
 	res, err := b.cfg.Handler.Handle(r.Context(), env, cmd)
 	if err != nil {
 		writeCommandError(w, "create investigation", err)

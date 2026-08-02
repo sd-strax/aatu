@@ -26,6 +26,22 @@ func TestClassifySeedKind(t *testing.T) {
 	}
 }
 
+func TestDeriveSeedTitle_ClipsByRunes(t *testing.T) {
+	// A long multi-byte question must clip cleanly at a rune boundary — a byte
+	// slice could split a character and stamp an invalid-UTF-8 title.
+	long := strings.Repeat("é", 100)
+	got := deriveSeedTitle(long)
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("long title not clipped: %q", got)
+	}
+	if want := strings.Repeat("é", 80) + "…"; got != want {
+		t.Errorf("clip = %q (len %d); want 80 runes + ellipsis", got, len([]rune(got)))
+	}
+	if short := deriveSeedTitle("host WIN-FILE01"); short != "host WIN-FILE01" {
+		t.Errorf("short title altered: %q", short)
+	}
+}
+
 func TestResolveSeedInput(t *testing.T) {
 	res := identity.NewResolver(uuid.MustParse("6f1b2c3d-0000-4000-8000-000000000001"))
 

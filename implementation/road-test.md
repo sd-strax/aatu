@@ -72,6 +72,11 @@ it's satisfied) → disposition **MALICIOUS** → rationale → **Record verdict
 **Expect:** the verdict badge appears in the header; the verdict act shows in the
 chronicle (⚖ line).
 
+*Optional — verdict revision:* record a second verdict with a different
+disposition. **Expect:** the prior verdict is auto-superseded in the same
+transaction — the chronicle shows the old ⚖ line struck with a "superseded" tag,
+the badge and any later conclude consume only the new one.
+
 ## 4. Remediate — now the agent is an ally, because evidence precedes action
 
 Everything the agent would refuse in a remediate-first run now lands clean. Ask,
@@ -144,6 +149,9 @@ leave a thread open to see the warning, then Mark done, then conclude).
   chronicle is the chronological one — they don't duplicate each other.
 - **Actions ledger** (rail): every action on the investigation with its status,
   newest first — the durable record the chronicle can't be at a glance.
+- **Rename:** double-click the document title (or the ✎ pencil, or the tree
+  row's context menu) → the title edits in place, file-rename style (Enter
+  commits, Escape cancels). Human-only; refused on a concluded record.
 - **Event-time strip:** the two-clocks view — the decisive fact is a ~7-second
   gap between the RDP logons; check it's visible in *event* time, not learn time.
 - **Enablement form:** find the `asset_criticality` gap hint → enable → apply →

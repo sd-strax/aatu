@@ -11,11 +11,21 @@ import { openEvidence } from "./evidenceProvider";
 
 export class EvidenceView {
   private panel?: vscode.WebviewPanel;
+  // Monotonic request token: the panel is reused across clicks, so a slower
+  // fetch for an EARLIER click must never clobber the card the analyst asked
+  // for last. Only the newest request's result renders.
+  private openSeq = 0;
 
   constructor(private readonly client: BackendClient) {}
 
-  /** Open (or reveal) the evidence card for one ref. */
-  async open(ref: string): Promise<void> {
+  /**
+   * Open (or reveal) the evidence card for one ref. currentInvestigationId,
+   * when known (a click inside an investigation document), is filtered out of
+   * the cross-investigation appearances — "also seen in" means OTHER
+   * investigations, and without the filter a ref cited only here would claim
+   * one phantom sighting.
+   */
+  async open(ref: string, currentInvestigationId?: string): Promise<void> {
     if (!this.panel) {
       this.panel = vscode.window.createWebviewPanel(
         "reckon.evidence",
@@ -33,8 +43,14 @@ export class EvidenceView {
         this.panel = undefined;
       });
     }
-    this.panel.reveal(vscode.ViewColumn.Beside, false);
-    void this.panel.webview.postMessage({ type: "loading", ref });
+    const panel = this.panel;
+    const seq = ++this.openSeq;
+    // Stale = a newer click superseded this request, or the panel was closed
+    // mid-fetch (this.panel cleared by onDidDispose) — in both cases the
+    // result must be dropped, never rendered into the wrong (or dead) panel.
+    const stale = () => this.panel !== panel || this.openSeq !== seq;
+    panel.reveal(vscode.ViewColumn.Beside, false);
+    void panel.webview.postMessage({ type: "loading", ref });
 
     try {
       // The record is load-bearing; appearances are best-effort colour.
@@ -42,10 +58,19 @@ export class EvidenceView {
         this.client.evidence(ref),
         this.client.appearances(ref).catch(() => [] as Appearance[]),
       ]);
-      this.panel.title = shortTitle(doc);
-      void this.panel.webview.postMessage({ type: "evidence", doc, appearances, raw: rawJSON(doc) });
+      if (stale()) {
+        return;
+      }
+      const others = currentInvestigationId
+        ? appearances.filter((a) => a.investigationId !== currentInvestigationId)
+        : appearances;
+      panel.title = shortTitle(doc);
+      void panel.webview.postMessage({ type: "evidence", doc, appearances: others, raw: rawJSON(doc) });
     } catch (err) {
-      void this.panel.webview.postMessage({
+      if (stale()) {
+        return;
+      }
+      void panel.webview.postMessage({
         type: "error",
         ref,
         message: err instanceof Error ? err.message : String(err),

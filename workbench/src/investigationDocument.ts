@@ -125,6 +125,8 @@ export class InvestigationDocuments {
   // has no investigation id until its seed is typed, so it lives under a
   // synthetic key until seedDraft re-keys it to the real aggregate id.
   private draftSeq = 0;
+  // Draft keys with a create in flight (the host half of the double-submit guard).
+  private readonly seeding = new Set<string>();
   // Investigations whose rename card should pop once their panel goes live
   // (set by beginRename from the tree; consumed in the ready handshake).
   private readonly pendingRename = new Map<string, string>();
@@ -228,6 +230,10 @@ export class InvestigationDocuments {
       const applied = await this.client.renameInvestigation(id, trimmed);
       panel.title = `⚖ ${applied}`;
       void this.post(panel, { type: "renamed", title: applied });
+      // Full reload: the rename appended an event, so the seq meta line and
+      // the SeenTracker (via onLoaded) must advance — otherwise the analyst's
+      // own rename shows up in the tree as an unseen "● new" change.
+      await this.load(id, panel);
       void vscode.commands.executeCommand("reckon.refreshInvestigations");
     } catch (err) {
       void vscode.window.showErrorMessage(`reckon: rename failed — ${errText(err)}`);
@@ -291,7 +297,9 @@ export class InvestigationDocuments {
     } else if (msg.type === "lifecycle") {
       void this.lifecycleTransition(id, panel, msg);
     } else if (msg.type === "evidence.open") {
-      void vscode.commands.executeCommand("reckon.openEvidence", msg.ref);
+      // The current investigation id rides along so the evidence card's
+      // cross-investigation memory can exclude it ("also seen in" = OTHERS).
+      void vscode.commands.executeCommand("reckon.openEvidence", msg.ref, id);
     } else if (msg.type === "evidence.resolve") {
       void this.resolveLabel(panel, msg.ref);
     } else if (msg.type === "entity.info") {
@@ -324,6 +332,14 @@ export class InvestigationDocuments {
     panel: vscode.WebviewPanel,
     seed: { value?: string; kind?: string; alertId?: string; source?: string },
   ): Promise<void> {
+    // Second line of the double-submit defense (the webview also guards): once
+    // this draft key has a create in flight, or has already been re-keyed to a
+    // real id, further seed messages are dropped — never a duplicate POST.
+    if (!InvestigationDocuments.isDraft(ref.id) || this.seeding.has(ref.id)) {
+      return;
+    }
+    this.seeding.add(ref.id);
+    const draftKey = ref.id;
     try {
       const created = seed.alertId !== undefined
         ? await this.client.createInvestigation("", {
@@ -340,18 +356,24 @@ export class InvestigationDocuments {
       void vscode.commands.executeCommand("reckon.refreshInvestigations");
     } catch (err) {
       void this.post(panel, { type: "draft.error", message: errText(err) });
+    } finally {
+      this.seeding.delete(draftKey);
     }
   }
 
   /** Refresh every open document (e.g. after sign-out flips to sign-in). */
   refreshAll(): void {
     for (const [id, panel] of this.open) {
-      void this.load(id, panel);
+      // Drafts have no aggregate id — loading one is a guaranteed 4xx.
+      if (!InvestigationDocuments.isDraft(id)) {
+        void this.load(id, panel);
+      }
     }
   }
 
   private async load(id: string, panel: vscode.WebviewPanel): Promise<void> {
     void this.post(panel, { type: "loading" });
+    let loadedThread: ThreadEntry[] | undefined;
     try {
       const [investigation, hypotheses, capabilities, thread] = await Promise.all([
         this.client.getInvestigation(id),
@@ -364,6 +386,7 @@ export class InvestigationDocuments {
         this.client.thread(id).catch(() => null),
       ]);
       panel.title = `⚖ ${investigation.title}`;
+      loadedThread = thread ?? undefined;
       void this.post(panel, { type: "data", investigation, hypotheses, capabilities, thread });
       this.onLoaded?.(id, investigation.lastEventSequence);
       // The event-time strip + evidence graph ride the same load,
@@ -383,12 +406,13 @@ export class InvestigationDocuments {
     }
     // The durable action queue rides every load (open, refresh, post-turn,
     // post-decision) — the panel always shows what actually awaits the
-    // analyst, not just what the last turn proposed.
-    await this.postPending(id, panel);
+    // analyst, not just what the last turn proposed. The thread this load
+    // already fetched rides along so the chronicle doesn't re-fetch it.
+    await this.postPending(id, panel, loadedThread);
   }
 
   /** Fetch + render the action queue and pin fold. Failure logs, never breaks. */
-  private async postPending(id: string, panel: vscode.WebviewPanel): Promise<void> {
+  private async postPending(id: string, panel: vscode.WebviewPanel, thread?: ThreadEntry[]): Promise<void> {
     try {
       const actions = await this.client.actions(id);
       void this.post(panel, { type: "pending", actions });
@@ -411,8 +435,9 @@ export class InvestigationDocuments {
     }
     // The chronicle rides the same refresh cycle: every act (approve, dispatch,
     // result, pin, verdict) is a sequenced interpretation, so re-fetching the
-    // thread after any rail action keeps the reading surface complete.
-    await this.postChronicle(id, panel);
+    // thread after any rail action keeps the reading surface complete. (A
+    // caller that already fetched the thread — load — hands it down instead.)
+    await this.postChronicle(id, panel, thread);
   }
 
   /**
@@ -422,9 +447,9 @@ export class InvestigationDocuments {
    * dispatches, results, pins, verdicts) in sequence order. Transcripts are
    * cached, so this is one thread query plus only newly-committed turns.
    */
-  private async postChronicle(id: string, panel: vscode.WebviewPanel): Promise<void> {
+  private async postChronicle(id: string, panel: vscode.WebviewPanel, preFetched?: ThreadEntry[]): Promise<void> {
     try {
-      const thread = await this.client.thread(id);
+      const thread = preFetched ?? await this.client.thread(id);
       const withTranscript = thread.filter((e) => e.hasTranscript).slice(-40);
       const turns = (await Promise.all(withTranscript.map(async (e) => {
         let body = this.transcriptCache.get(e.interpretationId);
@@ -559,8 +584,9 @@ export class InvestigationDocuments {
    *   - the event-time strip (13 §4 Timeline, minimal at v0): every ref that
    *     carries an EVENT time — OCSF `time` and observed-data `first_observed`;
    *   - the minimal evidence graph (13 §7 step 7): the two-layer join —
-   *     interpretation acts → STIX objects → OCSF telemetry, with the
-   *     observed-data → entity object_refs making the join explicit.
+   *     interpretation-layer STIX objects ↔ OCSF telemetry, acts collapsed
+   *     into grounding edges, with the observed-data → entity object_refs
+   *     making the join explicit.
    */
   private async postDerivedViews(panel: vscode.WebviewPanel, thread: ThreadEntry[]): Promise<void> {
     const refs: string[] = [];
@@ -604,7 +630,19 @@ export class InvestigationDocuments {
     // tinted by whether a human or the AI asserted the link. A reasoning
     // object that produces no such edge is floating on assertion — the alarm
     // the graph exists to raise.
-    const edges: { from: string; to: string; ai: boolean; join?: boolean }[] = [];
+    // Edges dedup by (from,to) — the same citation asserted by several acts is
+    // ONE edge, and a human assertion outranks an AI one for the tint (drawing
+    // duplicates would stack paths and let paint order pick the tint).
+    const edgeByPair = new Map<string, { from: string; to: string; ai: boolean; join?: boolean }>();
+    const addEdge = (from: string, to: string, ai: boolean, join?: boolean) => {
+      const key = from + "|" + to;
+      const prior = edgeByPair.get(key);
+      if (!prior) {
+        edgeByPair.set(key, { from, to, ai, join });
+      } else if (prior.ai && !ai) {
+        prior.ai = false;
+      }
+    };
     const inGraph = new Set<string>();
     for (const e of thread.slice(-40)) {
       const ins = e.inputRefs.filter(Boolean);
@@ -616,7 +654,7 @@ export class InvestigationDocuments {
       for (const o of outs) {
         for (const i of ins) {
           if (o !== i) {
-            edges.push({ from: o, to: i, ai });
+            addEdge(o, i, ai);
           }
         }
       }
@@ -633,10 +671,11 @@ export class InvestigationDocuments {
             continue;
           }
           inGraph.add(or);
-          edges.push({ from: r, to: or, ai: false, join: true });
+          addEdge(r, or, false, true);
         }
       }
     }
+    const edges = [...edgeByPair.values()];
     const graphRefs: { id: string; kind: string; type: string }[] = [];
     for (const r of inGraph) {
       const doc = this.docCache.get(r) ?? null;
@@ -1256,19 +1295,16 @@ export class InvestigationDocuments {
     }
 
     .committed, .usage { font-size: var(--fs-xs); color: var(--text-3); margin: 5px 0; }
-    .stepmark { font-size: var(--fs-xs); color: var(--text-3); margin: var(--sp-2) 0 2px; letter-spacing: 0.08em; }
     .sopchip {
       display: inline-block; font-size: var(--fs-xs); padding: 0 7px;
       margin: 2px 3px 0 0; border: 1px solid var(--info-border);
       color: var(--info); background: var(--info-bg); border-radius: var(--r-pill);
     }
     .sopchip.consulted { border-style: dashed; opacity: 0.6; background: none; }
-    .translink { cursor: pointer; text-decoration: underline; color: var(--text-2); font-size: var(--fs-xs); }
-    .translink:hover { color: var(--text); }
     .error { color: var(--bad); margin: 6px 0; max-width: 78ch; }
 
     /* micro-label eyebrow (01 §Scale): 10px, 700, tracked, uppercase */
-    #rail h2, .railfold > summary, #historyWrap > summary, #stripWrap > summary, #graphWrap > summary, .dlglabel, .residual .rtitle {
+    #rail h2, .railfold > summary, #stripWrap > summary, #graphWrap > summary, .dlglabel, .residual .rtitle {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.07em; color: var(--text-2);
     }
@@ -1310,23 +1346,6 @@ export class InvestigationDocuments {
     #graphBox .gnode.ungrounded text { fill: var(--warn); }
     #graphBox .gnode:hover rect { stroke-width: 2; }
     #graphBox .gcol { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; fill: var(--text-3); text-transform: uppercase; }
-
-    /* ---- reasoning history (the thread, 13 §4) ---- */
-    #historyWrap { margin: 10px 0 var(--sp-4); max-width: 78ch; }
-    #historyWrap > summary { cursor: pointer; margin-bottom: 5px; }
-    .step {
-      border-left: 2px solid var(--border);
-      padding: 2px 0 5px 12px; margin: 9px 0;
-    }
-    .step.ai { border-left-color: var(--he-primary); }
-    .step .stephead {
-      font-size: var(--fs-xs); color: var(--text-2);
-      display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
-    }
-    .step .stephead .who { font-weight: 600; }
-    .step.ai .stephead .who { color: var(--he-primary-soft); }
-    .step .stepbody { font-size: var(--fs-sm); margin-top: 2px; }
-    .step .stepbody p { margin: 3px 0; }
 
     /* ---- rail ---- */
     #rail section { margin-bottom: var(--sp-4); }
@@ -1527,7 +1546,6 @@ export class InvestigationDocuments {
     .toolactions { margin-top: 6px; }
     .pincta { font-size: var(--fs-sm); padding: 2px 10px; border-radius: var(--r-sm); }
     .pincta:disabled, .pincta.pinnedInert { opacity: 0.6; cursor: default; background: none; }
-    .stepPin { font-size: var(--fs-xs); padding: 1px 8px; margin-left: 6px; }
     /* The pin sits at the right end of the always-visible tool summary. */
     .summaryPin { flex: none; margin-left: auto; font-size: var(--fs-xs); padding: 0 8px; }
     details.tool[open] .summaryPin { opacity: 0.9; }
@@ -1864,6 +1882,10 @@ export class InvestigationDocuments {
     let lastThread = [];
     const restoredBodies = new Map(); // sequenceNo → { occurredAt, body }
     let streaming = false;
+    // Set when a turn FAILED before commit: the live copy is the only record of
+    // it, so chronicle renders must not clear #conversation until a new turn
+    // starts (which supersedes the stale error view).
+    let preserveLive = false;
     let CUR_TITLE = ""; // current title, for the rename prefill
 
     // A clickable citation (02 §2.8): every ref opens. The chip reads as
@@ -2187,8 +2209,12 @@ export class InvestigationDocuments {
         : "Ask reckon to investigate… (Enter to send, Shift+Enter for newline)";
       $("verdictBtn").style.display = closed ? "none" : "";
       // Rename is refused on a settled record (concluded/archived) — hide the
-      // pencil rather than offer an affordance that can only fail.
-      $("renameBtn").style.display = closed ? "none" : "";
+      // pencil rather than offer an affordance that can only fail. Never
+      // re-show it while the inline editor is open (a refresh mid-edit would
+      // render pencil + edit field side by side).
+      if (!renameEditing()) {
+        $("renameBtn").style.display = closed ? "none" : "";
+      }
     }
 
     function esc(s) {
@@ -2417,12 +2443,21 @@ export class InvestigationDocuments {
       pin.classList.add("pinnedInert");
       pin.title = "Already in the pinned evidence — un-pin there to revise";
     }
+    function setResultPinActive(pin) {
+      pin.textContent = "📌 Pin";
+      pin.disabled = false;
+      pin.classList.remove("pinnedInert");
+      pin.title = "Pin this result as evidence (cites all " + ((pin._refs || []).length) + " refs)";
+    }
     // Re-evaluate every tool-result pin button against the current pins (called
-    // when the pin fold refreshes): a result pinned from the chat goes inert in
-    // place, so it can't be pinned again.
+    // when the pin fold refreshes) — BOTH ways: a result pinned from the chat
+    // goes inert in place, and an un-pinned (superseded) one recovers, so a
+    // button that outlives a chronicle rebuild never stays wrongly frozen.
     function syncResultPins() {
       for (const pin of document.querySelectorAll(".summaryPin")) {
-        if (!pin.disabled && refsAlreadyPinned(pin._refs)) setResultPinInert(pin);
+        const pinned = refsAlreadyPinned(pin._refs);
+        if (!pin.disabled && pinned) setResultPinInert(pin);
+        else if (pin.disabled && !pinned) setResultPinActive(pin);
       }
     }
 
@@ -2497,11 +2532,12 @@ export class InvestigationDocuments {
     }
 
     // ---- evidence graph (13 §7 step 7, minimal) ----------------------------
-    // Three layers, left to right: interpretation acts → interpretation-layer
-    // objects (STIX) → raw telemetry (OCSF). Edges are real citations (act →
-    // ref) and the explicit observed-data → entity join — never inference.
-    // Click an act with a transcript to open it; click any ref to open its
-    // record. Richness is deferred to v1; navigability is the v0 bar.
+    // Two layers, left to right: interpretation-layer objects (STIX — reasoning
+    // nodes and SCOs) → raw telemetry (OCSF). Acts are edges, not nodes (the
+    // chronicle owns "what happened"): a produced object points at the evidence
+    // it cites, plus the explicit observed-data → entity join — never
+    // inference. Click any node to open its record. Richness is deferred to
+    // v1; navigability is the v0 bar.
     const SVGNS = "http://www.w3.org/2000/svg";
     function svgEl(tag, attrs) {
       const el2 = document.createElementNS(SVGNS, tag);
@@ -2684,8 +2720,12 @@ export class InvestigationDocuments {
 
     // Render the committed chronicle into #restored: the whole thread in
     // sequence order, transcript-bearing entries as full turns, act-typed
-    // entries as one-line entries. When no turn is streaming, the live
-    // #conversation has all been committed into this chronicle, so clear it.
+    // entries as one-line entries, and a transcript-bearing entry whose body is
+    // NOT loaded (older than the fetch window, or its transcript fetch failed)
+    // as a compact fallback line that opens the transcript on demand — early
+    // history must never silently vanish from the reading surface. When no turn
+    // is streaming (and no failed turn's live copy is being preserved), the
+    // live #conversation has all been committed into this chronicle: clear it.
     function renderChronicle() {
       const box = $("restored");
       box.textContent = "";
@@ -2694,11 +2734,52 @@ export class InvestigationDocuments {
         const body = restoredBodies.get(e.sequenceNo);
         if (body) {
           box.appendChild(restoredTurn({ sequenceNo: e.sequenceNo, occurredAt: e.occurredAt, body: body.body }));
+          appendSopChips(box, e);
         } else if (CHRONICLE_ACTS[e.interpretationType]) {
           box.appendChild(actLine(e));
+        } else if (e.hasTranscript) {
+          box.appendChild(turnStub(e));
         }
       }
-      if (!streaming) conversation.textContent = "";
+      if (!streaming && !preserveLive) conversation.textContent = "";
+    }
+
+    // Knowledge-retrieval provenance (ui/02 §2.11): which SOPs the turn pulled,
+    // followed (solid) vs merely consulted (dashed). Rides under the turn.
+    function appendSopChips(box, e) {
+      const sops = e.consultedSops || [];
+      if (!sops.length) return;
+      const row = document.createElement("div");
+      row.className = "usage";
+      for (const s of sops) {
+        const chip = document.createElement("span");
+        chip.className = "sopchip" + (s.used ? "" : " consulted");
+        chip.textContent = (s.used ? "followed: " : "consulted: ") + (s.title || s.sopId);
+        row.appendChild(chip);
+      }
+      box.appendChild(row);
+    }
+
+    // A committed turn whose transcript body isn't loaded: one line carrying the
+    // act's own summary, clickable to open the full transcript in an editor.
+    function turnStub(e) {
+      const row = document.createElement("div");
+      row.className = "actline turnstub" + (e.actor.kind === "AI_DELEGATED" ? " ai" : "");
+      const icon = document.createElement("span");
+      icon.className = "acticon";
+      icon.textContent = "…";
+      row.appendChild(icon);
+      const text = document.createElement("span");
+      text.className = "acttext";
+      text.textContent = (e.summary || "committed turn") + " — open transcript";
+      row.appendChild(text);
+      const when = document.createElement("span");
+      when.className = "acttime";
+      when.textContent = e.occurredAt ? new Date(e.occurredAt).toLocaleTimeString() : "";
+      row.appendChild(when);
+      row.style.cursor = "pointer";
+      row.addEventListener("click", () => vscode.postMessage({ type: "transcript.open", interpretationId: e.interpretationId }));
+      return row;
     }
 
     function restoredTurn(t) {
@@ -3326,7 +3407,9 @@ export class InvestigationDocuments {
         top.className = "artop";
         const name = document.createElement("span");
         name.className = "atype";
-        name.textContent = a.actionType;
+        // A reversal action is marked as such — host.unisolate undoing an
+        // isolate must not read like a first-order act.
+        name.textContent = (a.isReversal ? "↺ " : "") + a.actionType;
         const tier = document.createElement("span");
         tier.className = "badge " + a.tier;
         tier.textContent = a.tier;
@@ -3645,8 +3728,13 @@ export class InvestigationDocuments {
         if (t) t.onclick = () => { draftOverride = "entity"; renderDraftInterp(); };
       }
     }
+    // One submit per draft: the Enter path bypasses the disabled button, so an
+    // explicit in-flight flag guards both — a double Enter must never mint two
+    // investigations. Cleared on error (retry) and on a fresh draft.
+    let draftSubmitting = false;
     function showDraft() {
       draftOverride = null;
+      draftSubmitting = false;
       $("draftView").style.display = "flex";
       $("draftInput").value = "";
       $("draftErr").textContent = "";
@@ -3658,7 +3746,8 @@ export class InvestigationDocuments {
     function hideDraft() { $("draftView").style.display = "none"; }
     function submitDraft() {
       const v = $("draftInput").value.trim();
-      if (!v) return;
+      if (!v || draftSubmitting) return;
+      draftSubmitting = true;
       $("draftStart").disabled = true;
       $("draftErr").textContent = "";
       vscode.postMessage({ type: "seed.submit", value: v, kind: effectiveDraftKind(v) });
@@ -3680,7 +3769,8 @@ export class InvestigationDocuments {
     $("draftAlertSource").addEventListener("input", alertReady);
     $("draftAlertStart").addEventListener("click", () => {
       const alertId = $("draftAlertId").value.trim(), source = $("draftAlertSource").value.trim();
-      if (!alertId || !source) return;
+      if (!alertId || !source || draftSubmitting) return;
+      draftSubmitting = true;
       $("draftAlertStart").disabled = true;
       vscode.postMessage({ type: "seed.alert", alertId, source });
     });
@@ -3839,30 +3929,34 @@ export class InvestigationDocuments {
     $("verdictBtn").addEventListener("click", openVerdictDialog);
     // In-place rename, like a file rename: the title becomes an editable field
     // right where it sits. Enter commits, Escape cancels, blur commits. The host
-    // applies it and echoes "renamed" to update the title text.
-    function startInlineRename() {
+    // applies it and echoes "renamed" to update the title text. Guarded on
+    // closed records for EVERY entry point (pencil, dblclick, tree) — the
+    // engine refuses a rename on concluded/archived, so no path may offer one.
+    function startInlineRename(prefill) {
+      if (conversationClosed) return;
       const inp = $("titleEdit");
       if (inp.style.display !== "none") return; // already editing
-      inp.value = CUR_TITLE;
+      inp.value = prefill || CUR_TITLE;
       $("title").style.display = "none";
       $("renameBtn").style.display = "none";
       inp.style.display = "";
       inp.focus();
       inp.select();
     }
+    function renameEditing() { return $("titleEdit").style.display !== "none"; }
     function endInlineRename(commit) {
       const inp = $("titleEdit");
       if (inp.style.display === "none") return; // already ended (guards Esc→blur)
       const v = inp.value.trim();
       inp.style.display = "none";
       $("title").style.display = "";
-      $("renameBtn").style.display = "";
+      $("renameBtn").style.display = conversationClosed ? "none" : "";
       if (commit && v && v !== CUR_TITLE) {
         vscode.postMessage({ type: "rename", title: v });
       }
     }
-    $("renameBtn").addEventListener("click", startInlineRename);
-    $("title").addEventListener("dblclick", startInlineRename);
+    $("renameBtn").addEventListener("click", () => startInlineRename());
+    $("title").addEventListener("dblclick", () => startInlineRename());
     $("titleEdit").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); endInlineRename(true); }
       else if (e.key === "Escape") { e.preventDefault(); endInlineRename(false); }
@@ -3901,6 +3995,7 @@ export class InvestigationDocuments {
           hideDraft();
           break;
         case "draft.error":
+          draftSubmitting = false;
           $("draftErr").textContent = msg.message;
           $("draftStart").disabled = false;
           $("draftAlertStart").disabled = false;
@@ -3914,7 +4009,9 @@ export class InvestigationDocuments {
           $("banner").textContent = "";
           $("title").textContent = msg.investigation.title;
           CUR_TITLE = msg.investigation.title;
-          $("renameBtn").style.display = "";
+          // renderHeaderState (below) owns the pencil's visibility — it knows
+          // the closed-record and mid-edit rules; showing it here unconditionally
+          // would resurface it on a concluded record or during an inline edit.
           $("meta").innerHTML = '<code>' + esc(msg.investigation.id) + '</code> · seq ' + esc(msg.investigation.lastEventSequence);
           lastHyps = msg.hypotheses || [];
           lastCaps = msg.capabilities;
@@ -3935,7 +4032,9 @@ export class InvestigationDocuments {
           renderComms(msg.threads);
           break;
         case "rename.begin":
-          startInlineRename();
+          // The tree-supplied title hint covers the edge where this panel's
+          // last load failed and CUR_TITLE is empty.
+          startInlineRename(msg.title || CUR_TITLE);
           break;
         case "renamed":
           CUR_TITLE = msg.title;
@@ -3973,14 +4072,17 @@ export class InvestigationDocuments {
           renderGraph(msg);
           break;
         case "turn.user":
+          preserveLive = false; // a new turn supersedes a preserved error view
           el("msg user", '<span class="bubble">' + esc(msg.text) + '</span>');
           break;
         case "turn.start":
           streaming = true;
+          preserveLive = false;
           turn = { wrap: el("msg assistant"), seg: null, buf: "", tools: [], reasoningEl: null };
           break;
         case "aside.start": {
           streaming = true;
+          preserveLive = false;
           // The "btw" lens: the full exchange streams into a COLLAPSED
           // disclosure — expandable live for anyone watching; the working
           // surface is the tracker, where the results land.
@@ -4034,6 +4136,10 @@ export class InvestigationDocuments {
           break;
         case "turn.error":
           streaming = false;
+          // The failed turn was never committed, so the next chronicle render
+          // won't contain it — keep the live copy (partial text + this error
+          // line) on screen instead of wiping the analyst's only record of it.
+          preserveLive = true;
           el("error", esc(msg.message));
           break;
         case "turn.end": {
