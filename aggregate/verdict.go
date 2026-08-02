@@ -71,6 +71,18 @@ func (s aggregateState) CurrentVerdict() string {
 	return ""
 }
 
+// currentVerdictID returns the interpretation id of the disposition of record
+// (the last non-superseded verdict), or the zero UUID when there is none. Used
+// to auto-supersede the prior verdict when a revised one is recorded.
+func (s aggregateState) currentVerdictID() uuid.UUID {
+	for i := len(s.Verdicts) - 1; i >= 0; i-- {
+		if !s.Verdicts[i].Superseded {
+			return s.Verdicts[i].InterpID
+		}
+	}
+	return uuid.UUID{}
+}
+
 // activePinCount counts non-superseded evidence pins.
 func (s aggregateState) activePinCount() int {
 	n := 0

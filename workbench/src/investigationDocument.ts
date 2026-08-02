@@ -1634,6 +1634,13 @@ export class InvestigationDocuments {
     .actline .acttext { flex: 1; min-width: 0; }
     .actline .acttime { flex: none; font-size: 0.85em; opacity: 0.6; }
     .actline .refchip { flex: none; }
+    .actline.superseded { opacity: 0.6; }
+    .actline.superseded.strong { font-weight: 400; }
+    .actline.superseded .acttext { text-decoration: line-through; color: var(--text-3); }
+    .actline .actsuperseded {
+      flex: none; font-size: 10px; font-style: italic; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
 
     /* The invisible-activate note on a draft's first-action approval card. */
     .actnote { font-style: italic; opacity: 0.85; margin: 2px 0 6px; }
@@ -2636,7 +2643,8 @@ export class InvestigationDocuments {
       const row = document.createElement("div");
       row.className = "actline"
         + (e.actor.kind === "AI_DELEGATED" ? " ai" : "")
-        + (e.interpretationType === "verdict" || e.interpretationType === "conclusion" ? " strong" : "");
+        + (e.interpretationType === "verdict" || e.interpretationType === "conclusion" ? " strong" : "")
+        + (e.superseded ? " superseded" : "");
 
       const icon = document.createElement("span");
       icon.className = "acticon";
@@ -2649,6 +2657,15 @@ export class InvestigationDocuments {
       // verb prefixes it only when the summary doesn't already read as a phrase.
       text.textContent = e.summary || (spec ? spec.verb : e.interpretationType);
       row.appendChild(text);
+
+      // A superseded act (e.g. a verdict a later one revised) stays in the
+      // record, struck, tagged — the history reads as a revision, not a gap.
+      if (e.superseded) {
+        const tag = document.createElement("span");
+        tag.className = "actsuperseded";
+        tag.textContent = "superseded";
+        row.appendChild(tag);
+      }
 
       // Any cited refs stay clickable — the chronicle is a working lens, not a
       // dead log (02 §2.8). Kept to a couple so the line stays a line.

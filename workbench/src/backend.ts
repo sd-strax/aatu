@@ -243,6 +243,7 @@ export interface ThreadEntry {
   outputRefs: string[];
   toolCalls: number;
   hasTranscript: boolean;
+  superseded: boolean;
   consultedSops: { sopId: string; title?: string; used: boolean }[];
 }
 
@@ -659,6 +660,7 @@ export class BackendClient {
       output_refs?: string[];
       tool_calls?: number;
       has_transcript?: boolean;
+      superseded?: boolean;
       consulted_sops?: { sop_id?: string; title?: string; used?: boolean }[];
     }
     const body = await this.authedGet<{ thread?: Raw[] }>(
@@ -680,6 +682,7 @@ export class BackendClient {
       outputRefs: e.output_refs ?? [],
       toolCalls: e.tool_calls ?? 0,
       hasTranscript: e.has_transcript ?? false,
+      superseded: e.superseded ?? false,
       consultedSops: (e.consulted_sops ?? []).map((c) => ({
         sopId: c.sop_id ?? "", title: c.title, used: c.used ?? false,
       })),

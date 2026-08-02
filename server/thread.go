@@ -47,6 +47,11 @@ type ThreadEntryView struct {
 	ToolCalls     int  `json:"tool_calls,omitempty"`
 	HasTranscript bool `json:"has_transcript,omitempty"`
 
+	// Superseded reports that a later interpretation.superseded retracted this
+	// act (e.g. a revised verdict, or an un-pinned finding). The act stays in the
+	// thread — no deletion — but a surface renders it struck, not current.
+	Superseded bool `json:"superseded,omitempty"`
+
 	// ConsultedSOPs is the act's knowledge-retrieval provenance
 	// (design/ui 02 §2.11 renders the chips).
 	ConsultedSOPs []aggregate.ConsultedSOP `json:"consulted_sops,omitempty"`
@@ -86,6 +91,13 @@ func (b *Backend) loadThread(ctx context.Context, invID uuid.UUID) ([]ThreadEntr
 	}
 	defer rows.Close()
 
+	// Which acts a later supersession retracted — so the thread can render them
+	// struck rather than as current. One extra query keeps the main scan simple.
+	superseded, err := b.loadSupersededIDs(ctx, invID)
+	if err != nil {
+		return nil, err
+	}
+
 	out := []ThreadEntryView{}
 	for rows.Next() {
 		var seq int64
@@ -113,11 +125,42 @@ func (b *Backend) loadThread(ctx context.Context, invID uuid.UUID) ([]ThreadEntr
 			OutputRefs:         rec.OutputRefs,
 			ToolCalls:          len(rec.ToolCallRefs),
 			HasTranscript:      rec.TranscriptRef != nil,
+			Superseded:         superseded[rec.InterpretationID.String()],
 			ConsultedSOPs:      rec.ConsultedSOPs,
 		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate thread: %w", err)
+	}
+	return out, nil
+}
+
+// loadSupersededIDs returns the set of interpretation ids retracted by an
+// interpretation.superseded event on this investigation.
+func (b *Backend) loadSupersededIDs(ctx context.Context, invID uuid.UUID) (map[string]bool, error) {
+	rows, err := b.cfg.Handler.DB().QueryContext(ctx,
+		`SELECT payload FROM events
+		 WHERE aggregate_id = $1 AND event_type = $2`,
+		invID, aggregate.EventTypeInterpretationSuperseded)
+	if err != nil {
+		return nil, fmt.Errorf("query supersessions: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var payloadRaw []byte
+		if err := rows.Scan(&payloadRaw); err != nil {
+			return nil, fmt.Errorf("scan supersession: %w", err)
+		}
+		var p aggregate.InterpretationSupersededPayload
+		if err := json.Unmarshal(payloadRaw, &p); err != nil {
+			return nil, fmt.Errorf("decode supersession: %w", err)
+		}
+		out[p.SupersededID.String()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate supersessions: %w", err)
 	}
 	return out, nil
 }

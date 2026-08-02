@@ -391,9 +391,45 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 	if err != nil {
 		return nil, err
 	}
-	return []Event{{
+
+	// A revised verdict auto-supersedes the prior disposition of record (01
+	// §Verdict correction): the previous verdict is marked superseded in the
+	// SAME transaction, so the thread reads as a revision (the prior verdict
+	// struck through) rather than two co-equal verdicts. The newest verdict is
+	// the disposition of record either way — this keeps the history honest
+	// instead of leaving a stack of live verdicts. Emitted before the new
+	// record so the fold retracts the old, then appends the new.
+	events := make([]Event, 0, 2)
+	seq := state.Seq
+	if c.InterpretationType == InterpretationVerdict {
+		if prior := state.currentVerdictID(); prior != (uuid.UUID{}) {
+			supPayload, err := json.Marshal(InterpretationSupersededPayload{
+				SupersededID:   prior,
+				SupersededType: InterpretationVerdict,
+				SupersedingID:  c.InterpretationID,
+				Reason:         "superseded by a revised verdict",
+			})
+			if err != nil {
+				return nil, err
+			}
+			seq++
+			events = append(events, Event{
+				AggregateID:   env.AggregateID,
+				SequenceNo:    seq,
+				TenantID:      env.TenantID,
+				Type:          EventTypeInterpretationSuperseded,
+				Version:       schemaVersion,
+				Payload:       supPayload,
+				Actor:         env.Actor,
+				OccurredAt:    env.OccurredAt,
+				CorrelationID: env.CorrelationID,
+			})
+		}
+	}
+	seq++
+	events = append(events, Event{
 		AggregateID:   env.AggregateID,
-		SequenceNo:    state.Seq + 1,
+		SequenceNo:    seq,
 		TenantID:      env.TenantID,
 		Type:          EventTypeInterpretationRecorded,
 		Version:       schemaVersion,
@@ -401,5 +437,6 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 		Actor:         env.Actor,
 		OccurredAt:    env.OccurredAt,
 		CorrelationID: env.CorrelationID,
-	}}, nil
+	})
+	return events, nil
 }
