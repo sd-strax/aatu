@@ -13,11 +13,13 @@ package aggregate
 //	                    paused                 active
 //
 // draft is the entry state: an investigation that can be reasoned over (the
-// interpretation layer — hypotheses, notes, evidence) but is not yet cleared
-// to dispatch external actions (04-action-authorization.md: the T1 tier allows
-// draft→active→paused lifecycle changes freely, while draft investigations
-// cannot request T2+ external actions). archived is terminal — the aggregate
-// accepts no further events.
+// interpretation layer — hypotheses, notes, evidence) and can even accept an
+// external-action REQUEST, but is not yet cleared to *act* on the world.
+// Activation is implicit at the action boundary (01-domain-model.md §Extension
+// 2, "invisible activate"): the first APPROVAL of a draft's action transitions
+// draft→active in the same transaction, and auto-approve is suppressed until
+// then so that first action always gets a human. archived is terminal — the
+// aggregate accepts no further events.
 const (
 	StatusDraft     = "draft"
 	StatusActive    = "active"

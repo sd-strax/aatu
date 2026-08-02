@@ -2008,7 +2008,7 @@ export class InvestigationDocuments {
         vscode.postMessage({ type: "lifecycle", transition, reason });
       switch (engine) {
         case "DRAFT":
-          // No explicit Activate (04 §Extension 2, invisible activate): a draft
+          // No explicit Activate (01 §Extension 2, invisible activate): a draft
           // activates automatically when its first external action is approved —
           // the reasoning→acting boundary. Reasoning flows freely meanwhile, so
           // there is nothing to click here.
@@ -3237,7 +3237,7 @@ export class InvestigationDocuments {
           decide.append(again);
           row.append(decide);
         } else {
-          // Invisible activate (04 §Extension 2): any pending action on a DRAFT
+          // Invisible activate (01 §Extension 2): any pending action on a DRAFT
           // investigation is its first action on the world, and approving it is
           // the activation moment — surface that so the transition is understood,
           // not silent.

@@ -118,7 +118,7 @@ func TestRequestAction_StatePreconditions(t *testing.T) {
 	env := newTestEnvelope("alice")
 	id := uuid.New()
 
-	// A DRAFT investigation accepts an action REQUEST (04 §Extension 2, invisible
+	// A DRAFT investigation accepts an action REQUEST (01 §Extension 2, invisible
 	// activate): it is recorded, and the investigation stays DRAFT until the
 	// action is approved.
 	draft := aggregateState{Seq: 1, Exists: true, TenantID: env.TenantID, Status: StatusDraft, Actions: map[uuid.UUID]actionState{}}
@@ -138,7 +138,7 @@ func TestRequestAction_StatePreconditions(t *testing.T) {
 }
 
 // TestApproveAction_InvisibleActivate: approving the first action of a DRAFT
-// investigation activates it (04 §Extension 2, action boundary) — but only a
+// investigation activates it (01 §Extension 2, action boundary) — but only a
 // FULLY-approved action; a two-party primary (still PENDING_SECONDARY) does not.
 func TestApproveAction_InvisibleActivate(t *testing.T) {
 	env := newTestEnvelope("alice")

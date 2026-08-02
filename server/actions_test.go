@@ -126,7 +126,7 @@ func TestRequestAction_ManualFallThrough(t *testing.T) {
 // TestRequestAction_InvisibleActivateOnDraft: an action requested against a
 // DRAFT investigation is accepted (not rejected) but auto-approve is suppressed
 // even when a policy matches — the first action always gets a human — and that
-// human's approval activates the investigation (04 §Extension 2).
+// human's approval activates the investigation (01 §Extension 2).
 func TestRequestAction_InvisibleActivateOnDraft(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test skipped in short mode")

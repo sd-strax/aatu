@@ -313,7 +313,7 @@ func (b *Backend) dispatchActionRequest(w http.ResponseWriter, r *http.Request, 
 		MatchedPolicyRef: decision.MatchedPolicyRef,
 		Status:           "PENDING_MANUAL",
 	}
-	// Invisible activate at the action boundary (04 §Extension 2): the first
+	// Invisible activate at the action boundary (01 §Extension 2): the first
 	// action of a DRAFT investigation always gets a human — that approval is the
 	// activation moment (applyApproveAction transitions draft→active) — so
 	// auto-approve is suppressed until the investigation is active. The policy

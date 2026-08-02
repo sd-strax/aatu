@@ -619,7 +619,7 @@ func systemOnly(cmd Command) bool {
 func applyRequestAction(env Envelope, state aggregateState, c RequestAction) ([]Event, error) {
 	switch {
 	case state.Status == StatusActive:
-	case state.Status == StatusDraft: // invisible activate (04 §Extension 2): a
+	case state.Status == StatusDraft: // invisible activate (01 §Extension 2): a
 	// draft accepts an action REQUEST; the investigation activates when that
 	// action is first approved (applyApproveAction), the reasoning→acting boundary.
 	case state.Status == StatusConcluded && c.IsReversal:
@@ -726,7 +726,7 @@ func applyApproveAction(env Envelope, state aggregateState, c ApproveAction) ([]
 		}
 	}
 
-	// Invisible activate at the action boundary (04 §Extension 2): approving the
+	// Invisible activate at the action boundary (01 §Extension 2): approving the
 	// first action of a DRAFT investigation is the activation — the human
 	// clearing the first external action clears the investigation to act on the
 	// world. Only a FULLY-approved action activates (a two-party primary leaves
