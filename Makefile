@@ -4,10 +4,11 @@
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  %-12s %s\n", $$1, $$2}'
 
-build: ## Build reckon and reckon-backend binaries to bin/
+build: ## Build reckon, reckon-backend, and the bundled adapters to bin/
 	@mkdir -p bin
 	go build -o bin/reckon ./cmd/reckon
 	go build -o bin/reckon-backend ./cmd/reckon-backend
+	go build -o bin/reckon-adapter-okta ./cmd/reckon-adapter-okta
 
 test: ## Fast tests: unit + httptest integration. Race detector on. Skips slow embedded-Pg/Temporal/Keycloak lifecycle tests.
 	go test -race -short ./...

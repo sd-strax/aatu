@@ -1,0 +1,47 @@
+# Install manifest for the Okta MCP-bridge adapter (design/11 §3).
+#
+# Install layout: copy this file and the built binary into the adapters dir:
+#   mkdir -p <data>/adapters/okta
+#   cp examples/adapters/okta/manifest.yaml <data>/adapters/okta/
+#   go build -o <data>/adapters/okta/reckon-adapter-okta ./cmd/reckon-adapter-okta
+# then enable + configure it in the tenant config (see tenant-config.yaml).
+#
+# The bridge wraps okta/okta-mcp-server (a Python MCP server). Rather than make
+# the operator install Python/uv/the package, reckon provisions it: the `runtime`
+# block below tells `reckon adapter setup okta` to download a managed uv, build a
+# pinned isolated venv (.venv/), and install the package — so onboarding is one
+# command, nothing preinstalled. `setup` also runs the one-time Okta device login
+# and caches the token, so the adapter runs headless afterward.
+manifest_version: 1
+name: okta
+version: 0.1.0
+protocol_versions: [1]
+class: MCP
+exec: ["./reckon-adapter-okta"] # the bridge binary the engine spawns
+runtime: # reckon provisions this (design/11 §3) — the operator installs nothing
+  kind: python
+  python: "3.13" # exact pin: okta-mcp-server crashes on 3.14
+  package: okta-mcp-server
+  version: "1.29.0" # pinned to the validated release (a bad vendor bump can't break us)
+  entrypoint: okta-mcp-server # venv console script → ./.venv/bin/okta-mcp-server
+summary: # CLAIMED — the describe handshake is the authority (11 §3)
+  verbs: [get_entity_context, enumerate_logons]
+  action_types: [account.disable]
+config_schema:
+  type: object
+  required: [org_url, client_id]
+  properties:
+    org_url:
+      type: string
+      format: uri
+      description: Okta org base URL, e.g. https://acme.okta.com
+    client_id:
+      type: string
+      description: Client ID of the Okta app okta-mcp-server authenticates as
+    scopes:
+      type: string
+      description: Space-separated OKTA_SCOPES; defaults to the v0 read+users.manage set
+    server_command:
+      type: array
+      items: { type: string }
+      description: "Override the okta-mcp-server launch command (default: uvx okta-mcp-server)"

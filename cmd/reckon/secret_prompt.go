@@ -1,12 +1,24 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
 
 	"golang.org/x/term"
 )
+
+// promptLine reads one visible line for a non-secret value (e.g. an org URL or
+// client id). Callers gate on stdinIsTerminal(). An empty answer returns "".
+func promptLine(label string) (string, error) {
+	fmt.Fprintf(os.Stderr, "%s: ", label)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", fmt.Errorf("read %s: %w", label, err)
+	}
+	return strings.TrimSpace(line), nil
+}
 
 // stdinIsTerminal reports whether we can prompt interactively. When false,
 // `reckon init` passes no prompt callback and a no-source secret fails fast

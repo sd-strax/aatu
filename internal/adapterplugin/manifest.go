@@ -26,18 +26,41 @@ const ProtocolVersion = 1
 // an adapter can actually do. Invariant: manifest for enumeration, handshake
 // for truth.
 type Manifest struct {
-	ManifestVersion  int      `yaml:"manifest_version"`
-	Name             string   `yaml:"name"`
-	Version          string   `yaml:"version"`
-	ProtocolVersions []int    `yaml:"protocol_versions"`
-	Class            string   `yaml:"class"` // spec-cased: MCP / NATIVE_API / CUSTOM / SOAR_PLAYBOOK
-	Exec             []string `yaml:"exec"`
-	Requires         []string `yaml:"requires"`
+	ManifestVersion  int          `yaml:"manifest_version"`
+	Name             string       `yaml:"name"`
+	Version          string       `yaml:"version"`
+	ProtocolVersions []int        `yaml:"protocol_versions"`
+	Class            string       `yaml:"class"` // spec-cased: MCP / NATIVE_API / CUSTOM / SOAR_PLAYBOOK
+	Exec             []string     `yaml:"exec"`
+	Requires         []string     `yaml:"requires"`
+	Runtime          *RuntimeSpec `yaml:"runtime"`
 	Summary          struct {
 		Verbs       []string `yaml:"verbs"`
 		ActionTypes []string `yaml:"action_types"`
 	} `yaml:"summary"`
 	ConfigSchema map[string]any `yaml:"config_schema"`
+}
+
+// RuntimeSpec declares an ambient runtime reckon provisions for the adapter
+// (§3 `requires`, satisfied rather than merely checked) so the operator installs
+// nothing. Kind "python" builds a pinned, isolated venv (see
+// internal/adapterruntime). Absent for native static-binary adapters.
+type RuntimeSpec struct {
+	Kind    string `yaml:"kind"`    // "python"
+	Python  string `yaml:"python"`  // exact interpreter version, e.g. "3.13"
+	Package string `yaml:"package"` // PyPI package, e.g. "okta-mcp-server"
+	Version string `yaml:"version"` // pinned package version (recommended)
+	// Entrypoint is the venv console script to run (defaults to Package). The
+	// manifest's exec points at it via ./.venv/bin/<entrypoint>.
+	Entrypoint string `yaml:"entrypoint"`
+}
+
+// EntrypointName returns the console-script name, defaulting to the package.
+func (r RuntimeSpec) EntrypointName() string {
+	if r.Entrypoint != "" {
+		return r.Entrypoint
+	}
+	return r.Package
 }
 
 // Installed is one adapter directory that parsed cleanly and overlaps the

@@ -23,12 +23,16 @@ func runAdapter(args []string) error {
 		return fmt.Errorf("usage: %s adapter test <path-to-adapter-dir> [flags]", branding.CLI)
 	}
 	switch args[0] {
+	case "install":
+		return runAdapterInstall(args[1:])
+	case "setup":
+		return runAdapterSetup(args[1:])
 	case "test":
 		return runAdapterTest(args[1:])
 	case "mcp-probe":
 		return runMcpProbe(args[1:])
 	default:
-		return fmt.Errorf("unknown adapter subcommand %q (want: test, mcp-probe)", args[0])
+		return fmt.Errorf("unknown adapter subcommand %q (want: install, setup, test, mcp-probe)", args[0])
 	}
 }
 

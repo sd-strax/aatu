@@ -115,6 +115,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (BYOK Anthropic key)")
 	fmt.Fprintln(os.Stderr, "  investigate --stdio  agent-loop sidecar for the workbench (JSON-RPC over stdio; spawned, not typed)")
+	fmt.Fprintln(os.Stderr, "  adapter install <name>  install a bundled first-party adapter (okta) into the data dir")
+	fmt.Fprintln(os.Stderr, "  adapter setup <name>  provision an installed adapter's runtime (managed uv + venv) and run its one-time login")
 	fmt.Fprintln(os.Stderr, "  adapter test <dir>  run the plugin conformance handshake against an adapter directory (11 §7)")
 	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
 	fmt.Fprintln(os.Stderr, "  set-anthropic-key    store your BYOK Anthropic key in the OS keychain (client-side)")

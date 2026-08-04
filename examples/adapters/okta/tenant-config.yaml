@@ -1,0 +1,65 @@
+# Example tenant config enabling the Okta MCP-bridge adapter (design/11 §5).
+# Point the backend at it with
+#   capability:
+#     config_path: examples/adapters/okta/tenant-config.yaml
+# after installing the adapter under <data>/adapters/okta/ (see manifest.yaml).
+#
+# The `okta` instance appears in BOTH the read (adapters) and write
+# (action_adapters) sections with the same name. The adapter host dedupes by
+# instance name, so it runs as ONE okta-mcp-server process backing both the read
+# verbs and the account.disable write — the read+write single-process case
+# (11 §8). Replace the placeholder org_url/client_id with your app's values
+# (there is no secret on the Device Authorization Grant path).
+
+tenant: demo
+
+# --- read side (03 §3.2) ---
+adapters:
+  okta:
+    class: mcp
+    enabled: true
+    adapter: okta # installed adapter name (defaults to the key)
+    config:
+      org_url: https://YOUR-ORG.okta.com
+      client_id: YOUR_CLIENT_ID
+      scopes: "okta.users.read okta.groups.read okta.logs.read okta.users.manage"
+    reads: # per-op allowlist (11 §5)
+      - get_user
+      - get_logs
+
+bindings:
+  get_entity_context:
+    - adapter: okta
+      operation: get_user
+      priority: 100
+      params:
+        login: "${entity.user}"
+  enumerate_logons:
+    - adapter: okta
+      operation: get_logs
+      priority: 100
+      params:
+        q: "${entity.user??}"
+
+# --- write side (08 §4) ---
+action_adapters:
+  okta:
+    class: mcp
+    enabled: true
+    adapter: okta
+    config:
+      org_url: https://YOUR-ORG.okta.com
+      client_id: YOUR_CLIENT_ID
+    actions: # per-op allowlist, NO wildcard (11 §5)
+      - deactivate_user
+
+action_bindings:
+  account.disable:
+    - action_type: account.disable
+      adapter: okta
+      operation: deactivate_user
+      priority: 100
+      params:
+        user_id: "${target.resolved_identifier}"
+  # No account.enable binding: okta-mcp-server exposes no reactivate tool, so the
+  # inverse is honestly unavailable and a reversal finds no binding (11 §4.2).
