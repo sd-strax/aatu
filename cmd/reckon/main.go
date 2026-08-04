@@ -85,6 +85,10 @@ func main() {
 		if err := runDevAuth(os.Args[2:]); err != nil {
 			log.Fatalf("%s dev-auth: %v", branding.CLI, err)
 		}
+	case "adapter":
+		if err := runAdapter(os.Args[2:]); err != nil {
+			log.Fatalf("%s adapter: %v", branding.CLI, err)
+		}
 	case "set-anthropic-key":
 		if err := runSetAnthropicKey(); err != nil {
 			log.Fatalf("%s set-anthropic-key: %v", branding.CLI, err)
@@ -111,6 +115,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (BYOK Anthropic key)")
 	fmt.Fprintln(os.Stderr, "  investigate --stdio  agent-loop sidecar for the workbench (JSON-RPC over stdio; spawned, not typed)")
+	fmt.Fprintln(os.Stderr, "  adapter test <dir>  run the plugin conformance handshake against an adapter directory (11 §7)")
 	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
 	fmt.Fprintln(os.Stderr, "  set-anthropic-key    store your BYOK Anthropic key in the OS keychain (client-side)")
 	fmt.Fprintln(os.Stderr, "  unset-anthropic-key  remove the stored Anthropic key from the keychain")

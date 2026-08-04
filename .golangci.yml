@@ -98,6 +98,10 @@ linters:
         # binaries we spawn (kc.sh, java, temporal CLI) are paths we
         # construct from our own config.
         - G204
+        # G702: the taint-analysis sibling of G204. Adapter plugins and MCP
+        # servers are spawned from operator-configured commands (manifest
+        # exec, `uvx okta-mcp-server`), not untrusted input — same rationale.
+        - G702
         # G110: decompression bomb. Our tarballs come from pinned upstream
         # URLs we control; not user input.
         - G110

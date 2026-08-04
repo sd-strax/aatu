@@ -72,14 +72,28 @@ func TestLoadAndBuildResolver(t *testing.T) {
 	}
 }
 
-// TestBuildResolverRejectsUnsupportedClass: an enabled non-fixture adapter is a
-// v0 config error, not a silent skip.
-func TestBuildResolverRejectsUnsupportedClass(t *testing.T) {
+// TestBuildResolverRejectsUnbackedPlugin: an enabled plugin-class adapter with
+// no injected process is a config error (the install is missing or disabled),
+// not a silent skip.
+func TestBuildResolverRejectsUnbackedPlugin(t *testing.T) {
 	cfg := TenantConfig{
 		Adapters: map[string]AdapterSpec{"cs": {Class: ClassNativeAPI, Enabled: true}},
 	}
 	if _, _, err := BuildResolver(cfg, t.TempDir(), uuid.New()); err == nil {
-		t.Error("BuildResolver accepted an enabled native_api adapter in v0")
+		t.Error("BuildResolver accepted a plugin-class adapter with no backing process")
+	}
+}
+
+// TestBuildResolverWithInjectedPlugin: a plugin-class adapter provided in the
+// injected map is wired without the resolver trying to build it as a fixture
+// (the out-of-process wiring seam, 11 §2).
+func TestBuildResolverWithInjectedPlugin(t *testing.T) {
+	cfg := TenantConfig{
+		Adapters: map[string]AdapterSpec{"cs": {Class: ClassNativeAPI, Enabled: true, Reads: []string{"op"}}},
+	}
+	plugins := map[string]Adapter{"cs": healthyStub("cs")}
+	if _, _, err := BuildResolverWithAdapters(cfg, t.TempDir(), uuid.New(), plugins); err != nil {
+		t.Fatalf("BuildResolverWithAdapters with an injected plugin: %v", err)
 	}
 }
 

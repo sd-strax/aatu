@@ -229,7 +229,7 @@ type secretSpec struct {
 	flag     string // the `reckon init` flag that persists an explicit value
 	label    string // human phrase for the interactive prompt
 	supplied string // explicit value from the flag ("" if not given)
-	external bool    // env-injected: do not persist
+	external bool   // env-injected: do not persist
 }
 
 // ensureSecret establishes one secret, NEVER auto-generating it. Precedence:

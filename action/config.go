@@ -18,12 +18,24 @@ type TenantActionConfig struct {
 	Bindings map[string][]ActionBinding   `yaml:"action_bindings"`
 }
 
-// ActionAdapterSpec configures one write-adapter instance. v0 supports only the
-// fixture class; real vendor write adapters land in Phase F.
+// ActionAdapterSpec configures one write-adapter instance. The fixture class
+// replays declared WriteResults; every other class is an out-of-process plugin
+// (11 §2) reached through the injected plugin host. The enablement fields
+// (11 §5) are ignored for the fixture class. Writes take NO wildcard — every
+// action operation is named individually (11 §5, the read/write asymmetry).
 type ActionAdapterSpec struct {
-	Class    capability.AdapterClass `yaml:"class"`
-	Enabled  bool                    `yaml:"enabled"`
-	Scenario string                  `yaml:"scenario"` // fixture: the scenario directory
+	Class   capability.AdapterClass `yaml:"class"`
+	Enabled bool                    `yaml:"enabled"`
+	// Scenario is the fixture scenario directory (fixture class only).
+	Scenario string `yaml:"scenario"`
+	// Adapter is the installed plugin this instance runs (11 §5 named
+	// instances); defaults to the stanza key. Plugin classes only.
+	Adapter string `yaml:"adapter"`
+	// Config is delivered to the plugin's `configure` handshake (11 §4.3).
+	Config map[string]any `yaml:"config"`
+	// Actions is the per-op write allowlist (11 §5): the action operations this
+	// instance may dispatch. No wildcard. Plugin classes only.
+	Actions []string `yaml:"actions"`
 }
 
 // LoadActionConfig reads and parses a write-side tenant config file.
@@ -40,10 +52,19 @@ func LoadActionConfig(path string) (TenantActionConfig, error) {
 }
 
 // BuildActionResolver constructs the action resolver + catalog from a tenant
-// config. fixtureRoot is where write-fixture scenarios live. Only enabled
-// adapters are instantiated; a non-fixture class is rejected in v0. Binding
-// templates are validated up front (08 §4).
+// config against the fixture layer only. It is the no-plugins case of
+// BuildActionResolverWithAdapters.
 func BuildActionResolver(cfg TenantActionConfig, fixtureRoot string) (*ActionResolver, *ActionCatalog, error) {
+	return BuildActionResolverWithAdapters(cfg, fixtureRoot, nil)
+}
+
+// BuildActionResolverWithAdapters constructs the action resolver + catalog from
+// a tenant config. fixtureRoot is where write-fixture scenarios live. plugins
+// supplies the already-constructed out-of-process write facades keyed by
+// instance name (11 §2) — the fixture class is built here, every other class is
+// looked up there. Only enabled adapters are wired; binding templates are
+// validated up front (08 §4).
+func BuildActionResolverWithAdapters(cfg TenantActionConfig, fixtureRoot string, plugins map[string]WriteAdapter) (*ActionResolver, *ActionCatalog, error) {
 	adapters := make(map[string]WriteAdapter)
 	for name, spec := range cfg.Adapters {
 		if !spec.Enabled {
@@ -53,7 +74,11 @@ func BuildActionResolver(cfg TenantActionConfig, fixtureRoot string) (*ActionRes
 		case capability.ClassFixture:
 			adapters[name] = NewFixtureWriteAdapter(fixtureRoot, spec.Scenario)
 		default:
-			return nil, nil, fmt.Errorf("write adapter %q: class %q not supported in v0 (fixture only)", name, spec.Class)
+			p, ok := plugins[name]
+			if !ok {
+				return nil, nil, fmt.Errorf("write adapter %q: class %q is an out-of-process plugin but no adapter was provided — is it installed under <data>/adapters and enabled? (11 §2)", name, spec.Class)
+			}
+			adapters[name] = p
 		}
 	}
 	if err := ValidateActionBindings(cfg.Bindings); err != nil {

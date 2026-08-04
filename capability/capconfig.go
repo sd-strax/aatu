@@ -19,12 +19,27 @@ type TenantConfig struct {
 	Policies map[string]any           `yaml:"policies"`
 }
 
-// AdapterSpec configures one adapter instance. v0 supports only the fixture
-// class; native_api/mcp/custom carry connection fields consumed in later phases.
+// AdapterSpec configures one adapter instance. The fixture class replays local
+// scenario data; every other class is an out-of-process plugin (11 §2) reached
+// through the injected plugin host. The enablement fields (11 §5) — the
+// instance→install mapping, per-instance config, and the per-op reads list —
+// are ignored for the fixture class.
 type AdapterSpec struct {
-	Class    AdapterClass `yaml:"class"`
-	Enabled  bool         `yaml:"enabled"`
-	Scenario string       `yaml:"scenario"` // fixture: the scenario directory
+	Class   AdapterClass `yaml:"class"`
+	Enabled bool         `yaml:"enabled"`
+	// Scenario is the fixture scenario directory (fixture class only).
+	Scenario string `yaml:"scenario"`
+	// Adapter is the installed plugin this instance runs (11 §5 named
+	// instances); defaults to the stanza key. Plugin classes only.
+	Adapter string `yaml:"adapter"`
+	// Config is the instance configuration delivered to the plugin's `configure`
+	// handshake (11 §4.3); x-secret fields carry secret references, never
+	// literals. Plugin classes only.
+	Config map[string]any `yaml:"config"`
+	// Reads is the per-op read allowlist (11 §5): the operations this instance
+	// may serve. `["all"]` is the one wildcard the read side permits. Plugin
+	// classes only.
+	Reads []string `yaml:"reads"`
 }
 
 // BindingSpec is the YAML shape of a Binding.
@@ -50,11 +65,20 @@ func LoadTenantConfig(path string) (TenantConfig, error) {
 }
 
 // BuildResolver constructs a Resolver, its normalizer Registry, and the verb
-// Catalog from a tenant config. fixtureRoot is the directory fixture scenarios
-// live under; namespace is the tenant's identity namespace (§7.1). Only enabled
-// adapters are instantiated; a non-fixture class is rejected in v0. Binding
-// templates are validated up front (§3.3.4).
+// Catalog from a tenant config against the fixture layer only. It is the
+// no-plugins case of BuildResolverWithAdapters.
 func BuildResolver(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID) (*Resolver, *Catalog, error) {
+	return BuildResolverWithAdapters(cfg, fixtureRoot, namespace, nil)
+}
+
+// BuildResolverWithAdapters constructs the read resolver, its normalizer
+// Registry, and the verb Catalog from a tenant config. fixtureRoot is the
+// directory fixture scenarios live under; namespace is the tenant's identity
+// namespace (§7.1). plugins supplies the already-constructed out-of-process
+// adapter facades keyed by instance name (11 §2) — the fixture class is built
+// here, every other class is looked up there. Only enabled adapters are wired;
+// binding templates are validated up front (§3.3.4).
+func BuildResolverWithAdapters(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID, plugins map[string]Adapter) (*Resolver, *Catalog, error) {
 	adapters := make(map[string]Adapter)
 	for name, spec := range cfg.Adapters {
 		if !spec.Enabled {
@@ -64,7 +88,11 @@ func BuildResolver(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID) (*
 		case ClassFixture:
 			adapters[name] = NewFixtureAdapter(fixtureRoot, spec.Scenario)
 		default:
-			return nil, nil, fmt.Errorf("adapter %q: class %q not supported in v0 (fixture only)", name, spec.Class)
+			p, ok := plugins[name]
+			if !ok {
+				return nil, nil, fmt.Errorf("adapter %q: class %q is an out-of-process plugin but no adapter was provided — is it installed under <data>/adapters and enabled? (11 §2)", name, spec.Class)
+			}
+			adapters[name] = p
 		}
 	}
 

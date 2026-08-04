@@ -78,8 +78,8 @@ is why its plan is scoped in full below.
 
 ## 2. Prerequisite: the out-of-process transport (E.1)
 
-No adapter here can be built before the plugin transport exists. E.1 delivers
-`design/11 §2`–`§4`:
+**Status: E.1 is built (see §4 milestone 1).** No adapter here could be built
+before the plugin transport existed; it now does. E.1 delivered `design/11 §2`–`§4`:
 
 - Spawn + supervise a child process; **JSON-RPC 2.0 over stdio**; `initialize` →
   `describe` → `configure` handshake; `invoke`/`dispatch`/`health` mapped 1:1 onto
@@ -210,8 +210,16 @@ containment must never silently re-attempt against another tool.
 
 ## 4. Milestones
 
-1. **E.1** — plugin transport (`11 §2`–§4), manifest + enablement (`11 §3`,`§5`),
-   mirrored from `internal/sidecar/`. Blocks everything below.
+1. **E.1 — DONE.** Plugin transport (`11 §2`–§4), manifest + enablement
+   (`11 §3`,`§5`), mirrored from `internal/sidecar/`. Landed as
+   `internal/adapterplugin/` (framing/conn/manifest/handshake/host/facades +
+   budgeted-restart supervision), the runtime scan+inject wiring, the §5
+   enablement config fields, the `reckon adapter test` conformance verb (`§7`),
+   the `cmd/reckon-adapter-echo` reference adapter, and secret-ref resolution
+   (`internal/secretref/`: keychain://·env://·vault:// with x-secret
+   literal-refusal at config load, `§4.3`). **v0 resolves secrets at `configure`
+   time**; the per-invocation credential channel (`05 §10.2`) is the deferred
+   hardening. Blocks nothing further.
 2. **E.2** — Okta MCP adapter (transport shakedown: pure stdio, `account.disable`).
 3. **E.3** — GreyNoise MCP adapter (read-only OCSF-mapping shakedown).
 4. **E.4 — CrowdStrike:** Adapter A (`crowdstrike-falcon`, MCP read + IOC), then

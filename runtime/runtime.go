@@ -23,6 +23,7 @@ import (
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/comms"
 	"github.com/sd-strax/reckon/config"
+	"github.com/sd-strax/reckon/internal/adapterplugin"
 	"github.com/sd-strax/reckon/internal/branding"
 	"github.com/sd-strax/reckon/internal/secrets"
 	"github.com/sd-strax/reckon/knowledge"
@@ -232,6 +233,19 @@ func serve(cfg config.Config) error {
 	defer knowledgeDB.Close()
 	knowledgeStore := knowledge.NewStore(knowledgeDB)
 
+	// The out-of-process adapter host (Phase E, 11 §2) scans <data>/adapters and
+	// owns one plugin process per enabled instance, shared across the read
+	// resolver, both action resolvers, and the worker — so a vendor serving both
+	// reads and writes runs as one process, not two (11 §8). Spawn is lazy:
+	// nothing starts until a verb/action resolves to a plugin binding. An absent
+	// or empty dir means no plugins, and the fixture path is untouched. It uses
+	// the global slog logger installed by telemetry.Setup.
+	adapterHost := adapterplugin.NewHost(filepath.Join(cfg.Data.Dir, "adapters"), branding.CLI+" engine", nil)
+	defer adapterHost.Close()
+	for _, p := range adapterHost.Problems() {
+		log.Printf("%s: adapter install skipped — %s", branding.CLI, p)
+	}
+
 	// The Temporal worker runs in-process (05 §3.3): it registers the OSS
 	// workflow inventory on the `reckon` task queue and — when write bindings
 	// are configured — the ActionLifecycle activities (handler + action
@@ -244,7 +258,7 @@ func serve(cfg config.Config) error {
 	// result path opens threads for SUCCEEDED notify.* dispatches, and the
 	// backend serves/acts on them.
 	commsStore := comms.NewStore(handler.DB())
-	activities, err := buildActionActivities(cfg, handler, commsStore)
+	activities, err := buildActionActivities(cfg, handler, commsStore, adapterHost)
 	if err != nil {
 		return err
 	}
@@ -267,7 +281,7 @@ func serve(cfg config.Config) error {
 	// Build the read-side capability layer when a tenant capability config is
 	// set (Phase B). Optional in v0: absent config leaves the /api/capabilities
 	// route disabled; a present-but-broken config fails boot loudly.
-	capResolver, capCatalog, err := buildCapability(cfg)
+	capResolver, capCatalog, err := buildCapability(cfg, adapterHost)
 	if err != nil {
 		return err
 	}
@@ -283,7 +297,7 @@ func serve(cfg config.Config) error {
 	// catalog with per-type dispatchability). Built whenever the action layer is
 	// on, independent of whether write bindings exist (zero bindings → every
 	// type reports unavailable, which is the honest answer).
-	actionResolver, err := buildBackendActionResolver(cfg)
+	actionResolver, err := buildBackendActionResolver(cfg, adapterHost)
 	if err != nil {
 		return err
 	}
@@ -368,7 +382,7 @@ func buildGate2(cfg config.Config) (*action.Gate2, *action.ActionCatalog, error)
 // a resolver with zero bindings simply reports every action type as
 // unavailable, which is the honest catalog view the agent needs. Returns nil
 // when the action layer is off (no config path).
-func buildBackendActionResolver(cfg config.Config) (*action.ActionResolver, error) {
+func buildBackendActionResolver(cfg config.Config, host *adapterplugin.Host) (*action.ActionResolver, error) {
 	if cfg.Capability.ConfigPath == "" {
 		return nil, nil
 	}
@@ -376,7 +390,11 @@ func buildBackendActionResolver(cfg config.Config) (*action.ActionResolver, erro
 	if err != nil {
 		return nil, fmt.Errorf("load action config: %w", err)
 	}
-	resolver, _, err := action.BuildActionResolver(ac, cfg.Capability.FixtureRoot)
+	plugins, err := pluginWriteAdapters(host, ac)
+	if err != nil {
+		return nil, err
+	}
+	resolver, _, err := action.BuildActionResolverWithAdapters(ac, cfg.Capability.FixtureRoot, plugins)
 	if err != nil {
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
@@ -387,7 +405,7 @@ func buildBackendActionResolver(cfg config.Config) (*action.ActionResolver, erro
 // handler + write-side action resolver) from the tenant config, or nil when no
 // write bindings are configured. Reuses the capability config path — the
 // action_adapters/action_bindings keys can share the same file (08 §4).
-func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsStore *comms.Store) (*temporal.Activities, error) {
+func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsStore *comms.Store, host *adapterplugin.Host) (*temporal.Activities, error) {
 	path := cfg.Capability.ConfigPath
 	if path == "" {
 		return nil, nil
@@ -399,7 +417,11 @@ func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsS
 	if len(ac.Bindings) == 0 {
 		return nil, nil // no write bindings — workflows-only worker
 	}
-	resolver, _, err := action.BuildActionResolver(ac, cfg.Capability.FixtureRoot)
+	plugins, err := pluginWriteAdapters(host, ac)
+	if err != nil {
+		return nil, err
+	}
+	resolver, _, err := action.BuildActionResolverWithAdapters(ac, cfg.Capability.FixtureRoot, plugins)
 	if err != nil {
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
@@ -423,7 +445,7 @@ func buildArchiveActivities(cfg config.Config, handler *aggregate.Handler) (*tem
 // buildCapability constructs the capability resolver + catalog from the tenant
 // capability config, or returns (nil, nil, nil) when no config path is set. A
 // present-but-malformed config is a boot error — the operator asked for it.
-func buildCapability(cfg config.Config) (*capability.Resolver, *capability.Catalog, error) {
+func buildCapability(cfg config.Config, host *adapterplugin.Host) (*capability.Resolver, *capability.Catalog, error) {
 	path := cfg.Capability.ConfigPath
 	if path == "" {
 		return nil, nil, nil
@@ -436,7 +458,11 @@ func buildCapability(cfg config.Config) (*capability.Resolver, *capability.Catal
 	if err != nil {
 		return nil, nil, fmt.Errorf("capability.tenant_namespace %q: %w", cfg.Capability.TenantNamespace, err)
 	}
-	resolver, catalog, err := capability.BuildResolver(tc, cfg.Capability.FixtureRoot, ns)
+	plugins, err := pluginReadAdapters(host, tc)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolver, catalog, err := capability.BuildResolverWithAdapters(tc, cfg.Capability.FixtureRoot, ns, plugins)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build capability layer: %w", err)
 	}
