@@ -466,6 +466,10 @@ func buildCapability(cfg config.Config, host *adapterplugin.Host) (*capability.R
 	if err != nil {
 		return nil, nil, fmt.Errorf("build capability layer: %w", err)
 	}
+	// Register the verbs an out-of-process adapter describes but the engine
+	// catalog does not already define (11 §4.2), so an adapter's own verbs are
+	// visible to the agent — without this, only DefaultCatalog verbs surface.
+	reconcileCatalog(host, tc, catalog)
 	log.Printf("%s: capability layer loaded from %s (%d verbs available)",
 		branding.CLI, path, len(resolver.AvailableVerbs(catalog)))
 	return resolver, catalog, nil
