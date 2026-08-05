@@ -145,6 +145,14 @@ a failed call — a partially-executed state change must not be silently re-atte
 different tool. Binding selection is resolved once, before the first outbound attempt; retries
 (`§6`) re-use the same binding.
 
+**Source scope is a write-side precondition** (`03 §3.5`): a binding whose adapter instance is
+scoped to a different organization than the investigation's `source_scope` is *not applicable* —
+filtered before selection, never merely deprioritized. A scope mismatch across every binding means
+**no binding**: the action type reports unavailable for that investigation and nothing is
+dispatched. Dispatching an action against the wrong organization's tooling is the failure this rule
+exists to make structurally impossible; no-fall-through and scope filtering together guarantee the
+one selected binding is in the right organization or does not exist.
+
 ---
 
 ## 5. Write adapter operation contract

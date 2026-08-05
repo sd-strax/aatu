@@ -267,6 +267,18 @@ Immutable, set at creation. One of three shapes:
 - **EntitySeed** — `entity_ref` (STIX SCO id)
 - **QuestionSeed** — `hypothesis_statement` (string)
 
+All three shapes carry an optional **`source_scope`** (string): the
+independently administered organization this investigation is rooted in, when
+one tenant's analysts work an event feed aggregated from several — subsidiaries,
+business units, environments run on another organization's behalf. For an
+AlertSeed it is derived from the aggregation platform's organization tag on the
+seeding alert; for Entity/Question seeds the caller supplies it. It is the
+routing key for scoped capability and action resolution
+(03-capability-layer.md §3.5) and, when present, scopes deterministic identity
+within the tenant (same section — org A's `DC01` and org B's `DC01` are
+different machines and must never share an id). Absent means unscoped: the
+single-organization deployment, unchanged.
+
 ### Extension 2 — Lifecycle
 
 A status state machine.

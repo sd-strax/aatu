@@ -309,9 +309,14 @@ above is the degenerate case and pays nothing. Two Okta orgs are two instances o
 
 ```yaml
 adapters:
-  okta-acme:   {adapter: okta, config: {org_url: "https://acme.okta.com"},       reads: [...]}
-  okta-subsid: {adapter: okta, config: {org_url: "https://subsidiary.okta.com"}, reads: [...]}
+  okta-acme:   {adapter: okta, scope: acme,   config: {org_url: "https://acme.okta.com"},       reads: [...]}
+  okta-subsid: {adapter: okta, scope: subsid, config: {org_url: "https://subsidiary.okta.com"}, reads: [...]}
 ```
+
+The optional `scope` field marks the instance as serving one independently
+administered organization; the resolver routes scoped investigations to the
+matching instance and never across (`03 §3.5` owns the semantics — scope is
+engine-side routing config, invisible to the adapter process itself).
 
 Each instance is its own process, own `configure`, own enablement lists, own bindings, own
 health; binding references (`03 §3.2`) name instances, not installs. Instance identity is settled

@@ -336,8 +336,9 @@ The resolver algorithm:
 
 1. Receive `(verb, params, tenant)`.
 2. Look up bindings for `verb` in tenant config, sorted by priority desc.
-3. For each binding, check adapter is enabled, credentials are valid, and
-   required input fields are present.
+3. For each binding, check adapter is enabled, its source scope matches the
+   investigation's (§3.5), credentials are valid, and required input fields
+   are present.
 4. Render parameter template against the input.
 5. Invoke the adapter; on success, return the raw response to the OCSF writer
    and then the normalizer.
@@ -504,6 +505,80 @@ merge results. These verbs are marked `fanout: true` in the binding config; the
 resolver invokes all enabled bindings in parallel, writes one OcsfEvent per
 response, and the normalizer dedupes ObservedData by content hash before
 returning.
+
+### 3.5 Source scope: one tenant, many organizations
+
+A single analyst team frequently works one aggregated event feed that spans
+**multiple independently administered organizations** — subsidiaries, business
+units, acquisition silos, or environments operated on another organization's
+behalf. Each organization has its own identity provider, its own EDR tenancy,
+its own credentials; the aggregation platform tags every event with the
+organization it came from. The analyst's *surface* is unified; the *tools
+behind it* are not.
+
+Named adapter instances (11 §5) already let one tenant run `okta-acme` and
+`idp-meridian` side by side. What priority-plus-preconditions alone cannot do
+is **route a call to the right one**. Two concrete failure modes make this
+load-bearing rather than cosmetic:
+
+- **Wrong-data reads.** `get_entity_context(jdoe)` in an investigation rooted
+  in org A's alert must not be answered by org B's directory. Fall-through
+  makes this worse, not better: if `jdoe` exists in *both* orgs (common logins
+  do), the highest-priority binding answers confidently — with the wrong
+  organization's user.
+- **Mis-routed writes.** The action resolver is deliberately no-fall-through
+  (08 §4); it must select *the one correct* binding. Without a routing basis,
+  `account.disable(jdoe)` against the wrong organization's IdP is the worst
+  single failure this layer could produce.
+
+The mechanism is one optional field on each side of the call, and one matching
+rule:
+
+- **Instances declare a scope.** The enablement stanza (11 §5) gains an
+  optional `scope: <string>`. Scope lives on the *instance*, not the binding —
+  an instance holds one organization's credentials, so the instance is the
+  truthful granularity; its bindings inherit it. Adapters themselves are
+  **scope-unaware**: the mechanism is entirely engine-side (config + resolver),
+  and the adapter contract (§5.3) is untouched.
+- **Investigations carry a scope.** The Seed (01, Extension 1) gains an
+  optional `source_scope`, set at creation — for an AlertSeed, derived from the
+  aggregation platform's organization tag on the seeding alert; for
+  Entity/Question seeds, supplied by the caller. Immutable, like the rest of
+  the seed.
+- **The matching rule (fail-closed).** An *unscoped instance* is applicable to
+  any investigation (the single-organization case and genuinely shared tools —
+  a threat-intel adapter serves every scope). A *scoped instance* is applicable
+  **only** to an investigation carrying the identical scope; an unscoped
+  investigation does not match a scoped instance. Scope filtering runs before
+  the priority walk (§3.2 step 3) — a scope-mismatched binding is *not
+  applicable*, never merely lower-priority. On the read side an all-filtered
+  verb degrades with `degradation_notes` like any other coverage gap (§6.1);
+  on the write side it means *no binding* — the action type reports unavailable
+  for that investigation and nothing is dispatched (08 §4).
+
+```yaml
+adapters:
+  okta-acme:    {adapter: okta, scope: acme,     config: {org_url: "https://acme.okta.com"}, ...}
+  idp-meridian: {adapter: msft, scope: meridian, config: {...}, ...}
+  threat_intel: {adapter: ti,   config: {...}, ...}   # unscoped: serves every scope
+```
+
+**Scope participates in identity.** Deterministic identity (§7) is
+tenant-scoped; in a scoped deployment it must be scope-scoped *within* the
+tenant, or the graph conflates entities across organizations — org A's `DC01`
+and org B's `DC01` are different machines, and a shared UUIDv5 would attach one
+organization's evidence to another's entity (a silent cross-organization merge,
+exactly what §7's aliasing rules exist to forbid). Mechanism: when a scope is
+present, the identity namespace is derived per scope — `uuidv5(tenant_namespace,
+scope)` — and all per-type rules (§7.2) apply unchanged within it. This
+*upholds* the "same entity → same id" commitment: same-named entities in
+different organizations are not the same entity.
+
+Deferred to v1+: scope sets/hierarchies (an instance serving several
+organizations); per-entity scope within one investigation (a cross-organization
+intrusion is, in v0, one investigation per scope joined by linkage edges,
+01 §Relationships); deriving `source_scope` automatically during detection
+normalization (§4.12) from the OCSF metadata organization fields.
 
 ---
 
