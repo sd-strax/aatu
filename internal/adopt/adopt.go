@@ -110,7 +110,7 @@ func Apply(path string, p Plan) error {
 			return err
 		}
 		for verb, sts := range p.ReadBindings {
-			if err := setChild(section(root, "bindings"), verb, sts); err != nil {
+			if err := mergeBindings(section(root, "bindings"), verb, p.Instance, sts); err != nil {
 				return err
 			}
 		}
@@ -120,7 +120,7 @@ func Apply(path string, p Plan) error {
 			return err
 		}
 		for at, sts := range p.WriteBindings {
-			if err := setChild(section(root, "action_bindings"), at, sts); err != nil {
+			if err := mergeBindings(section(root, "action_bindings"), at, p.Instance, sts); err != nil {
 				return err
 			}
 		}
@@ -165,15 +165,52 @@ func setChild(parent *yaml.Node, key string, value any) error {
 	if err != nil {
 		return err
 	}
+	setChildNode(parent, key, node)
+	return nil
+}
+
+// setChildNode sets parent[key] = node, replacing an existing key or appending.
+func setChildNode(parent *yaml.Node, key string, node *yaml.Node) {
 	for i := 0; i+1 < len(parent.Content); i += 2 {
 		if parent.Content[i].Value == key {
 			parent.Content[i+1] = node
-			return nil
+			return
 		}
 	}
 	parent.Content = append(parent.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, node)
+}
+
+// mergeBindings sets sec[key] to the list of bindings for a verb/action-type,
+// preserving bindings from OTHER instances and replacing only this instance's
+// (so a shared verb keeps every adapter's binding, and re-running is
+// idempotent). newStanzas are this instance's bindings.
+func mergeBindings(sec *yaml.Node, key, instance string, newStanzas []map[string]any) error {
+	var kept []*yaml.Node
+	if existing := mappingValue(sec, key); existing != nil && existing.Kind == yaml.SequenceNode {
+		for _, item := range existing.Content {
+			if nodeMapString(item, "adapter") != instance {
+				kept = append(kept, item)
+			}
+		}
+	}
+	for _, st := range newStanzas {
+		node, err := toNode(st)
+		if err != nil {
+			return err
+		}
+		kept = append(kept, node)
+	}
+	setChildNode(sec, key, &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: kept})
 	return nil
+}
+
+// nodeMapString reads a scalar string value for key in a mapping node.
+func nodeMapString(node *yaml.Node, key string) string {
+	if v := mappingValue(node, key); v != nil && v.Kind == yaml.ScalarNode {
+		return v.Value
+	}
+	return ""
 }
 
 // toNode marshals a Go value into a yaml content node.

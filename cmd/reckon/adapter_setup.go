@@ -55,22 +55,17 @@ func runAdapterSetup(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	adapterDir := filepath.Join(cfg.Data.Dir, "adapters", name)
-	installed, err := adapterplugin.Load(adapterDir)
-	if err != nil {
-		// Auto-install a bundled adapter that hasn't been placed yet, so setup is
-		// a single command — no "did you run install first?" gotcha.
-		b, ok := bundledadapters.Get(name)
-		if !ok {
-			return fmt.Errorf("adapter %q is not installed under %s: %w", name, adapterDir, err)
-		}
-		fmt.Printf("%s isn't installed yet — installing the bundled adapter...\n", name)
+	// For a bundled adapter, (re)install it every time so its binary + manifest
+	// always match this reckon build — no separate install step, and no stale
+	// bridge after an upgrade. External adapters are loaded as-installed.
+	if b, ok := bundledadapters.Get(name); ok {
 		if _, ierr := installBundled(b, cfg); ierr != nil {
 			return ierr
 		}
-		installed, err = adapterplugin.Load(adapterDir)
-		if err != nil {
-			return fmt.Errorf("adapter %q failed to install: %w", name, err)
-		}
+	}
+	installed, err := adapterplugin.Load(adapterDir)
+	if err != nil {
+		return fmt.Errorf("adapter %q is not installed under %s: %w", name, adapterDir, err)
 	}
 	rt := installed.Manifest.Runtime
 	if rt == nil {

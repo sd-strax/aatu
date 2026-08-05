@@ -97,6 +97,37 @@ func TestAdoptPreservesExistingContent(t *testing.T) {
 	}
 }
 
+// TestAdoptMergesSharedVerbBinding: adopting a verb that another adapter already
+// binds must KEEP the other adapter's binding, not clobber it. Re-adopting is
+// idempotent (this instance's binding replaced, not duplicated).
+func TestAdoptMergesSharedVerbBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tenant.yaml")
+	existing := "tenant: demo\nbindings:\n  enumerate_logons:\n    - adapter: fixture\n      operation: replay\n      priority: 100\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := PlanFrom(oktaDescribe(), "okta", "okta", "mcp", nil, []string{"get_logs"}, nil)
+
+	// Apply twice — must be idempotent.
+	for i := 0; i < 2; i++ {
+		if err := Apply(path, plan); err != nil {
+			t.Fatalf("Apply #%d: %v", i, err)
+		}
+	}
+	tc, err := capability.LoadTenantConfig(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	binds := tc.Bindings["enumerate_logons"]
+	if len(binds) != 2 {
+		t.Fatalf("enumerate_logons should have fixture + okta (once), got %d: %+v", len(binds), binds)
+	}
+	adapters := map[string]bool{binds[0].Adapter: true, binds[1].Adapter: true}
+	if !adapters["fixture"] || !adapters["okta"] {
+		t.Errorf("want both fixture and okta bindings, got %v", adapters)
+	}
+}
+
 // TestAdoptWriteAsymmetry: with no action-types selected, no write stanza is
 // written (writes are per-op explicit, §5).
 func TestAdoptNoWritesWhenNoneSelected(t *testing.T) {
