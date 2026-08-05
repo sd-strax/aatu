@@ -50,8 +50,11 @@ func describe() adapterplugin.DescribeResult {
 			{Name: "deactivate_user", Params: objSchema()},
 		},
 		DefaultReadBindings: []adapterplugin.ReadBinding{
-			{Verb: "get_entity_context", Adapter: "okta", Operation: "get_user", Priority: 100, Params: map[string]any{"login": "${entity.user}"}},
-			{Verb: "enumerate_logons", Adapter: "okta", Operation: "get_logs", Priority: 100, Params: map[string]any{"since": "${window.start?}", "q": "${entity.user??}"}},
+			// get_user accepts a login/email as user_id (Okta's user endpoint takes
+			// login as the id); the user-account SCO carries the login in
+			// account_login (03 §4 userAccount).
+			{Verb: "get_entity_context", Adapter: "okta", Operation: "get_user", Priority: 100, Params: map[string]any{"user_id": "${entity.account_login}"}},
+			{Verb: "enumerate_logons", Adapter: "okta", Operation: "get_logs", Priority: 100, Params: map[string]any{"since": "${window.start?}", "q": "${entity.account_login??}"}},
 		},
 		DefaultWriteBindings: []action.ActionBinding{
 			{ActionType: "account.disable", Adapter: "okta", Operation: "deactivate_user"},
