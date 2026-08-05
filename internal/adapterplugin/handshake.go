@@ -53,9 +53,21 @@ type DescribeResult struct {
 	Verbs                []capability.CapabilityDescriptor `json:"verbs"`
 	ActionTypes          []action.ActionDescriptor         `json:"action_types"`
 	Operations           []OperationSchema                 `json:"operations"`
-	DefaultReadBindings  []capability.Binding              `json:"default_read_bindings"`
+	DefaultReadBindings  []ReadBinding                     `json:"default_read_bindings"`
 	DefaultWriteBindings []action.ActionBinding            `json:"default_write_bindings"`
 	ConfigSchema         map[string]any                    `json:"config_schema"`
+}
+
+// ReadBinding is a default read-verb binding in describe output (§4.2), ready to
+// adopt into tenant config. Unlike a bare capability.Binding it carries the Verb
+// it binds — the tenant config keys bindings by verb (03 §3.2), and the write
+// side already carries its ActionType on action.ActionBinding.
+type ReadBinding struct {
+	Verb      string         `json:"verb"`
+	Adapter   string         `json:"adapter"`
+	Operation string         `json:"operation"`
+	Priority  int            `json:"priority,omitempty"`
+	Params    map[string]any `json:"params,omitempty"`
 }
 
 // OperationSchema names an operation invoke/dispatch will accept and its param

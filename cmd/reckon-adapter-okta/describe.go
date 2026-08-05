@@ -49,9 +49,9 @@ func describe() adapterplugin.DescribeResult {
 			{Name: "list_group_users", Params: objSchema()},
 			{Name: "deactivate_user", Params: objSchema()},
 		},
-		DefaultReadBindings: []capability.Binding{
-			{Adapter: "okta", Operation: "get_user", Params: map[string]any{"login": "${entity.user}"}},
-			{Adapter: "okta", Operation: "get_logs", Params: map[string]any{"since": "${window.start?}", "q": "${entity.user??}"}},
+		DefaultReadBindings: []adapterplugin.ReadBinding{
+			{Verb: "get_entity_context", Adapter: "okta", Operation: "get_user", Priority: 100, Params: map[string]any{"login": "${entity.user}"}},
+			{Verb: "enumerate_logons", Adapter: "okta", Operation: "get_logs", Priority: 100, Params: map[string]any{"since": "${window.start?}", "q": "${entity.user??}"}},
 		},
 		DefaultWriteBindings: []action.ActionBinding{
 			{ActionType: "account.disable", Adapter: "okta", Operation: "deactivate_user"},

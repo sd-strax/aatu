@@ -14,6 +14,7 @@ import (
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/adapterplugin"
 	"github.com/sd-strax/reckon/internal/adapterruntime"
+	"github.com/sd-strax/reckon/internal/adopt"
 	"github.com/sd-strax/reckon/internal/branding"
 	"github.com/sd-strax/reckon/internal/bundledadapters"
 	"github.com/sd-strax/reckon/internal/mcpclient"
@@ -37,7 +38,8 @@ func runAdapterSetup(args []string) error {
 	orgFlag := fs.String("org", "", "Okta org URL (else read from config, else prompted)")
 	clientFlag := fs.String("client-id", "", "Okta app client id (else read from config, else prompted)")
 	scopesFlag := fs.String("scopes", "", "space-separated OKTA_SCOPES (else config/default)")
-	noAuth := fs.Bool("no-auth", false, "provision dependencies only; skip the one-time login")
+	enableWrites := fs.Bool("enable-writes", false, "enable the adapter's write action-types too (else prompted; writes are deliberate, 11 §5)")
+	noAuth := fs.Bool("no-auth", false, "provision dependencies only; skip enablement + the one-time login")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -90,22 +92,129 @@ func runAdapterSetup(args []string) error {
 	}
 	fmt.Printf("✓ %s runtime ready (%s, python %s)\n", name, rt.Package, rt.Python)
 
+	// Resolve creds (prompt only when we'll also log in). Enablement is config-
+	// only and needs no auth, so it runs even under --no-auth when creds are given.
+	orgURL, clientID, scopes := resolveOktaCreds(name, cfg, *configPath, *orgFlag, *clientFlag, *scopesFlag, !*noAuth)
+
+	// Enable the adapter in the tenant config (the shared adopt+enable primitive,
+	// 11 §5) so the backend serves it after a restart — no hand-edited YAML.
+	if orgURL != "" && clientID != "" {
+		if err := enableAdapter(name, installed, cfg, *configPath, orgURL, clientID, scopes, *enableWrites); err != nil {
+			return err
+		}
+	}
+
 	if *noAuth {
 		return nil
 	}
-
-	orgURL, clientID, scopes := resolveOktaCreds(name, cfg, *configPath, *orgFlag, *clientFlag, *scopesFlag)
 	if orgURL == "" || clientID == "" {
-		fmt.Printf("\nDependencies are ready. Skipping login — no org URL / client id available\n(pass --org and --client-id, or configure %s, then re-run `%s adapter setup %s`).\n", name, branding.CLI, name)
+		fmt.Printf("\nDependencies are ready. Skipping login — no org URL / client id available\n(pass --org and --client-id, or configure %s, then re-run setup).\n", name)
 		return nil
 	}
 	return primeAuth(name, adapterDir, *rt, orgURL, clientID, scopes)
 }
 
+// enableAdapter computes an adoption plan from the adapter's own describe output
+// and writes the enablement (adapter stanza + verb/action bindings) into the
+// tenant config file. Reads are enabled wholesale; each write action-type is
+// per-op explicit (§5), enabled only with --enable-writes or an interactive yes.
+func enableAdapter(name string, installed adapterplugin.Installed, cfg config.Config, configOverride, org, client, scopes string, enableAllWrites bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfgMap := map[string]string{"org_url": org, "client_id": client, "scopes": scopes}
+	p, err := adapterplugin.New(name, installed, toAnyMap(cfgMap), version)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	desc, err := p.Describe(ctx)
+	if err != nil {
+		return fmt.Errorf("describe %s: %w", name, err)
+	}
+
+	class, err := installed.Manifest.AdapterClass()
+	if err != nil {
+		return err
+	}
+	plan := adopt.PlanFrom(desc, name, installed.Manifest.Name, string(class), cfgMap,
+		readOperations(desc), chooseWrites(desc, enableAllWrites))
+	if plan.ReadAdapter == nil && plan.WriteAdapter == nil {
+		return nil
+	}
+
+	target := configOverride
+	if target == "" {
+		target = cfg.Capability.ConfigPath
+	}
+	if target == "" {
+		target = filepath.Join(cfg.Data.Dir, "tenant.yaml")
+	}
+	if err := adopt.Apply(target, plan); err != nil {
+		return err
+	}
+
+	fmt.Printf("✓ enabled in %s\n  verbs: %s\n", target, strings.Join(plan.Summary.Verbs, ", "))
+	if len(plan.Summary.ActionTypes) > 0 {
+		fmt.Printf("  actions: %s\n", strings.Join(plan.Summary.ActionTypes, ", "))
+	}
+	if configOverride == "" && cfg.Capability.ConfigPath == "" {
+		fmt.Printf("  set  capability.config_path: %s  in your reckon config, then restart the backend.\n", target)
+	} else {
+		fmt.Printf("  restart the backend to serve it.\n")
+	}
+	return nil
+}
+
+// readOperations returns the distinct read operations the adapter binds.
+func readOperations(desc *adapterplugin.DescribeResult) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, rb := range desc.DefaultReadBindings {
+		if rb.Operation != "" && !seen[rb.Operation] {
+			seen[rb.Operation] = true
+			out = append(out, rb.Operation)
+		}
+	}
+	return out
+}
+
+// chooseWrites selects which write action-types to enable — all with
+// enableAll, else one interactive confirm each (§5: writes are deliberate).
+func chooseWrites(desc *adapterplugin.DescribeResult, enableAll bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, wb := range desc.DefaultWriteBindings {
+		at := wb.ActionType
+		if at == "" || seen[at] {
+			continue
+		}
+		seen[at] = true
+		switch {
+		case enableAll:
+			out = append(out, at)
+		case stdinIsTerminal():
+			ans, _ := promptLine(fmt.Sprintf("Enable the WRITE action %q? [y/N]", at))
+			if a := strings.ToLower(strings.TrimSpace(ans)); a == "y" || a == "yes" {
+				out = append(out, at)
+			}
+		}
+	}
+	return out
+}
+
+func toAnyMap(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // resolveOktaCreds resolves the org URL, client id, and scopes in precedence
 // flags > tenant config > interactive prompt. Returns empty strings when nothing
 // supplies them and we can't prompt (non-interactive) — the caller skips login.
-func resolveOktaCreds(name string, cfg config.Config, configOverride, orgFlag, clientFlag, scopesFlag string) (org, client, scopes string) {
+func resolveOktaCreds(name string, cfg config.Config, configOverride, orgFlag, clientFlag, scopesFlag string, promptOK bool) (org, client, scopes string) {
 	org, client, scopes = orgFlag, clientFlag, scopesFlag
 
 	// Fill gaps from the tenant config if one is available.
@@ -131,8 +240,8 @@ func resolveOktaCreds(name string, cfg config.Config, configOverride, orgFlag, c
 		}
 	}
 
-	// Prompt for anything still missing, if we have a terminal.
-	if (org == "" || client == "") && stdinIsTerminal() {
+	// Prompt for anything still missing, if we'll log in and have a terminal.
+	if promptOK && (org == "" || client == "") && stdinIsTerminal() {
 		fmt.Printf("\nConfigure the %s login:\n", name)
 		if org == "" {
 			org, _ = promptLine("Okta org URL (e.g. https://acme.okta.com)")

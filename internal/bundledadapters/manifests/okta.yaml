@@ -22,7 +22,7 @@ runtime: # reckon provisions this (design/11 §3) — the operator installs noth
   kind: python
   python: "3.13" # exact pin: okta-mcp-server crashes on 3.14
   package: okta-mcp-server
-  version: "1.29.0" # pinned to the validated release (a bad vendor bump can't break us)
+  version: "1.1.4" # pinned to the validated release (a bad vendor bump can't break us)
   entrypoint: okta-mcp-server # venv console script → ./.venv/bin/okta-mcp-server
 summary: # CLAIMED — the describe handshake is the authority (11 §3)
   verbs: [get_entity_context, enumerate_logons]
