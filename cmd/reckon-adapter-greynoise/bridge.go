@@ -15,14 +15,14 @@ import (
 const version = "0.1.0"
 
 // defaultServerCommand runs the greynoise-mcp-server that `reckon adapter setup
-// greynoise` provisioned into the adapter's isolated venv (path relative to the
-// install dir the host spawns the bridge in — deterministic, offline). Override
-// with the `server_command` config field.
+// greynoise` provisioned via managed Node (npm-installed into ./node_modules;
+// path relative to the install dir the host spawns the bridge in — deterministic,
+// offline). Override with the `server_command` config field.
 //
-// NOTE (validate live, 11 §3 handshake-for-truth): the venv console-script name
-// is the vendor's; confirm with `reckon adapter mcp-probe greynoise` and correct
-// here + in the manifest entrypoint if it differs.
-var defaultServerCommand = []string{"./.venv/bin/greynoise-mcp-server"}
+// NOTE (validate live, 11 §3 handshake-for-truth): the node_modules/.bin script
+// name is the vendor's; confirm with `reckon adapter mcp-probe greynoise` and
+// correct here + in the manifest entrypoint if it differs.
+var defaultServerCommand = []string{"./node_modules/.bin/greynoise-mcp-server"}
 
 // bridge holds the instance config and the lazily-spawned MCP client to
 // greynoise-mcp-server. Read-only: no dispatch path.

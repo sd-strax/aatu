@@ -71,6 +71,14 @@ func EnsureUv(ctx context.Context, dataDir string, out io.Writer) (string, error
 	return uvBin, nil
 }
 
+// symlinkStaysInside reports whether a relative symlink at linkPath pointing to
+// linkname resolves within root — the containment guard for extracted symlinks.
+func symlinkStaysInside(linkPath, linkname, root string) bool {
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkname))
+	rootClean := filepath.Clean(root)
+	return resolved == rootClean || strings.HasPrefix(resolved, rootClean+string(filepath.Separator))
+}
+
 // downloadTarGz fetches a .tar.gz and extracts it into destDir, stripping the
 // leading path components. Ported from the supervisor's downloader with the same
 // traversal guards; sources here are trusted (pinned GitHub release URLs).
@@ -118,6 +126,20 @@ func downloadTarGz(ctx context.Context, url, destDir string, stripComponents int
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
+			}
+		case tar.TypeSymlink:
+			// The Node tarball ships npm/npx/corepack as relative symlinks into
+			// lib/node_modules; recreate them. Refuse an absolute or escaping
+			// linkname (defense in depth; sources are trusted pinned releases).
+			if filepath.IsAbs(hdr.Linkname) || strings.Contains(hdr.Linkname, "..") && !symlinkStaysInside(target, hdr.Linkname, destDir) {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(target) // replace any stale link
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return fmt.Errorf("symlink %s -> %s: %w", target, hdr.Linkname, err)
 			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

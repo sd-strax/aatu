@@ -25,12 +25,12 @@ adapters:
     config:
       api_key: "keychain://reckon/greynoise-api-key" # or env://GREYNOISE_API_KEY, or vault://...
     reads: # per-op allowlist (11 §5)
-      - ip_context
+      - lookup-ip-context
 
 bindings:
   get_indicator_context:
     - adapter: greynoise
-      operation: ip_context
+      operation: lookup-ip-context
       priority: 100
       params:
         ip: "${entity.value}"

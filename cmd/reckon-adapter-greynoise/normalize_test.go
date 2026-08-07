@@ -7,7 +7,7 @@ import (
 
 func TestNormalizeMaliciousToDetectionFinding(t *testing.T) {
 	text := `{"ip":"45.83.64.1","seen":true,"classification":"malicious","actor":"Mirai","tags":["Mirai","SSH Bruteforcer"],"last_seen":"2026-08-01T00:00:00Z"}`
-	evs, err := normalize("ip_context", text)
+	evs, err := normalize("lookup-ip-context", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestNormalizeMaliciousToDetectionFinding(t *testing.T) {
 
 func TestNormalizeBenignToOpaqueNoIndicator(t *testing.T) {
 	text := `{"ip":"8.8.8.8","seen":false,"classification":"benign","last_seen":"2026-08-01T00:00:00Z"}`
-	evs, err := normalize("ip_context", text)
+	evs, err := normalize("lookup-ip-context", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestNormalizeBenignToOpaqueNoIndicator(t *testing.T) {
 
 func TestNormalizeGnqlWrapperUnwraps(t *testing.T) {
 	text := `{"data":[{"ip":"1.2.3.4","classification":"malicious"}],"count":1}`
-	evs, err := normalize("gnql_query", text)
+	evs, err := normalize("gnql-stats", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestNormalizeGnqlWrapperUnwraps(t *testing.T) {
 
 func TestNormalizeRiotIsBenignEnrichment(t *testing.T) {
 	text := `{"ip":"8.8.8.8","riot":true,"category":"public_dns","name":"Google Public DNS","trust_level":"1"}`
-	evs, err := normalize("riot", text)
+	evs, err := normalize("riot-lookup", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}

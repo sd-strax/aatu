@@ -28,9 +28,9 @@ func normalize(operation, text string) ([]ocsfEvent, error) {
 		return nil, err
 	}
 	switch operation {
-	case "ip_context", "gnql_query":
+	case "lookup-ip-context", "gnql-stats":
 		return normalizeContext(objs), nil
-	case "riot":
+	case "riot-lookup":
 		// RIOT is a known-good business service — always benign enrichment.
 		return opaque("benign", objs), nil
 	default:

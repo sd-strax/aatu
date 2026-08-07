@@ -1,29 +1,27 @@
 # Install manifest for the GreyNoise MCP-bridge adapter (design/11 §3).
 #
-# The bridge wraps GreyNoise-Intelligence/greynoise-mcp-server (a Python MCP
-# server). Rather than make the operator install Python/uv/the package, reckon
-# provisions it: the `runtime` block tells `reckon adapter setup greynoise` to
-# download a managed uv, build a pinned isolated venv (.venv/), and install the
-# package — one command, nothing preinstalled. GreyNoise is read-only threat-
-# intel enrichment: this adapter serves the get_indicator_context verb and no
-# action types.
+# The bridge wraps @greynoise/greynoise-mcp-server (a Node MCP server). Rather
+# than make the operator install Node/npm/the package, reckon provisions it: the
+# `runtime` block tells `reckon adapter setup greynoise` to download a managed,
+# pinned Node and npm-install the package into ./node_modules — one command,
+# nothing preinstalled. GreyNoise is read-only threat-intel enrichment: this
+# adapter serves the get_indicator_context verb and no action types.
 #
-# NOTE — the runtime block below (package name, version, entrypoint) and the
-# config env var are the vendor's and are UNVALIDATED. Confirm the real values
-# with `reckon adapter mcp-probe greynoise` (11 §3 handshake-for-truth) against a
-# live greynoise-mcp-server, then pin them here.
+# Requires a GreyNoise ENTERPRISE API key (the free Community key is not accepted
+# by the MCP server). NOTE — the pinned package version and the exact bin/tool
+# names still need confirming with `reckon adapter mcp-probe greynoise` (11 §3
+# handshake-for-truth) against a live server + an Enterprise (or trial) key.
 manifest_version: 1
 name: greynoise
 version: 0.1.0
 protocol_versions: [1]
 class: MCP
 exec: ["./reckon-adapter-greynoise"] # the bridge binary the engine spawns
-runtime: # reckon provisions this — the operator installs nothing
-  kind: python
-  python: "3.13"
-  package: greynoise-mcp-server # VALIDATE: confirm the PyPI package name
+runtime: # reckon provisions this (managed Node) — the operator installs nothing
+  kind: node
+  package: "@greynoise/greynoise-mcp-server" # the official npm package (docs.greynoise.io/docs/mcp-server)
   version: "" # VALIDATE: pin to the release confirmed via mcp-probe (empty = latest for now)
-  entrypoint: greynoise-mcp-server # VALIDATE: venv console-script name
+  entrypoint: greynoise-mcp-server # node_modules/.bin script; VALIDATE the exact bin name via mcp-probe
 summary: # CLAIMED — the describe handshake is the authority (11 §3)
   verbs: [get_indicator_context]
   action_types: []

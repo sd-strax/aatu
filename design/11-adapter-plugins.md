@@ -107,6 +107,10 @@ health probe, not at backend boot. An installed-but-disabled adapter (`§5`) is 
 not even for `describe`. Its manifest is the only thing the engine reads, which is exactly why the
 manifest exists.
 
+For adapters whose `runtime:` kind is `container` (`§3.1`), every operation in this lifecycle —
+spawn, stop, crash detection, budgeted restart — maps onto container-runtime operations per the
+execution contract in `§3.2`; the protocol above the process boundary is identical.
+
 ---
 
 ## 3. Install layout and the manifest
@@ -151,6 +155,122 @@ make an adapter invisible, never partially visible.
 This layout is deliberately registry-agnostic. The signed-manifest distribution scheme (`05 §6.3`)
 produces this layout as its install output; so does a manual copy. Local trust policy for
 non-registry installs (checksums, an operator allowlist) is deferred (`§8`).
+
+### 3.1 Provisioned runtimes (`runtime:`)
+
+`requires:` only *checks* an ambient prerequisite. But many useful adapters wrap a vendor MCP
+server written in a language the operator would otherwise have to install and version-manage —
+the exact onboarding friction that loses users. So the manifest may instead carry a `runtime:`
+block that reckon *satisfies* rather than merely checks: `reckon adapter setup <name>` provisions
+it and the operator installs nothing.
+
+There are exactly three answers to "how do an adapter's dependencies travel," and `runtime:`
+selects among the last two (the first needs no block at all):
+
+1. **Vendored into the artifact** (`12 §2`) — the default and the ideal: a native executable with
+   everything bundled. No `runtime:` block; the `exec` is the binary itself.
+2. **Provisioned at setup** — for bridges wrapping a vendor server distributed through a language
+   ecosystem. reckon downloads a pinned toolchain and installs the pinned package *once, at
+   setup* — never at spawn, never from inside the adapter:
+   - **`python`** — a pinned `uv`, an isolated venv, the pinned PyPI `package`; the `exec` runs
+     `./.venv/bin/<entrypoint>`.
+   - **`node`** — a pinned, self-contained Node, `npm install` of the `package` (an npm spec)
+     into `./node_modules`; the `exec` runs `./node_modules/.bin/<entrypoint>`.
+
+   This does not contradict `12 §1`'s "no language package managers as the distribution channel":
+   the *adapter* still arrives via the index; the package manager fetches only the *wrapped
+   vendor server*, pinned by the manifest, and the fetch happens at setup under reckon's control.
+3. **Baked into an image** — **`container`**: the adapter ships as an OCI `image` and the
+   container *is* the adapter process (`§3.2`). For vendors whose dependency chains resist both
+   bundling and setup-time provisioning (OS packages, glibc-bound libraries, multi-runtime
+   stacks), and for operators who prefer image-based ops.
+
+The managed `python`/`node` kinds keep the **zero-prerequisite promise** the local-first,
+bottom-up adoption path depends on; `container` is the **one-prerequisite opt-in** (a container
+runtime), deliberately never required. All provisioning is pinned for reproducibility and
+air-gapped installs, mirroring the supervisor's embedded-binary management (see
+`internal/adapterruntime`).
+
+### 3.2 The container execution contract
+
+A container adapter is not a different kind of adapter — it is the same executable contract
+behind a different launcher. Everything above the process boundary is unchanged, and that is the
+design's core claim:
+
+- **The image's entrypoint is the adapter executable.** One container = one adapter process =
+  one instance, exactly as `§2` demands of a native spawn. No sidecar arrangements: an image
+  whose entrypoint is a vendor server with the bridge outside the container is just the
+  provisioned-runtime model with worse isolation, and is not a container adapter.
+- **stdio is still the transport.** The engine attaches to the container's stdin/stdout
+  (`run -i`); Content-Length JSON-RPC flows unchanged. The container publishes **no ports** and
+  listens on nothing.
+- **Config and secrets still arrive at `configure`** (`§4.3`), over the wire. Nothing appears on
+  the command line, in the image, or in the container's environment — which means nothing leaks
+  through `docker inspect`, shell history, or image layers. The container posture is *stronger*
+  here than a native spawn, not weaker: the filesystem is the image's own, isolated from
+  `<data>`, and the engine passes no volumes by default.
+
+**Lifecycle mapping.** The engine's process operations map onto container-runtime operations —
+this mapping is the part that must be engine-aware, because one POSIX fact breaks the naive
+version: an attached container client proxies catchable signals to the container's PID 1, but a
+SIGKILL kills only the *client*, leaving the container running, detached, and invisible to the
+engine. The contract:
+
+| Engine operation | Native adapter | Container adapter |
+|---|---|---|
+| spawn | exec the manifest `exec` | `run -i --rm --init --name <cname> --label io.reckon.instance=<instance>` |
+| graceful stop | SIGTERM, grace window | SIGTERM to the attached client (proxied to PID 1), same grace window |
+| force kill | SIGKILL | runtime `rm -f <cname>` — **by name, never a bare process kill** |
+| crash detect | child exit | attached client exit (the client's lifetime tracks the container's) |
+| restart (`§2` budget) | re-exec | always a **fresh container**; never restart a stopped one — a restart re-runs the handshake, and a fresh container is the only state that guarantees the handshake describes reality |
+
+Three supporting rules make the mapping robust rather than merely correct-on-the-happy-path:
+
+- **Deterministic names, reckon-owned labels.** The container name is derived from the instance
+  (`reckon-adapter-<instance>`) and every container carries `io.reckon.instance` /
+  `io.reckon.managed` labels. Ownership is discoverable by query, not by memory.
+- **Reconciliation sweep.** Before any spawn, and once at backend start, the engine lists
+  containers by its labels and force-removes leftovers. Any path that orphans a container — an
+  engine crash, a SIGKILLed client, a power cut — is healed at the next opportunity, and the
+  deterministic name turns a missed orphan into a loud spawn failure rather than a silent
+  duplicate.
+- **`--init` always.** A minimal PID-1 shim reaps zombies and forwards signals, so a naive
+  single-process image still terminates on SIGTERM and the grace window means something.
+
+**Runtime abstraction.** The engine requires an OCI-compatible CLI satisfying a small verb
+surface — `pull`, `run` (with `-i --rm --init --name --label`), `ps --filter label=`, `rm -f` —
+and treats the binary name as configuration (`adapter.container_runtime`), auto-detected in the
+order `docker`, `podman`, `nerdctl`. Nothing in the contract uses privileged flags, volume
+mounts, or daemon-specific APIs, so rootless runtimes satisfy it by construction. "Docker" in
+this spec is shorthand for "the configured runtime."
+
+**Pinning.** An index-distributed container adapter's `image` is digest-pinned
+(`repo@sha256:…`) — the OCI digest is the same content-addressing trust anchor as `12 §2`'s
+artifact sha256, and a multi-arch manifest list makes one digest cover every platform. A bare
+tag is permitted only for local development; `reckon check` labels it `unpinned` the same way a
+manual install is labeled `unverified-origin` (`12 §5.3`).
+
+**Platform honesty.** Containers are Linux artifacts. On macOS and Windows the runtime
+interposes a VM, with the startup latency, resource overhead, and file-sharing quirks that
+implies. This is a real cost on exactly the machines the bottom-up analyst path runs on — and
+the final reason `container` is the opt-in and managed runtimes are the default, rather than the
+reverse. Server-side and MSP deployments, where a container runtime is ambient and Linux-native,
+are the kind's natural home.
+
+**Resource bounds and egress.** The manifest may declare advisory bounds (`memory`, `cpus`) the
+engine passes through to the runtime; absent a declaration the engine imposes none in v0.
+Adapters need egress to their vendor APIs, so the default network is the runtime's default;
+restricting adapter egress (per-instance allowlists) is a v1+ hardening item alongside the
+per-invocation credential channel (`05 §10.2`).
+
+**v0 scope.** What ships today is the *mechanism*: `kind: container` in the manifest, `setup`
+pulls the image, the exec runs it attached. The lifecycle mapping above — named containers,
+labels, the reconciliation sweep, force-kill-by-name, runtime auto-detection — is specified but
+**not yet implemented**, and until it lands the container kind is **experimental**: suitable for
+development, not for production supervision (a budgeted restart of a container adapter can
+orphan the old container). The implementation gate for removing the experimental label is
+exactly the table and three rules above, exercised by the conformance suite (`§7`) running its
+scenarios against a containerized reference adapter.
 
 ---
 
@@ -478,6 +598,17 @@ The intended authoring loop — scaffold, implement, `reckon adapter test`, inst
   diff stopped being an acceptable audit answer. The event carrier (whether these live in the
   main event table or a config-plane sibling) is an implementation-time decision; the requirement
   — recorded, attributed, human-principal — is not.
+- **Orchestrated container execution.** `§3.2` assumes a local container runtime as a launcher —
+  parent-child, stdio-attached. Running adapters as pods under an orchestrator (or on a remote
+  container host) breaks the parent-child assumption and is really the socket/remote-transport
+  item above wearing a container coat: it needs the non-stdio carrier first, and is deferred with
+  it. Nothing in the container contract precludes it — the image, entrypoint, and config-over-wire
+  rules carry over unchanged.
+- **Adapter egress restriction.** Container isolation makes per-instance egress allowlists
+  (an adapter that can reach only its vendor's API endpoints) actually enforceable, which native
+  spawns cannot offer. Deferred to v1+ hardening alongside the per-invocation credential channel
+  (`05 §10.2`); noted here because it may eventually become a reason to *prefer* the container
+  kind for high-tier write adapters, inverting the v0 default-vs-opt-in framing for that subset.
 
 ---
 

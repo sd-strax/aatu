@@ -43,15 +43,29 @@ type Manifest struct {
 
 // RuntimeSpec declares an ambient runtime reckon provisions for the adapter
 // (§3 `requires`, satisfied rather than merely checked) so the operator installs
-// nothing. Kind "python" builds a pinned, isolated venv (see
-// internal/adapterruntime). Absent for native static-binary adapters.
+// nothing. Absent for native static-binary adapters. Kinds:
+//   - "python": a pinned, isolated venv (uv); exec ./.venv/bin/<entrypoint>.
+//   - "node":   a pinned Node + npm-installed package; exec ./node_modules/.bin/<entrypoint>.
+//   - "container": the adapter ships as an image; reckon pulls it and the exec is
+//     `docker run -i` (see Image). The one operator prerequisite is a container
+//     runtime — the opt-in alternative to the zero-prereq managed kinds.
+//     EXPERIMENTAL (11 §3.2 "v0 scope"): the lifecycle contract — named
+//     containers + labels, the reconciliation sweep, force-kill-by-name,
+//     runtime auto-detection — is specified but not yet implemented, so a
+//     budgeted restart can orphan a container. Dev use only until it lands.
+//
+// See internal/adapterruntime for python/node provisioning.
 type RuntimeSpec struct {
-	Kind    string `yaml:"kind"`    // "python"
-	Python  string `yaml:"python"`  // exact interpreter version, e.g. "3.13"
-	Package string `yaml:"package"` // PyPI package, e.g. "okta-mcp-server"
+	Kind    string `yaml:"kind"`    // "python" | "node" | "container"
+	Python  string `yaml:"python"`  // python kind: exact interpreter version, e.g. "3.13"
+	Node    string `yaml:"node"`    // node kind: exact Node version (empty = the managed default)
+	Package string `yaml:"package"` // python/node kind: the package (PyPI / npm), e.g. "okta-mcp-server"
 	Version string `yaml:"version"` // pinned package version (recommended)
-	// Entrypoint is the venv console script to run (defaults to Package). The
-	// manifest's exec points at it via ./.venv/bin/<entrypoint>.
+	// Image is the container image reference for the container kind, e.g.
+	// "ghcr.io/sd-strax/reckon-adapter-greynoise:0.1.0". reckon pulls it at setup.
+	Image string `yaml:"image"`
+	// Entrypoint is the console script to run (defaults to Package): the venv
+	// script for python, the node_modules/.bin script for node.
 	Entrypoint string `yaml:"entrypoint"`
 }
 

@@ -10,9 +10,10 @@ import (
 // verb (03 §3) and no action types. The engine reconciles the verb into its
 // catalog (it is already a DefaultCatalog verb) and owns tier/coverage.
 //
-// The operation names ARE the greynoise-mcp tool names (readOp whitelists them).
-// NOTE (validate live, 11 §3): these tool names are the vendor server's; confirm
-// with `reckon adapter mcp-probe greynoise` and correct here if they differ.
+// The operation names ARE the greynoise-mcp tool names (readOp whitelists them);
+// these match the vendor docs (docs.greynoise.io/docs/mcp-server). NOTE (validate
+// live, 11 §3): confirm the exact tool argument names via `reckon adapter
+// mcp-probe greynoise` and adjust the binding params if they differ.
 func describe() adapterplugin.DescribeResult {
 	return adapterplugin.DescribeResult{
 		Verbs: []capability.CapabilityDescriptor{
@@ -24,15 +25,15 @@ func describe() adapterplugin.DescribeResult {
 			},
 		},
 		Operations: []adapterplugin.OperationSchema{
-			{Name: "ip_context", Params: objSchema()},
-			{Name: "riot", Params: objSchema()},
-			{Name: "gnql_query", Params: objSchema()},
+			{Name: "lookup-ip-context", Params: objSchema()},
+			{Name: "riot-lookup", Params: objSchema()},
+			{Name: "gnql-stats", Params: objSchema()},
 		},
 		DefaultReadBindings: []adapterplugin.ReadBinding{
 			// The indicator SCO carries the IP in `value` (03 §4 ipv4-addr). Only
 			// applicable to an IP indicator; a domain/hash indicator finds no
 			// applicable binding and degrades honestly (§6.1).
-			{Verb: "get_indicator_context", Adapter: "greynoise", Operation: "ip_context", Priority: 100, Params: map[string]any{"ip": "${entity.value}"}},
+			{Verb: "get_indicator_context", Adapter: "greynoise", Operation: "lookup-ip-context", Priority: 100, Params: map[string]any{"ip": "${entity.value}"}},
 		},
 		ConfigSchema: map[string]any{
 			"type":     "object",
@@ -61,7 +62,7 @@ func objSchema() map[string]any { return map[string]any{"type": "object"} }
 // bridge serves.
 func readOp(operation string, params map[string]any) (tool string, args map[string]any, ok bool) {
 	switch operation {
-	case "ip_context", "riot", "gnql_query":
+	case "lookup-ip-context", "riot-lookup", "gnql-stats":
 		if params == nil {
 			params = map[string]any{}
 		}

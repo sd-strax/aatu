@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -72,20 +73,47 @@ func runAdapterSetup(args []string) error {
 		fmt.Printf("%s has no runtime to provision (native adapter) — nothing to set up.\n", name)
 		return nil
 	}
-	if rt.Kind != "python" {
-		return fmt.Errorf("unsupported runtime kind %q (only python is provisioned in v0)", rt.Kind)
-	}
-
-	// Provisioning downloads uv + a Python + the package — no timeout.
+	// Provisioning fetches a toolchain + the package — no timeout. The kind
+	// selects the mechanism (11 §3): managed python/node keep the zero-prereq
+	// promise (reckon downloads the toolchain); container is the one-prereq
+	// opt-in (reckon pulls the image, the exec is `docker run -i`).
 	ctx := context.Background()
-	uvBin, err := adapterruntime.EnsureUv(ctx, cfg.Data.Dir, os.Stdout)
-	if err != nil {
-		return err
+	switch rt.Kind {
+	case "python":
+		uvBin, err := adapterruntime.EnsureUv(ctx, cfg.Data.Dir, os.Stdout)
+		if err != nil {
+			return err
+		}
+		if err := adapterruntime.ProvisionPython(ctx, uvBin, adapterDir, rt.Python, rt.Package, rt.Version, os.Stdout); err != nil {
+			return err
+		}
+		fmt.Printf("✓ %s runtime ready (%s, python %s)\n", name, rt.Package, rt.Python)
+	case "node":
+		binDir, err := adapterruntime.EnsureNode(ctx, cfg.Data.Dir, os.Stdout)
+		if err != nil {
+			return err
+		}
+		if err := adapterruntime.ProvisionNode(ctx, binDir, adapterDir, rt.Package, rt.Version, os.Stdout); err != nil {
+			return err
+		}
+		fmt.Printf("✓ %s runtime ready (%s, managed node)\n", name, rt.Package)
+	case "container":
+		// EXPERIMENTAL (design/11 §3.2 "v0 scope"): pull + attached run only.
+		// The lifecycle contract (named containers, labels, reconciliation
+		// sweep, force-kill-by-name, runtime auto-detect) is specified in §3.2
+		// but not yet implemented — dev use, not production supervision.
+		if rt.Image == "" {
+			return fmt.Errorf("adapter %q: runtime kind container requires an image", name)
+		}
+		if err := dockerPull(ctx, rt.Image); err != nil {
+			return err
+		}
+		fmt.Printf("✓ %s image pulled (%s) — the exec runs it via `docker run -i`\n", name, rt.Image)
+		fmt.Printf("  note: the container kind is EXPERIMENTAL in v0 (design/11 §3.2) — lifecycle\n" +
+			"  supervision (orphan cleanup, force-stop) is not yet container-aware.\n")
+	default:
+		return fmt.Errorf("unsupported runtime kind %q (python | node | container)", rt.Kind)
 	}
-	if err := adapterruntime.ProvisionPython(ctx, uvBin, adapterDir, rt.Python, rt.Package, rt.Version, os.Stdout); err != nil {
-		return err
-	}
-	fmt.Printf("✓ %s runtime ready (%s, python %s)\n", name, rt.Package, rt.Python)
 
 	// Resolve creds (prompt only when we'll also log in). Enablement is config-
 	// only and needs no auth, so it runs even under --no-auth when creds are given.
@@ -107,6 +135,21 @@ func runAdapterSetup(args []string) error {
 		return nil
 	}
 	return primeAuth(name, adapterDir, *rt, orgURL, clientID, scopes)
+}
+
+// dockerPull fetches a container-kind adapter's image (11 §3). The container is
+// itself the adapter process: the manifest exec runs it with `docker run -i`, so
+// the plugin protocol flows over the container's stdio unchanged and config +
+// secrets arrive over the wire at configure (never on the docker command line).
+func dockerPull(ctx context.Context, image string) error {
+	fmt.Printf("pulling container image %s\n", image)
+	cmd := exec.CommandContext(ctx, "docker", "pull", image) //nolint:gosec // image is from the pinned manifest
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker pull %s (is a container runtime installed and running?): %w", image, err)
+	}
+	return nil
 }
 
 // enableAdapter computes an adoption plan from the adapter's own describe output

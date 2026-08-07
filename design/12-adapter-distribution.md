@@ -87,7 +87,17 @@ Rules:
   post-install execution of any kind — the first time adapter code runs is the first enabled
   spawn (`11 §2`), never at install.
 
----
+**Container images as artifacts.** An adapter whose manifest declares `runtime: {kind: container}`
+(`11 §3.1`–`§3.2`) packages as an OCI image instead of a tar.gz — the third answer to "how do
+dependencies travel" (vendored / provisioned / baked into the image, `11 §3.1`). The trust model
+is unchanged, because an OCI digest *is* content-addressing: the index entry pins
+`image@sha256:…` exactly as it pins an archive's sha256, and a multi-arch manifest list means one
+digest covers the platform matrix (collapsing the per-platform artifact table into a single
+entry). The self-containment rule is trivially satisfied — the image carries everything including
+the runtime an author otherwise could not bundle — which is precisely the case that earns the
+kind. The install layout still exists on disk (`<data>/adapters/<name>/manifest.yaml`); it is just
+metadata-only, with the executable bytes living in the runtime's image store. The
+no-post-install-execution rule holds: a pull is a fetch, never a run.
 
 ## 3. The index
 
@@ -110,6 +120,17 @@ artifacts:
   darwin-arm64:
     url: https://github.com/example/reckon-adapter-okta/releases/download/v0.3.1/reckon-adapter-okta-0.3.1-darwin-arm64.tar.gz
     sha256: "41ab…"
+```
+
+A container-kind adapter (`§2`) replaces the per-platform `artifacts` table with a single
+digest-pinned image reference:
+
+```yaml
+# index/vendorx/0.2.0.yaml  (container-kind adapter, abridged)
+artifacts:
+  container:
+    image: ghcr.io/example/reckon-adapter-vendorx@sha256:7c1e…   # multi-arch manifest list
+    platforms: [linux/amd64, linux/arm64]                        # informational; the digest governs
 ```
 
 The entry is metadata plus digests. Artifact hosting is wherever the publisher likes —
@@ -168,6 +189,11 @@ Signature verification is per-artifact at install time (`§5.2`) and is not skip
 index-sourced installs. Manually-installed adapters (`§5.3`) skip it by construction and lose
 only what it provides.
 
+Container images are cosign's home turf — signatures attach to the image digest in the same
+registry, and `cosign verify` against the entry's `publisher` identity is the same check as for
+archives with no reckon-side machinery added. The digest in the index entry remains the trust
+root either way; the signature adds origin, exactly as above, never more.
+
 ---
 
 ## 5. Install and verification
@@ -202,6 +228,12 @@ spawn, no catalog entry, no enablement.
 The pin makes installs reproducible and transfers portable: an airgapped install is "carry the
 artifact across, `reckon adapter install --from-file`, verify against the pinned digest" — the
 network was never the trust anchor, so its absence changes nothing.
+
+For a container-kind entry the same flow reads: resolve → **image pull by digest** (the runtime
+verifies content-addressing by construction) → **signature verify** (`§4`) → write the
+metadata-only install directory → record the pin (the image digest). The airgapped variant is the
+image's own portable form (`save`/`load` or a registry mirror inside the boundary); the digest
+survives the carrier, so verification is unchanged.
 
 The full gate chain, assembled across both specs — each gate answers one question and no gate
 trusts a previous gate beyond its scope:
@@ -278,9 +310,11 @@ of the design.
 - **Publisher namespaces in the canonical index.** v0: flat names, PR review resolves disputes.
   Whether publishers get reserved prefixes (and whether `name` should be index-scoped in tenant
   config from day one to ease a later migration) is deferred until collision pressure is real.
-- **OCI artifacts as a carrier.** The entry format's `url + sha256` accommodates OCI registries
-  as artifact hosts today; whether to adopt OCI as the *preferred* carrier (richer mirroring and
-  garbage-collection tooling) is deferred — it changes hosting, not trust.
+- **OCI artifacts as a carrier.** *Partially resolved*: container-kind adapters (`§2`, `11 §3.2`)
+  are OCI images natively — digest-pinned, cosign-signed, mirrorable. What remains deferred is
+  whether *archive*-kind artifacts should also prefer OCI registries as hosts (richer mirroring
+  and garbage-collection tooling); the entry format's `url + sha256` accommodates it today, and
+  it changes hosting, not trust.
 - **Advisory propagation latency.** `reckon check` polls configured indexes' advisories;
   whether an installed-adapter advisory warrants a louder surface than `check` output (a status
   line in the extension, a startup warning) is a UX question for the extension design.
