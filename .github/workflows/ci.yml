@@ -1,0 +1,52 @@
+# CI: the same gate as local `make ci` — lint + fast tests + build — plus the
+# workbench compile as its own job (mirroring the Makefile split: engine work
+# stays Go-only, `workbench-ci` is deliberately separate).
+#
+# The slow embedded-deps lifecycle tests (`make test-all`) are NOT run here:
+# they download and boot real Postgres/Temporal/Keycloak distributions, which
+# is minutes of runner time per push for surfaces that change rarely. They
+# remain the local pre-PR discipline for supervisor/ changes (CLAUDE.md); a
+# scheduled or label-gated workflow can adopt them later if that discipline
+# proves insufficient.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2 # keep in lockstep with the local install
+      - name: test
+        run: go test -race -short ./...
+      - name: build
+        run: make build
+
+  workbench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workbench/package-lock.json
+      - name: compile
+        run: make workbench-ci
