@@ -1,0 +1,52 @@
+# Install manifest for the CrowdStrike Falcon MCP-bridge adapter (design/11 §3;
+# implementation/adapter-candidates.md §3, Adapter A).
+#
+# The bridge wraps crowdstrike/falcon-mcp (a Python MCP server). reckon
+# provisions it via managed uv (download uv + a pinned venv + the pinned
+# package) — the operator installs nothing. Read verbs (host context,
+# detections, intel) + the custom-IOC write pair; host CONTAINMENT is on the
+# sibling native adapter (crowdstrike-response), since falcon-mcp exposes no
+# per-host contain/lift tool.
+#
+# Package name, version pin (0.16.0), entrypoint (falcon-mcp), the tool set, and
+# their argument shapes are validated against the shipped source. The last live
+# check is an authenticated call (a Falcon API client with the read + ioc:write
+# scopes) — `reckon adapter mcp-probe crowdstrike-falcon`. The FQL field names
+# inside the read bindings are the live-tune surface.
+manifest_version: 1
+name: crowdstrike-falcon
+version: 0.1.0
+protocol_versions: [1]
+class: MCP
+exec: ["./reckon-adapter-crowdstrike-falcon"]
+runtime: # reckon provisions this (managed uv/venv) — the operator installs nothing
+  kind: python
+  python: "3.13"
+  package: falcon-mcp
+  version: "0.16.0" # pinned to the validated PyPI release
+  entrypoint: falcon-mcp # venv console script → ./.venv/bin/falcon-mcp
+summary: # CLAIMED — the describe handshake is the authority (11 §3)
+  verbs: [get_host_context, enumerate_detections, get_intel_context]
+  action_types: [ioc.block, ioc.unblock]
+config_schema:
+  type: object
+  required: [client_id, client_secret]
+  properties:
+    client_id:
+      type: string
+      description: Falcon API client ID (OAuth2 client credentials)
+    client_secret:
+      type: string
+      x-secret: true # the host resolves the reference to plaintext before configure (11 §4.3)
+      description: Falcon API client secret, given as a secret reference (keychain:// / env:// / vault://)
+    base_url:
+      type: string
+      format: uri
+      description: Falcon API cloud base URL; defaults to https://api.crowdstrike.com (US-1)
+    member_cid:
+      type: string
+      description: Optional child (multi-tenant) CID this instance acts for (pairs with a source-scoped instance, 03 §3.5)
+    server_command:
+      type: array
+      items: { type: string }
+      description: "Override the falcon-mcp launch command (default: ./.venv/bin/falcon-mcp)"

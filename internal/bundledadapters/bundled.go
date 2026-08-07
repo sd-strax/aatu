@@ -20,6 +20,12 @@ var oktaManifest []byte
 //go:embed manifests/greynoise.yaml
 var greynoiseManifest []byte
 
+//go:embed manifests/crowdstrike-falcon.yaml
+var crowdstrikeFalconManifest []byte
+
+//go:embed manifests/crowdstrike-response.yaml
+var crowdstrikeResponseManifest []byte
+
 // Bundled is one first-party adapter reckon can install.
 type Bundled struct {
 	Name string
@@ -31,8 +37,10 @@ type Bundled struct {
 }
 
 var registry = map[string]Bundled{
-	"okta":      {Name: "okta", Manifest: oktaManifest, Binary: "reckon-adapter-okta"},
-	"greynoise": {Name: "greynoise", Manifest: greynoiseManifest, Binary: "reckon-adapter-greynoise"},
+	"okta":                 {Name: "okta", Manifest: oktaManifest, Binary: "reckon-adapter-okta"},
+	"greynoise":            {Name: "greynoise", Manifest: greynoiseManifest, Binary: "reckon-adapter-greynoise"},
+	"crowdstrike-falcon":   {Name: "crowdstrike-falcon", Manifest: crowdstrikeFalconManifest, Binary: "reckon-adapter-crowdstrike-falcon"},
+	"crowdstrike-response": {Name: "crowdstrike-response", Manifest: crowdstrikeResponseManifest, Binary: "reckon-adapter-crowdstrike-response"},
 }
 
 // Get returns the bundled adapter for a name.

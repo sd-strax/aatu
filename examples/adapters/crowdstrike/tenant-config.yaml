@@ -1,0 +1,116 @@
+# Example tenant config for the CrowdStrike hybrid (design/11 §5;
+# implementation/adapter-candidates.md §3). Two adapters, one vendor:
+#   crowdstrike-falcon    (MCP)        — read verbs + custom-IOC block/unblock
+#   crowdstrike-response  (NATIVE_API) — per-host containment
+# The verb/action resolvers bind by priority (03 §3, 08 §4), so both point at
+# the same Falcon tenant transparently — MCP where it is clean, native where it
+# is not (11 §8).
+#
+# Point the backend at it with
+#   capability:  {config_path: examples/adapters/crowdstrike/tenant-config.yaml}
+#   action:      {config_path: examples/adapters/crowdstrike/tenant-config.yaml}
+# after `reckon adapter setup crowdstrike-falcon` and `… crowdstrike-response`.
+#
+# client_secret is an x-secret reference (11 §4.3) resolved to plaintext before
+# configure. member_cid is the child (multi-tenant) CID — the natural partner of a
+# source-scoped instance (03 §3.5): one scoped instance per customer, its own
+# CID, its own Falcon token. Drop scope + member_cid for a single-tenant setup.
+
+tenant: demo
+
+# --- read side (03 §3.2) ---
+adapters:
+  crowdstrike-falcon:
+    class: mcp
+    enabled: true
+    adapter: crowdstrike-falcon
+    scope: acme # 03 §3.5 — this instance answers only for the "acme" source scope
+    config:
+      client_id: YOUR_FALCON_CLIENT_ID
+      client_secret: "keychain://reckon/crowdstrike-falcon-client_secret"
+      base_url: https://api.crowdstrike.com
+      member_cid: ACME_CHILD_CID
+    reads:
+      - search_hosts
+      - get_host_details
+      - search_detections
+      - get_detection_details
+      - search_indicators
+
+bindings:
+  get_host_context:
+    - adapter: crowdstrike-falcon
+      operation: search_hosts
+      priority: 100
+      params:
+        filter: "hostname:'${entity.host.hostname}'"
+  enumerate_detections:
+    - adapter: crowdstrike-falcon
+      operation: search_detections
+      priority: 100
+      params:
+        filter: "device.hostname:'${entity.host.hostname}'"
+  get_intel_context:
+    - adapter: crowdstrike-falcon
+      operation: search_indicators
+      priority: 100
+      params:
+        filter: "indicator:'${entity.value}'"
+
+# --- write side (08 §4) ---
+action_adapters:
+  crowdstrike-falcon:
+    class: mcp
+    enabled: true
+    adapter: crowdstrike-falcon
+    scope: acme
+    config:
+      client_id: YOUR_FALCON_CLIENT_ID
+      client_secret: "keychain://reckon/crowdstrike-falcon-client_secret"
+      member_cid: ACME_CHILD_CID
+    actions:
+      - add_ioc
+      - remove_iocs
+      - search_iocs # remove_iocs needs the value→id lookup
+  crowdstrike-response:
+    class: native_api
+    enabled: true
+    adapter: crowdstrike-response
+    scope: acme
+    config:
+      client_id: YOUR_FALCON_CLIENT_ID
+      client_secret: "keychain://reckon/crowdstrike-response-client_secret"
+      member_cid: ACME_CHILD_CID
+    actions:
+      - contain
+      - lift_containment
+
+action_bindings:
+  ioc.block:
+    - action_type: ioc.block
+      adapter: crowdstrike-falcon
+      operation: add_ioc
+      priority: 100
+      params:
+        value: "${target.resolved_identifier}"
+  ioc.unblock:
+    - action_type: ioc.unblock
+      adapter: crowdstrike-falcon
+      operation: remove_iocs
+      priority: 100
+      params:
+        value: "${target.resolved_identifier}"
+  host.isolate:
+    - action_type: host.isolate
+      adapter: crowdstrike-response
+      operation: contain
+      priority: 100
+      params:
+        device_id: "${target.resolved_identifier}"
+  host.unisolate:
+    - action_type: host.unisolate
+      adapter: crowdstrike-response
+      operation: lift_containment
+      priority: 100
+      params:
+        device_id: "${target.resolved_identifier}"

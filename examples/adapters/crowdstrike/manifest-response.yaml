@@ -1,0 +1,41 @@
+# Install manifest for the CrowdStrike host-response adapter (design/11 §3;
+# implementation/adapter-candidates.md §3, Adapter B) — the native, write-only
+# sibling of crowdstrike-falcon.
+#
+# NATIVE_API class: a static Go binary with no runtime block (no venv, no vendor
+# package, no child process) — the reckon plugin protocol on stdio and a
+# hand-rolled OAuth2 + HTTPS client to the Falcon API. It does the one thing the
+# vendor MCP does not reliably expose: per-host network containment
+# (PerformActionV2 contain / lift_containment, scope hosts:write). host.isolate
+# is RELIABLY reversible by host.unisolate.
+#
+# The API contract is stable/GA (not preview); the last live check is an
+# authenticated call with a hosts:write client. The target is the Falcon device
+# id, which the engine resolves at request time (08 §4).
+manifest_version: 1
+name: crowdstrike-response
+version: 0.1.0
+protocol_versions: [1]
+class: NATIVE_API
+exec: ["./reckon-adapter-crowdstrike-response"]
+# no runtime: — native static binary (12 §2)
+summary: # CLAIMED — the describe handshake is the authority (11 §3)
+  action_types: [host.isolate, host.unisolate]
+config_schema:
+  type: object
+  required: [client_id, client_secret]
+  properties:
+    client_id:
+      type: string
+      description: Falcon API client ID (OAuth2 client credentials; scope hosts:write)
+    client_secret:
+      type: string
+      x-secret: true # the host resolves the reference to plaintext before configure (11 §4.3)
+      description: Falcon API client secret, given as a secret reference (keychain:// / env:// / vault://)
+    base_url:
+      type: string
+      format: uri
+      description: Falcon API cloud base URL; defaults to https://api.crowdstrike.com (US-1)
+    member_cid:
+      type: string
+      description: Optional child (multi-tenant) CID this instance acts for (pairs with a source-scoped instance, 03 §3.5)
