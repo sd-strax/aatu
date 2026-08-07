@@ -43,3 +43,20 @@ func TestKeycloakStartRequiresDB(t *testing.T) {
 		t.Fatalf("Start without DB config: err = %v, want state-database error", err)
 	}
 }
+
+// TestKeycloakRuntimeDirSplit: with RuntimeDir set, the JRE + server live
+// there (image-owned in the container shape); default stays under DataDir.
+func TestKeycloakRuntimeDirSplit(t *testing.T) {
+	k := NewKeycloak(KeycloakConfig{DataDir: "/data/kc", RuntimeDir: "/opt/reckon/keycloak"})
+	if got := k.serverDir(); got != "/opt/reckon/keycloak/server" {
+		t.Errorf("serverDir = %q, want under RuntimeDir", got)
+	}
+	if got := k.jreDir(); got != "/opt/reckon/keycloak/jre" {
+		t.Errorf("jreDir = %q, want under RuntimeDir", got)
+	}
+
+	def := NewKeycloak(KeycloakConfig{DataDir: "/data/kc"})
+	if got := def.serverDir(); got != "/data/kc/server" {
+		t.Errorf("default serverDir = %q, want under DataDir", got)
+	}
+}

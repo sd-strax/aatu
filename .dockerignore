@@ -1,0 +1,9 @@
+# Keep the build context small: the image needs the Go sources, fixtures, and
+# docker/; everything else is dev-local.
+.git
+bin/
+eval/artifacts/
+workbench/node_modules/
+workbench/out/
+*.vsix
+Dockerfile

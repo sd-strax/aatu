@@ -89,6 +89,10 @@ func main() {
 		if err := runAdapter(os.Args[2:]); err != nil {
 			log.Fatalf("%s adapter: %v", branding.CLI, err)
 		}
+	case "prefetch-runtimes":
+		if err := runPrefetchRuntimes(os.Args[2:]); err != nil {
+			log.Fatalf("%s prefetch-runtimes: %v", branding.CLI, err)
+		}
 	case "set-anthropic-key":
 		if err := runSetAnthropicKey(); err != nil {
 			log.Fatalf("%s set-anthropic-key: %v", branding.CLI, err)
@@ -119,6 +123,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  adapter setup <name>  provision an installed adapter's runtime (managed uv + venv) and run its one-time login")
 	fmt.Fprintln(os.Stderr, "  adapter test <dir>  run the plugin conformance handshake against an adapter directory (11 §7)")
 	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
+	fmt.Fprintln(os.Stderr, "  prefetch-runtimes --dir <dir>  download the Pg/Temporal/Keycloak distributions into <dir> (image build + air-gap bundles)")
 	fmt.Fprintln(os.Stderr, "  set-anthropic-key    store your BYOK Anthropic key in the OS keychain (client-side)")
 	fmt.Fprintln(os.Stderr, "  unset-anthropic-key  remove the stored Anthropic key from the keychain")
 }

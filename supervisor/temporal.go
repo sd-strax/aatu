@@ -21,6 +21,12 @@ type TemporalConfig struct {
 	// Subdirs: bin/ (cached CLI binary), data.sqlite (durable store).
 	DataDir string
 
+	// BinDir optionally holds the downloaded Temporal CLI separately from
+	// DataDir's mutable state — the binaries/data split (05 §12.4). The
+	// download is skipped when the binary is already present (the baked-image
+	// path). Empty defaults to DataDir/bin, today's behavior.
+	BinDir string
+
 	// FrontendPort is the gRPC port the dev-server frontend listens on.
 	// Default 7233 (Temporal's standard).
 	FrontendPort int
@@ -80,7 +86,10 @@ func (t *Temporal) Start(ctx context.Context) error {
 	if err := os.MkdirAll(t.cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create temporal data dir: %w", err)
 	}
-	binDir := filepath.Join(t.cfg.DataDir, "bin")
+	binDir := t.cfg.BinDir
+	if binDir == "" {
+		binDir = filepath.Join(t.cfg.DataDir, "bin")
+	}
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return fmt.Errorf("create temporal bin dir: %w", err)
 	}

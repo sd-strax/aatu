@@ -21,8 +21,17 @@ import (
 // PostgresConfig configures the bundled Postgres instance.
 type PostgresConfig struct {
 	// DataDir is the root directory for Pg state.
-	// Subdirs created on first start: data/ (Pg cluster), runtime/ (binary cache).
+	// Subdirs created on first start: data/ (Pg cluster), runtime/ (per-boot
+	// scratch — the embedded library wipes and repopulates it every start).
 	DataDir string
+
+	// RuntimeDir optionally holds the immutable Pg distribution separately from
+	// DataDir's mutable state — the binaries/data split (05 §12.4). When set,
+	// the extracted binaries live at RuntimeDir/binaries (extraction is skipped
+	// when they are already present — the baked-image path) and the downloaded
+	// archive at RuntimeDir/cache. Empty keeps today's behavior: everything
+	// under DataDir plus the embedded library's default archive cache.
+	RuntimeDir string
 
 	// Port is the TCP port Pg listens on. Default 5435 to avoid collision
 	// with a system Pg on the default 5432.
@@ -107,6 +116,15 @@ func (p *Postgres) Start(ctx context.Context) error {
 		Database("postgres").
 		Username("reckon").
 		Password(p.cfg.Password) // provisioned install secret (internal/secrets)
+	if p.cfg.RuntimeDir != "" {
+		// Binaries/data split (05 §12.4): the distribution lives in RuntimeDir
+		// (image-owned in the container shape). The library skips extraction
+		// when binaries are already present, so a baked image never re-fetches;
+		// RuntimePath above remains per-boot scratch under DataDir.
+		cfg = cfg.
+			BinariesPath(filepath.Join(p.cfg.RuntimeDir, "binaries")).
+			CachePath(filepath.Join(p.cfg.RuntimeDir, "cache"))
+	}
 
 	// Build + start on a local before publishing, so Health never observes a
 	// half-started instance and a failed Start leaves the component cleanly

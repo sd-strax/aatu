@@ -11,6 +11,16 @@ build: ## Build reckon, reckon-backend, and the bundled adapters to bin/
 	go build -o bin/reckon-adapter-okta ./cmd/reckon-adapter-okta
 	go build -o bin/reckon-adapter-greynoise ./cmd/reckon-adapter-greynoise
 
+image: ## Build the engine container image (05 §12.4): supervisor-in-container, runtimes baked, one data volume
+	docker build -t reckon:dev .
+	@echo ""
+	@echo "run it:"
+	@echo "  docker run -d --name reckon \\"
+	@echo "    -e RECKON_PG_PASSWORD=... -e RECKON_KC_PASSWORD=... \\"
+	@echo "    -v reckon-data:/home/reckon/.reckon \\"
+	@echo "    -p 127.0.0.1:8080:8080 -p 127.0.0.1:8543:8543 -p 127.0.0.1:9543:9543 \\"
+	@echo "    reckon:dev"
+
 test: ## Fast tests: unit + httptest integration. Race detector on. Skips slow embedded-Pg/Temporal/Keycloak lifecycle tests.
 	go test -race -short ./...
 

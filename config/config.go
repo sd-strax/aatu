@@ -69,11 +69,29 @@ type Deployment struct {
 	Mode string `yaml:"mode"`
 }
 
+// runtimeDirEnvVar returns the environment variable that overrides
+// data.runtime_dir ("<UPPERCASE-CLI>_RUNTIME_DIR", e.g. RECKON_RUNTIME_DIR).
+// It exists for the engine container image (05 §12.4): the image bakes the
+// downloaded distributions under an image-owned path and points this variable
+// at it, while config.yaml itself lives on the data volume.
+func runtimeDirEnvVar() string {
+	return strings.ToUpper(branding.CLI) + "_RUNTIME_DIR"
+}
+
 // Data names the root directory the supervisor uses for state (Pg data,
 // logs, etc.).
 type Data struct {
 	// Dir defaults to ~/<branding.DataDir> (e.g. ~/.reckon).
 	Dir string `yaml:"dir"`
+
+	// RuntimeDir optionally separates the supervisor's *downloaded
+	// distributions* (Pg binaries, Temporal CLI, JRE + Keycloak server) from the
+	// mutable state under Dir — the binaries/data split (05 §12.4). Empty (the
+	// default) keeps everything under Dir, exactly as before. The engine
+	// container image sets this (via $<CLI>_RUNTIME_DIR, which overrides the
+	// yaml) to its baked, image-owned path so the volume holds only state and an
+	// image upgrade cleanly replaces the binaries.
+	RuntimeDir string `yaml:"runtime_dir"`
 }
 
 // Postgres configures the bundled embedded Postgres.
@@ -293,7 +311,9 @@ func Load() (Config, error) {
 	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return Default(), nil
+			cfg := Default()
+			applyEnvOverrides(&cfg)
+			return cfg, nil
 		}
 		path = filepath.Join(home, branding.DataDir, "config.yaml")
 	}
@@ -303,7 +323,11 @@ func Load() (Config, error) {
 		if explicit {
 			return Config{}, fmt.Errorf("%s points at %s, which does not exist", configEnvVar(), path)
 		}
-		return Default(), nil
+		// No config yet (fresh install / first container boot): defaults still
+		// take the env overrides.
+		cfg := Default()
+		applyEnvOverrides(&cfg)
+		return cfg, nil
 	}
 	if err != nil {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
@@ -313,5 +337,16 @@ func Load() (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	applyEnvOverrides(&cfg)
 	return cfg, nil
+}
+
+// applyEnvOverrides applies the small set of environment overrides that must
+// win over the yaml. Only $<CLI>_RUNTIME_DIR today: the container image needs
+// to relocate the distribution root without touching the volume-resident
+// config file.
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv(runtimeDirEnvVar()); v != "" {
+		cfg.Data.RuntimeDir = v
+	}
 }

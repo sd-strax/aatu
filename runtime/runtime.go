@@ -180,11 +180,23 @@ func serve(cfg config.Config) error {
 		return err
 	}
 
+	// The binaries/data split (05 §12.4): when data.runtime_dir (or
+	// $<CLI>_RUNTIME_DIR — the container image sets it) is configured, the
+	// downloaded distributions live there, per component, and cfg.Data.Dir
+	// holds only mutable state. Empty subdir results mean "component default".
+	runtimeSub := func(name string) string {
+		if cfg.Data.RuntimeDir == "" {
+			return ""
+		}
+		return filepath.Join(cfg.Data.RuntimeDir, name)
+	}
+
 	pg := supervisor.NewPostgres(supervisor.PostgresConfig{
-		DataDir:  filepath.Join(cfg.Data.Dir, "pg"),
-		Port:     cfg.Postgres.Port,
-		Password: pgPassword,
-		SSLMode:  cfg.Postgres.SSLMode,
+		DataDir:    filepath.Join(cfg.Data.Dir, "pg"),
+		RuntimeDir: runtimeSub("pg"),
+		Port:       cfg.Postgres.Port,
+		Password:   pgPassword,
+		SSLMode:    cfg.Postgres.SSLMode,
 		// Temporal manages its own SQLite store (see D15) so there's no
 		// reckon_temporal database here today.
 		Databases: []supervisor.DatabaseSpec{
@@ -197,6 +209,7 @@ func serve(cfg config.Config) error {
 	})
 	temp := supervisor.NewTemporal(supervisor.TemporalConfig{
 		DataDir:      filepath.Join(cfg.Data.Dir, "temporal"),
+		BinDir:       runtimeSub("temporal"),
 		FrontendPort: cfg.Temporal.FrontendPort,
 		EnableUI:     cfg.Temporal.UIEnabled,
 		UIPort:       cfg.Temporal.UIPort,
@@ -204,6 +217,7 @@ func serve(cfg config.Config) error {
 	})
 	kc := supervisor.NewKeycloak(supervisor.KeycloakConfig{
 		DataDir:        filepath.Join(cfg.Data.Dir, "keycloak"),
+		RuntimeDir:     runtimeSub("keycloak"),
 		HTTPPort:       cfg.Keycloak.HTTPPort,
 		ManagementPort: cfg.Keycloak.ManagementPort,
 		RealmName:      cfg.Keycloak.Realm,

@@ -41,6 +41,15 @@ type KeycloakConfig struct {
 	// pure binaries + logs, and the binaries/data split (05 §12.4) holds.
 	DataDir string
 
+	// RuntimeDir optionally relocates jre/ and server/ away from DataDir — the
+	// binaries/data split (05 §12.4); downloads are skipped when they are
+	// already present (the baked-image path). Logs stay under DataDir. The dir
+	// must be writable at runtime (Keycloak writes the realm-import file and
+	// its Quarkus build cache into its own home); in the container shape the
+	// image's ephemeral layer suffices — no volume needed. Empty defaults to
+	// DataDir, today's behavior.
+	RuntimeDir string
+
 	// HTTPPort is the Keycloak HTTP listener. Default 8543 (non-standard to
 	// avoid colliding with the common 8080).
 	HTTPPort int
@@ -280,8 +289,17 @@ func (k *Keycloak) IssuerURL() string {
 
 // --- internals ---------------------------------------------------------------
 
-func (k *Keycloak) jreDir() string    { return filepath.Join(k.cfg.DataDir, "jre") }
-func (k *Keycloak) serverDir() string { return filepath.Join(k.cfg.DataDir, "server") }
+// runtimeRoot is where the JRE + Keycloak distribution live: RuntimeDir when
+// the binaries/data split is configured (05 §12.4), else DataDir.
+func (k *Keycloak) runtimeRoot() string {
+	if k.cfg.RuntimeDir != "" {
+		return k.cfg.RuntimeDir
+	}
+	return k.cfg.DataDir
+}
+
+func (k *Keycloak) jreDir() string    { return filepath.Join(k.runtimeRoot(), "jre") }
+func (k *Keycloak) serverDir() string { return filepath.Join(k.runtimeRoot(), "server") }
 
 // javaHome is what kc.sh expects in $JAVA_HOME. macOS Temurin nests the
 // JRE under Contents/Home/; Linux Temurin extracts straight to the root.
