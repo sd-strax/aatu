@@ -67,6 +67,22 @@ func NewResolver(namespace uuid.UUID) *Resolver {
 // Namespace returns the tenant namespace this resolver is bound to.
 func (r *Resolver) Namespace() uuid.UUID { return r.namespace }
 
+// Scoped returns a Resolver whose namespace is derived for a source scope
+// (03 §3.5): uuidv5(tenant_namespace, scope). An empty scope returns the
+// receiver unchanged — the single-organization case, and the shared-tool case,
+// both keep the tenant namespace. When a scope is present, the derived
+// namespace makes same-named entities in different organizations distinct ids
+// (org A's DC01 ≠ org B's DC01) while preserving "same entity → same id" WITHIN
+// an organization: every per-type rule (§7.2) applies unchanged inside the
+// derived namespace. The derivation is itself deterministic, so a scope always
+// maps to the same namespace across producers and investigations.
+func (r *Resolver) Scoped(scope string) *Resolver {
+	if scope == "" {
+		return r
+	}
+	return &Resolver{namespace: uuid.NewSHA1(r.namespace, []byte(scope))}
+}
+
 // mint computes "<stixType>--<uuidv5>" over the canonical JSON of the
 // identity-contributing fields, hashed against the tenant namespace.
 func (r *Resolver) mint(stixType string, contributing map[string]any) STIXID {

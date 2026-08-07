@@ -229,3 +229,38 @@ func TestObservedDataIdentity(t *testing.T) {
 		t.Error("newer normalizer version produced the same ObservedData id; re-normalization would be a no-op")
 	}
 }
+
+// TestScopedNamespace covers the §3.5 per-scope namespace derivation: an empty
+// scope returns the receiver unchanged; a non-empty scope derives a distinct,
+// deterministic namespace, so the same entity resolves to different ids across
+// organizations but the same id within one.
+func TestScopedNamespace(t *testing.T) {
+	base := NewResolver(nsA)
+
+	if base.Scoped("") != base {
+		t.Fatal("empty scope must return the receiver unchanged (single-organization path)")
+	}
+
+	acme := base.Scoped("acme")
+	meridian := base.Scoped("meridian")
+	acmeAgain := base.Scoped("acme")
+
+	if acme.Namespace() == base.Namespace() {
+		t.Error("scoped namespace equals the tenant namespace — entities would not be isolated")
+	}
+	if acme.Namespace() == meridian.Namespace() {
+		t.Error("different scopes derived the same namespace")
+	}
+	if acme.Namespace() != acmeAgain.Namespace() {
+		t.Error("same scope derived different namespaces — derivation is not deterministic")
+	}
+
+	// The load-bearing property: org A's DC01 is not org B's DC01.
+	if acme.IPv4Addr("10.0.0.1") == meridian.IPv4Addr("10.0.0.1") {
+		t.Error("same entity resolved to the same id across scopes (silent cross-organization merge)")
+	}
+	// ...but within one organization, the same entity is the same id.
+	if acme.IPv4Addr("10.0.0.1") != acmeAgain.IPv4Addr("10.0.0.1") {
+		t.Error("same entity resolved to different ids within one scope")
+	}
+}

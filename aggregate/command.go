@@ -43,6 +43,16 @@ type Command interface {
 type Seed struct {
 	Type string `json:"type"` // alert | entity | question
 
+	// SourceScope is the optional source scope (03 §3.5): the organization this
+	// investigation is rooted in, within a tenant that aggregates several
+	// independently-administered organizations. For an AlertSeed it is derived
+	// from the aggregation platform's organization tag on the seeding alert; for
+	// Entity/Question seeds the caller supplies it. Immutable like the rest of the
+	// seed, and empty in single-organization tenants. It routes capability/action
+	// calls to the matching organization's adapter instance and scopes identity
+	// (§3.5); the seed carries it so every downstream call inherits one value.
+	SourceScope string `json:"source_scope,omitempty"`
+
 	// AlertSeed
 	AlertID             string `json:"alert_id,omitempty"`
 	Source              string `json:"source,omitempty"`

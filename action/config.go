@@ -36,6 +36,11 @@ type ActionAdapterSpec struct {
 	// Actions is the per-op write allowlist (11 §5): the action operations this
 	// instance may dispatch. No wildcard. Plugin classes only.
 	Actions []string `yaml:"actions"`
+	// Scope is the optional source scope (03 §3.5): the organization whose
+	// credentials this instance holds. Empty means unscoped. A scoped instance
+	// dispatches only for investigations carrying the identical scope; its
+	// bindings inherit it.
+	Scope string `yaml:"scope"`
 }
 
 // LoadActionConfig reads and parses a write-side tenant config file.
@@ -84,5 +89,17 @@ func BuildActionResolverWithAdapters(cfg TenantActionConfig, fixtureRoot string,
 	if err := ValidateActionBindings(cfg.Bindings); err != nil {
 		return nil, nil, err
 	}
-	return NewActionResolver(cfg.Bindings, adapters), DefaultActionCatalog(), nil
+	// Each binding inherits its instance's source scope (03 §3.5): scope lives on
+	// the instance, never in binding YAML (the field is yaml:"-"), so we stamp it
+	// from the ActionAdapterSpec here.
+	bindings := make(map[string][]ActionBinding, len(cfg.Bindings))
+	for at, bs := range cfg.Bindings {
+		scoped := make([]ActionBinding, len(bs))
+		for i, b := range bs {
+			b.Scope = cfg.Adapters[b.Adapter].Scope
+			scoped[i] = b
+		}
+		bindings[at] = scoped
+	}
+	return NewActionResolver(bindings, adapters), DefaultActionCatalog(), nil
 }

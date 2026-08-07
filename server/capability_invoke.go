@@ -22,6 +22,11 @@ type CapabilityInvokeBody struct {
 	Entity map[string]any `json:"entity,omitempty"`
 	Window *WindowInput   `json:"window,omitempty"`
 	Extra  map[string]any `json:"extra,omitempty"`
+	// SourceScope routes the call to the matching organization's adapter instance
+	// and scopes identity (03 §3.5). The agent loop supplies the investigation's
+	// Seed.SourceScope; empty in single-organization tenants reaches every
+	// unscoped instance as before.
+	SourceScope string `json:"source_scope,omitempty"`
 }
 
 // WindowInput is the JSON shape of a verb call's time bound.
@@ -109,7 +114,7 @@ func (b *Backend) capabilityInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := capability.CallInput{Entity: body.Entity, Extra: body.Extra}
+	input := capability.CallInput{Entity: body.Entity, Extra: body.Extra, SourceScope: body.SourceScope}
 	if body.Window != nil {
 		input.Window = capability.TimeWindow{From: body.Window.From, To: body.Window.To}
 	}

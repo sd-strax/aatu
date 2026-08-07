@@ -28,6 +28,13 @@ type ActionBinding struct {
 	Priority                          int            `yaml:"priority" json:"priority"`
 	Params                            map[string]any `yaml:"params" json:"params"`
 	ExternalApprovalSubstitutesReckon bool           `yaml:"external_approval_substitutes_reckon" json:"external_approval_substitutes_reckon"`
+	// Scope is the source scope inherited from the adapter instance (03 §3.5),
+	// set from the ActionAdapterSpec at build time — never read from binding YAML
+	// (scope lives on the instance). A scope mismatch makes the binding
+	// inapplicable, and because the write side never falls through, an action
+	// whose every binding is scope-filtered reports no binding: unavailable for
+	// that investigation, nothing dispatched (08 §4).
+	Scope string `yaml:"-" json:"scope"`
 }
 
 // DispatchRequest is what the resolver dispatches: the frozen x-action content.
@@ -38,6 +45,10 @@ type DispatchRequest struct {
 	ActionType string
 	Targets    []aggregate.TargetSpec
 	Parameters map[string]any
+	// SourceScope is the investigation's source scope (03 §3.5), carried from the
+	// Seed so the resolver dispatches only to the matching organization's
+	// instance. Empty for single-organization investigations.
+	SourceScope string
 }
 
 // ActionResolver selects the write binding for an action and dispatches it
@@ -83,6 +94,9 @@ func (r *ActionResolver) Resolve(ctx context.Context, req DispatchRequest) (Writ
 	tctx := dispatchContext(req)
 
 	for _, b := range bindings {
+		if !capability.ScopeApplicable(b.Scope, req.SourceScope) {
+			continue // §3.5: wrong organization's instance — not applicable, no dispatch
+		}
 		adapter, ok := r.adapters[b.Adapter]
 		if !ok {
 			continue // adapter not configured/enabled — try a lower-priority binding

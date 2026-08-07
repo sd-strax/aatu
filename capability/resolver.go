@@ -37,6 +37,12 @@ type Binding struct {
 	Priority  int
 	Params    map[string]any
 	FanOut    bool
+	// Scope is the source scope inherited from the adapter instance this binding
+	// runs on (03 §3.5). Empty means the instance is unscoped and applies to any
+	// investigation; a non-empty scope makes the binding applicable only to an
+	// investigation carrying the identical scope. Set from the AdapterSpec at
+	// build time, never from binding YAML — scope lives on the instance.
+	Scope string
 }
 
 // CallInput is a verb call's input: the entity (or composite) the template's
@@ -45,6 +51,20 @@ type CallInput struct {
 	Entity map[string]any
 	Window TimeWindow
 	Extra  map[string]any
+	// SourceScope is the investigation's source scope (03 §3.5), carried from the
+	// Seed. Empty for single-organization investigations. A scoped call reaches
+	// only unscoped instances and scoped instances of the same scope, and mints
+	// identity in that scope's namespace.
+	SourceScope string
+}
+
+// ScopeApplicable is the fail-closed §3.5 matching rule, shared by the read and
+// write resolvers so both sides route identically: an unscoped instance
+// (instanceScope == "") is applicable to any investigation; a scoped instance is
+// applicable only to an investigation carrying the identical scope, and an
+// unscoped investigation never matches a scoped instance.
+func ScopeApplicable(instanceScope, investigationScope string) bool {
+	return instanceScope == "" || instanceScope == investigationScope
 }
 
 // TenantContext supplies the tenant.* template root and identifies the tenant.
@@ -148,7 +168,17 @@ func (r *Resolver) Resolve(ctx context.Context, verb string, input CallInput) (C
 	var applicable, succeeded, failed int
 	unhealthy := map[string]bool{}
 
+	// §3.5: scope filtering runs before the priority walk — a scope-mismatched
+	// binding is *not applicable*, never merely lower-priority, so it is skipped
+	// here and never counted toward `applicable`. A verb whose every binding is
+	// scope-filtered degrades exactly like any other coverage gap (§6.1).
+	norm := r.normalizer.Scoped(input.SourceScope)
+
 	for _, b := range bindings {
+		if !ScopeApplicable(b.Scope, input.SourceScope) {
+			res.note("binding %s/%s: scope %q not applicable to investigation scope %q", verb, b.Adapter, b.Scope, input.SourceScope)
+			continue
+		}
 		adapter, ok := r.adapters[b.Adapter]
 		if !ok {
 			res.note("binding %s/%s: adapter not configured or disabled", verb, b.Adapter)
@@ -199,7 +229,7 @@ func (r *Resolver) Resolve(ctx context.Context, verb string, input CallInput) (C
 		}
 
 		succeeded++
-		r.ingest(&res, resp)
+		r.ingest(&res, norm, resp)
 		if !fanout {
 			break // non-fan-out: highest-priority success wins
 		}
@@ -209,14 +239,15 @@ func (r *Resolver) Resolve(ctx context.Context, verb string, input CallInput) (C
 	return res, nil
 }
 
-// ingest converts an adapter response to telemetry records, normalizes each, and
-// accumulates the refs and concrete objects into res.
-func (r *Resolver) ingest(res *CapabilityResult, resp AdapterResponse) {
+// ingest converts an adapter response to telemetry records, normalizes each
+// through the scope-bound registry norm, and accumulates the refs and concrete
+// objects into res.
+func (r *Resolver) ingest(res *CapabilityResult, norm *Registry, resp AdapterResponse) {
 	for _, evt := range resp.ToOcsfEvents(time.Now()) {
 		res.Events = append(res.Events, evt)
 		res.OcsfEventRefs = append(res.OcsfEventRefs, evt.ID.String())
 
-		nr, err := r.normalizer.Normalize(evt)
+		nr, err := norm.Normalize(evt)
 		if err != nil {
 			res.note("normalize class %d: %v", evt.ClassUID, err)
 			continue

@@ -40,6 +40,12 @@ type AdapterSpec struct {
 	// may serve. `["all"]` is the one wildcard the read side permits. Plugin
 	// classes only.
 	Reads []string `yaml:"reads"`
+	// Scope is the optional source scope (03 §3.5): the organization whose
+	// credentials this instance holds. Empty means unscoped — the instance serves
+	// every investigation (single-organization deployments and genuinely shared
+	// tools like threat intel). A non-empty scope restricts the instance to
+	// investigations carrying the identical scope, and its bindings inherit it.
+	Scope string `yaml:"scope"`
 }
 
 // BindingSpec is the YAML shape of a Binding.
@@ -99,9 +105,18 @@ func BuildResolverWithAdapters(cfg TenantConfig, fixtureRoot string, namespace u
 	bindings := make(map[string][]Binding, len(cfg.Bindings))
 	for verb, specs := range cfg.Bindings {
 		for _, s := range specs {
-			// BindingSpec and Binding share their fields (the spec adds only YAML
-			// tags), so a direct conversion keeps them in lockstep.
-			bindings[verb] = append(bindings[verb], Binding(s))
+			// A binding inherits its instance's source scope (03 §3.5): scope lives
+			// on the instance (it holds one organization's credentials), never in
+			// binding YAML. cfg.Adapters[s.Adapter].Scope is the empty string for
+			// an unscoped instance or an unknown adapter (which fails elsewhere).
+			bindings[verb] = append(bindings[verb], Binding{
+				Adapter:   s.Adapter,
+				Operation: s.Operation,
+				Priority:  s.Priority,
+				Params:    s.Params,
+				FanOut:    s.FanOut,
+				Scope:     cfg.Adapters[s.Adapter].Scope,
+			})
 		}
 	}
 	if err := ValidateBindings(bindings); err != nil {

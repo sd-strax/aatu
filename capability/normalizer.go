@@ -49,6 +49,20 @@ func NewRegistry(r *identity.Resolver) *Registry {
 	return reg
 }
 
+// Scoped returns a Registry that mints identity in a source scope's namespace
+// (03 §3.5). An empty scope returns the receiver (the common single-organization
+// path allocates nothing); a non-empty scope builds a Registry bound to
+// r.resolver.Scoped(scope), so entities from the same call land in that
+// organization's namespace and never merge across organizations. Cheap enough
+// to build per scoped call — normalizers are tiny structs and calls are gated by
+// adapter I/O.
+func (reg *Registry) Scoped(scope string) *Registry {
+	if scope == "" {
+		return reg
+	}
+	return NewRegistry(reg.resolver.Scoped(scope))
+}
+
 // Register adds a normalizer, keyed by its ClassUID. A later registration for
 // the same class replaces the earlier one.
 func (reg *Registry) Register(n Normalizer) { reg.byClass[n.ClassUID()] = n }
