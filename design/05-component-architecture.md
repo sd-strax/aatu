@@ -97,7 +97,7 @@ reckon start
                            HTTP+WS server)
 ```
 
-`reckon start` runs the supervisor in the foreground or as a launchd / systemd / Windows service. `reckon stop` performs an orderly shutdown. `reckon status` reports component health. The supervisor cascades restarts (Temporal exit → restart; Postgres exit → fatal — mid-session restart corrupts in-flight transactions, fail fast).
+`reckon start` runs the supervisor in the foreground or as a launchd / systemd service (`§12.0`: no Windows). `reckon stop` performs an orderly shutdown. `reckon status` reports component health. The supervisor cascades restarts (Temporal exit → restart; Postgres exit → fatal — mid-session restart corrupts in-flight transactions, fail fast).
 
 **Managed-deps configuration** (typical for paid distributions, either operator):
 
@@ -517,7 +517,7 @@ The set of services and static resources the paid distribution depends on. In re
 
 Signed bundles, distributed via standard CDN, customer installations verify signatures on load:
 
-- **Software releases** — Go binaries (Mac, Windows, Linux) for both OSS and paid distributions; container images for backend-side adapter workers
+- **Software releases** — Go binaries (macOS, Linux; `§12.0`) for both OSS and paid distributions; container images for the engine (`§12.4`) and backend-side adapter workers
 - **Signed policy bundles** — baseline policies that ship with every install (e.g., the non-removable "AI cannot auto-approve T3" policy from 04 §4.3 Example 2). Customers can layer additional policies on top in tenant config.
 - **Fixture corpus** — OCSF scenarios for v0/v1 development and demos (03 §9)
 - **Adapter / MCP server registry** — signed manifests for first-party and partner adapters (§6.3)
@@ -559,13 +559,37 @@ A wrapper around a third-party provider (SES, SendGrid, Postmark) or direct inte
 
 ## 12. Process supervision and packaging
 
+### 12.0 Platform support — a deliberate exclusion
+
+The engine supports **macOS (arm64, amd64) and Linux (amd64, arm64)**. **Windows is explicitly
+unsupported at this time** — not the supervisor, not a blessed WSL2 recipe, no compatibility
+claims. This is a decision, not an omission, and the rationale is surface area:
+
+- The supervised stack is built on downloaded native distributions whose launchers are
+  POSIX-shaped (Keycloak boots via `kc.sh` over a downloaded JRE; the JRE layout itself differs
+  per OS). A Windows port means parallel launcher paths, JVM handling, and archive layouts —
+  per component, forever.
+- Supervision semantics — signals, process groups, graceful-stop grace windows, pidfiles — are
+  the correctness core of the supervisor. Windows service semantics are a second implementation
+  of exactly the code that must never be flaky.
+- The analyst's actual surface is the VS Code workbench, which is cross-platform by construction
+  and speaks HTTP to wherever the engine runs. Engine platforms can widen later without the
+  workbench noticing — the deferral is reversible and nothing above the supervisor bakes in an
+  OS assumption.
+
+A Windows-hosted analyst may well succeed running the Linux engine under WSL2 or the container
+shape (`§12.4`) and pointing the workbench at localhost — but this is a workaround, not a
+supported configuration: untested, undocumented beyond this sentence, and not a bug surface.
+Revisit when demand is concrete enough to fund the full port, not before.
+
 ### 12.1 Solo installer
 
-Platform-native installers for macOS (signed pkg), Windows (signed MSI), Linux (deb/rpm + tarball). Each installs:
+Platform-native installers for macOS (signed pkg) and Linux (deb/rpm + tarball) — per `§12.0`,
+no Windows installer. Each installs:
 - The reckon Go binary at a platform-appropriate path
 - The bundled Postgres binary (downloaded on first run if not bundled, to keep installer size manageable)
 - The bundled Temporal CLI
-- A platform-native service definition (launchd / systemd / Windows service)
+- A platform-native service definition (launchd / systemd)
 - The VS Code extension is installed separately from the VS Code marketplace; it discovers the local backend via a well-known port + token
 
 `reckon init` is the first-run command: prompts for OAuth login, generates the tenant namespace UUID, runs initial schema migrations on the bundled Postgres, fetches signed policy and fixture bundles from the CDN, registers the default adapters.
@@ -579,6 +603,62 @@ Platform-native installers for macOS (signed pkg), Windows (signed MSI), Linux (
 ### 12.3 SaaS deployment
 
 Standard cloud-native deployment: stateless reckon-backend workers behind a load balancer, managed Postgres (RLS for multi-tenancy), managed Temporal cluster, S3 for side stores, vault for vendor credentials, Keycloak HA, approval relay as a separate small service, transactional email as third-party. Standard observability stack.
+
+### 12.4 The engine container shape
+
+Between the solo install (`§12.1`) and the SaaS topology (`§12.3`) sits a third deliverable: a
+**single container image whose entrypoint is the supervisor**. The insight that makes it cheap is
+that the supervisor already *is* the orchestrator — Postgres, Temporal, Keycloak, backend, worker
+all boot, health-check, and restart inside one container exactly as they do on a host, so no
+compose file or in-container process manager is introduced. One image, `docker run`, done.
+
+Who it is for — and pointedly who it is not: **eval and CI** (a running stack with one command,
+`design/10`'s harness against it), **demos**, and **server-leaning installs** where a container
+runtime is ambient. It is *not* the analyst path: the native supervisor remains the
+zero-prerequisite default, for the same reasons the adapter container kind is opt-in
+(`11 §3.2` — the platform-honesty and prerequisite arguments carry over unchanged).
+
+**The persistence contract.** Everything the stack persists lives under the single data root
+(`~/.reckon` — Pg cluster, Keycloak realm state, Temporal's SQLite, event store, logs, installed
+adapters, downloaded toolchains). That single-root property is load-bearing for the container
+shape: **one named volume mounted at the data root captures the entire stateful surface.** No
+per-component mount enumeration, no path list to keep in sync as components are added — if a
+component writes outside the data root, that is a bug under this contract, not a packaging chore.
+
+Rules, and the reasoning that forces them:
+
+- **v0 populates the volume, it does not bake layers.** The data root interleaves *mutable
+  state* with *downloaded distributions*, per component (`pg/runtime` beside `pg/data`;
+  Keycloak's H2 database inside the unpacked server directory; Temporal's `bin/` beside
+  `data.sqlite`). Baking distributions into image layers under a volume-mounted root cannot
+  work: the mount shadows them, and the named-volume copy-up that papers over first boot turns
+  into **stale-binary shadowing on every image upgrade** — the volume's old distributions
+  silently override the new image's. So the v0 image ships empty-handed and lets the
+  supervisor's existing download-on-first-run path populate the volume, giving semantics
+  identical to a host install. Slower first boot, correct forever.
+- **The baked/air-gapped image requires the split-root refactor first.** Separating an
+  image-owned, immutable toolchain root (distributions, JREs, managed uv/node) from the
+  volume-owned mutable state root — including redirecting state that vendors write *inside*
+  their distribution directories (Keycloak's H2) — is the prerequisite for fast-boot,
+  egress-free images. It is deliberately sequenced after v0: the refactor touches every
+  supervisor component's path assumptions, and the v0 shape works without it.
+- **Non-root from day one.** Postgres refuses to run as root; the image runs the whole stack as
+  a fixed non-root UID, which also settles volume ownership across restarts.
+- **Publish ports 1:1 on localhost.** The backend's dependency probe asserts the Keycloak
+  issuer URL, and the workbench's PKCE redirect targets localhost — both bake host-visible
+  URLs. The container publishes the same ports on `127.0.0.1` that the host stack would bind,
+  so every advertised URL remains valid unchanged. Remapping ports is not supported in v0;
+  it would require issuer/redirect reconfiguration for zero benefit in the shapes this serves.
+- **Named volumes, not bind mounts.** Pg and SQLite durability semantics through VM file
+  sharing (macOS/Windows container runtimes) are the classic corruption-and-slowness trap;
+  named volumes stay inside the VM's filesystem and avoid it.
+- **Secrets are `env://` / `vault://` in container mode.** The `keychain://` scheme
+  (`internal/secretref`) does not exist inside a Linux container; the reference model already
+  accommodates this — it is a documentation rule, not a code change.
+
+The image is `linux/amd64 + linux/arm64` via a multi-arch manifest list — the same build-and-sign
+machinery, registry posture, and pre-publication privacy considerations as adapter images
+(`12 §2`, `12 §4`); the engine image and adapter images are one publishing story, not two.
 
 ---
 
