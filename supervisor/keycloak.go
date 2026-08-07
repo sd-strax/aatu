@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"fmt"
 	"io"
@@ -31,11 +32,13 @@ var defaultRealmJSON []byte
 
 // KeycloakConfig configures the bundled Keycloak IdP.
 type KeycloakConfig struct {
-	// DataDir is the root for Keycloak state. Subdirs:
+	// DataDir is the root for Keycloak's on-disk installation. Subdirs:
 	//   jre/      Temurin JRE 17 (extracted)
 	//   server/   Keycloak Quarkus distribution (extracted)
-	//   data/     Keycloak's persistent state (H2 by default)
 	//   logs/     Keycloak stdout/stderr
+	// Keycloak's persistent STATE (realms, users, sessions) lives in the
+	// supervised Postgres (DBPort/DBName below), not on disk — so this dir is
+	// pure binaries + logs, and the binaries/data split (05 §12.4) holds.
 	DataDir string
 
 	// HTTPPort is the Keycloak HTTP listener. Default 8543 (non-standard to
@@ -52,6 +55,26 @@ type KeycloakConfig struct {
 	// by the deployer step (`reckon init`) and injected by runtime — the
 	// component consumes it, never generates it. Required; Start fails without it.
 	AdminPassword string
+
+	// DBPort is the localhost port of the supervised Postgres holding Keycloak's
+	// state database. Required; Start fails without it. The supervisor starts
+	// Postgres before Keycloak (registration order), so the database is up and
+	// created (runtime lists DBName in the Postgres component's Databases) by
+	// the time this component boots.
+	DBPort uint32
+
+	// DBName is the Keycloak state database. Default "reckon_keycloak".
+	// Keycloak owns its schema (it migrates the empty database itself on first
+	// contact); reckon never migrates or reads it — except the bootstrap marker
+	// table this component keeps there (see ensureBootstrapAdmin).
+	DBName string
+
+	// DBUser / DBPassword authenticate to the supervised Postgres. DBUser
+	// defaults to "reckon" (the embedded instance's role); DBPassword is the
+	// same provisioned install secret the Postgres component consumes.
+	// DBPassword is required; Start fails without it.
+	DBUser     string
+	DBPassword string
 }
 
 // Keycloak is a Component wrapping the Keycloak Quarkus distribution.
@@ -106,6 +129,12 @@ func NewKeycloak(cfg KeycloakConfig) *Keycloak {
 		home, _ := os.UserHomeDir()
 		cfg.DataDir = filepath.Join(home, branding.DataDir, "keycloak")
 	}
+	if cfg.DBName == "" {
+		cfg.DBName = "reckon_keycloak"
+	}
+	if cfg.DBUser == "" {
+		cfg.DBUser = "reckon"
+	}
 	return &Keycloak{cfg: cfg}
 }
 
@@ -115,8 +144,14 @@ func (k *Keycloak) Name() string { return "keycloak" }
 // Start ensures the JRE + Keycloak distribution are present (downloading if
 // missing), installs the realm-import JSON, bootstraps a master-realm admin
 // user on first install, spawns the Keycloak JVM, and polls the management
-// /health/ready endpoint until it responds.
+// /health/ready endpoint until it responds. Keycloak's state lives in the
+// supervised Postgres, which the supervisor has already started (registration
+// order) — a missing/unreachable database fails Start rather than silently
+// falling back to the embedded H2.
 func (k *Keycloak) Start(ctx context.Context) error {
+	if k.cfg.DBPort == 0 || k.cfg.DBPassword == "" {
+		return fmt.Errorf("keycloak: no state database configured (DBPort + DBPassword required — run `%s init`)", branding.CLI)
+	}
 	if err := k.ensureBinaries(ctx); err != nil {
 		return err
 	}
@@ -296,11 +331,42 @@ func relativeJavaBin() string {
 	return filepath.Join("bin", "java")
 }
 
+// --- state database ----------------------------------------------------------
+
+// jdbcURL is the JDBC form of the state-database address, for Keycloak itself.
+func (k *Keycloak) jdbcURL() string {
+	return fmt.Sprintf("jdbc:postgresql://localhost:%d/%s", k.cfg.DBPort, k.cfg.DBName)
+}
+
+// libpqDSN is the libpq form of the same address, for this component's own
+// bootstrap-marker check.
+func (k *Keycloak) libpqDSN() string {
+	return fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=%s sslmode=disable",
+		k.cfg.DBPort, k.cfg.DBUser, k.cfg.DBPassword, k.cfg.DBName)
+}
+
+// dbEnv is the KC_DB_* environment both `bootstrap-admin` and `start-dev`
+// receive — env rather than argv so the DB password never appears in a process
+// listing.
+func (k *Keycloak) dbEnv() []string {
+	return []string{
+		"KC_DB=postgres",
+		"KC_DB_URL=" + k.jdbcURL(),
+		"KC_DB_USERNAME=" + k.cfg.DBUser,
+		"KC_DB_PASSWORD=" + k.cfg.DBPassword,
+	}
+}
+
+// bootstrapMarkerTable is this component's one table in the Keycloak state
+// database. Its EXISTENCE is the marker (no rows needed): it shares the
+// database's lifetime, so wiping/recreating the database drops the marker with
+// it and bootstrap re-runs — the same self-healing property the old
+// marker-file-next-to-H2 gave, relocated to where the state now lives.
+const bootstrapMarkerTable = "reckon_admin_bootstrap"
+
 // ensureBootstrapAdmin creates the master-realm admin user (username `admin`)
 // so the Keycloak admin console and the Admin REST API are usable. Idempotent
-// via a marker file next to Keycloak's H2 database — if H2 is wiped, the marker
-// goes with it and bootstrap re-runs (with the same store-provisioned password,
-// so the account stays consistent).
+// via the marker table in the state database (see bootstrapMarkerTable).
 //
 // The password is NOT a hardcoded default: it comes from cfg.AdminPassword,
 // provisioned by the deployer step (`reckon init`) into the install secret store
@@ -311,11 +377,25 @@ func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
 	if k.cfg.AdminPassword == "" {
 		return fmt.Errorf("keycloak: no admin password provisioned (run `%s init`)", branding.CLI)
 	}
-	markerFile := filepath.Join(k.serverDir(), "data", "h2", "."+branding.CLI+"-admin-bootstrapped")
-	if _, err := os.Stat(markerFile); err == nil {
+	db, err := sql.Open("postgres", k.libpqDSN())
+	if err != nil {
+		return fmt.Errorf("keycloak: open state database: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	var marked bool
+	if err := db.QueryRowContext(ctx,
+		"SELECT to_regclass($1) IS NOT NULL", "public."+bootstrapMarkerTable,
+	).Scan(&marked); err != nil {
+		return fmt.Errorf("keycloak: check bootstrap marker (is the supervised Postgres up?): %w", err)
+	}
+	if marked {
 		return nil
 	}
 
+	// bootstrap-admin runs Keycloak's store layer offline: on a fresh database
+	// it first applies Keycloak's own schema, then writes the admin user.
 	cmd := exec.CommandContext(ctx, k.keycloakLauncher(),
 		"bootstrap-admin", "user",
 		"--username", "admin",
@@ -326,6 +406,7 @@ func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
 		"JAVA_HOME="+k.javaHome(),
 		"KC_ADMIN_PW="+k.cfg.AdminPassword,
 	)
+	cmd.Env = append(cmd.Env, k.dbEnv()...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// bootstrap-admin may legitimately fail if an admin already exists
 		// in some edge cases (e.g., partial wipe). Log and continue — the
@@ -335,8 +416,11 @@ func (k *Keycloak) ensureBootstrapAdmin(ctx context.Context) error {
 		log.Printf("keycloak: master-realm admin bootstrapped (user admin; password from the install secret store)")
 	}
 
-	_ = os.MkdirAll(filepath.Dir(markerFile), 0o755)
-	_ = os.WriteFile(markerFile, []byte("bootstrapped"), 0o644)
+	if _, err := db.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (bootstrapped_at timestamptz NOT NULL DEFAULT now())", bootstrapMarkerTable),
+	); err != nil {
+		return fmt.Errorf("keycloak: write bootstrap marker: %w", err)
+	}
 	return nil
 }
 
@@ -375,6 +459,7 @@ func (k *Keycloak) spawn() error {
 	}
 	cmd := exec.Command(k.keycloakLauncher(), args...)
 	cmd.Env = append(os.Environ(), "JAVA_HOME="+k.javaHome())
+	cmd.Env = append(cmd.Env, k.dbEnv()...)
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 

@@ -190,6 +190,9 @@ func serve(cfg config.Config) error {
 		Databases: []supervisor.DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
 			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
+			// Keycloak's state database (05 §12.4: one DB engine for everything).
+			// No migrations — Keycloak owns and migrates its own schema.
+			{Name: "reckon_keycloak"},
 		},
 	})
 	temp := supervisor.NewTemporal(supervisor.TemporalConfig{
@@ -205,6 +208,10 @@ func serve(cfg config.Config) error {
 		ManagementPort: cfg.Keycloak.ManagementPort,
 		RealmName:      cfg.Keycloak.Realm,
 		AdminPassword:  kcAdminPassword,
+		// Keycloak's state lives in the supervised Postgres (05 §12.4) — same
+		// instance, same role, its own database (created by pg above).
+		DBPort:     pg.Port(),
+		DBPassword: pgPassword,
 	})
 
 	// Open the aggregate's DB lazily — sql.Open doesn't actually connect until

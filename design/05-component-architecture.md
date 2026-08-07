@@ -629,19 +629,22 @@ Rules, and the reasoning that forces them:
 
 - **v0 populates the volume, it does not bake layers.** The data root interleaves *mutable
   state* with *downloaded distributions*, per component (`pg/runtime` beside `pg/data`;
-  Keycloak's H2 database inside the unpacked server directory; Temporal's `bin/` beside
-  `data.sqlite`). Baking distributions into image layers under a volume-mounted root cannot
-  work: the mount shadows them, and the named-volume copy-up that papers over first boot turns
-  into **stale-binary shadowing on every image upgrade** — the volume's old distributions
-  silently override the new image's. So the v0 image ships empty-handed and lets the
-  supervisor's existing download-on-first-run path populate the volume, giving semantics
-  identical to a host install. Slower first boot, correct forever.
+  Temporal's `bin/` beside `data.sqlite`). Baking distributions into image layers under a
+  volume-mounted root cannot work: the mount shadows them, and the named-volume copy-up that
+  papers over first boot turns into **stale-binary shadowing on every image upgrade** — the
+  volume's old distributions silently override the new image's. So the v0 image ships
+  empty-handed and lets the supervisor's existing download-on-first-run path populate the
+  volume, giving semantics identical to a host install. Slower first boot, correct forever.
+- **Keycloak's state lives in the supervised Postgres**, not in its embedded H2 — one database
+  engine for everything, one backup surface, and the Keycloak install directory becomes pure
+  binaries (its admin-bootstrap marker follows the state into the database, preserving the
+  wipe-the-DB-and-it-self-heals property). This is also the `§12.3` SaaS wiring, so solo and
+  SaaS converge.
 - **The baked/air-gapped image requires the split-root refactor first.** Separating an
   image-owned, immutable toolchain root (distributions, JREs, managed uv/node) from the
-  volume-owned mutable state root — including redirecting state that vendors write *inside*
-  their distribution directories (Keycloak's H2) — is the prerequisite for fast-boot,
-  egress-free images. It is deliberately sequenced after v0: the refactor touches every
-  supervisor component's path assumptions, and the v0 shape works without it.
+  volume-owned mutable state root is the prerequisite for fast-boot, egress-free images. It is
+  deliberately sequenced after v0: the refactor touches every supervisor component's path
+  assumptions, and the v0 shape works without it.
 - **Non-root from day one.** Postgres refuses to run as root; the image runs the whole stack as
   a fixed non-root UID, which also settles volume ownership across restarts.
 - **Publish ports 1:1 on localhost.** The backend's dependency probe asserts the Keycloak

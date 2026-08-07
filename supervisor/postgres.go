@@ -161,6 +161,10 @@ func (p *Postgres) Health(ctx context.Context) HealthStatus {
 	return HealthStatus{Ready: true, Message: fmt.Sprintf("listening on :%d", p.cfg.Port)}
 }
 
+// Port returns the effective listen port (after defaulting), for components
+// that address this instance by port rather than DSN (Keycloak's JDBC URL).
+func (p *Postgres) Port() uint32 { return p.cfg.Port }
+
 // DSN returns a libpq connection string for a given database on this instance.
 // Downstream components (Temporal, knowledge service, etc.) consume this.
 func (p *Postgres) DSN(dbname string) string {

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"io/fs"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,20 @@ import (
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/knowledge"
 )
+
+// freePort asks the kernel for an unused TCP port. The lifecycle tests must
+// not assume the default 5435 is free — a running local reckon stack owns it,
+// and `make test-all` should coexist with the stack, not require stopping it.
+// (The tiny close-to-bind race is acceptable in tests.)
+func freePort(t *testing.T) uint32 {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	defer l.Close()
+	return uint32(l.Addr().(*net.TCPAddr).Port) //nolint:gosec // ports fit uint32
+}
 
 // countUpMigrations returns the number of up-migrations in a migration FS.
 // golang-migrate records the highest applied version in schema_migrations,
@@ -38,10 +53,11 @@ func TestPostgresLifecycle(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "pg")
+	port := freePort(t) // never assume 5435 is free (a live local stack owns it)
 	pg := NewPostgres(PostgresConfig{
 		DataDir:  dir,
 		Password: "test-pw",
-		Port:     0, // use default 5435
+		Port:     port,
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main"},
 			{Name: "reckon_knowledge"},
@@ -105,6 +121,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	pg2 := NewPostgres(PostgresConfig{
 		DataDir:  dir,
 		Password: "test-pw",
+		Port:     port, // same port as the first boot, never the 5435 default
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main"},
 			{Name: "reckon_knowledge"},
@@ -145,10 +162,11 @@ func TestPostgresMigrations(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "pg")
+	port := freePort(t)
 	pg := NewPostgres(PostgresConfig{
 		DataDir:  dir,
 		Password: "test-pw",
-		Port:     0,
+		Port:     port,
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
 			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
@@ -240,6 +258,7 @@ func TestPostgresMigrations(t *testing.T) {
 	pg2 := NewPostgres(PostgresConfig{
 		DataDir:  dir,
 		Password: "test-pw",
+		Port:     port, // same port as the first boot, never the 5435 default
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
 			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
