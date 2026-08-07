@@ -27,6 +27,19 @@ func stdinIsTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
+// promptSecretValue reads a secret (e.g. a vendor API key) without echo, no
+// retype: unlike an install password, a mistyped key is cheaply detected at
+// first use and pasteable input rarely typos. Callers gate on stdinIsTerminal().
+func promptSecretValue(label string) (string, error) {
+	fmt.Fprintf(os.Stderr, "%s (input hidden): ", label)
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read secret: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 // promptNewPassword reads a new password for label without echo, confirming it
 // by retype. It is the interactive source for `reckon init` — the deliberate
 // alternative to auto-generation. Callers gate on stdinIsTerminal(); a typo here

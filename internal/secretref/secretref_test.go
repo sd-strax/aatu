@@ -103,3 +103,47 @@ func TestResolveConfigNilSchemaPassesThrough(t *testing.T) {
 		t.Fatalf("nil schema should pass through: out=%v err=%v", out, err)
 	}
 }
+
+// TestStoreKeychainRoundTrip: the capture half returns a reference the resolve
+// half reads back; empty service defaults to the branding service.
+func TestStoreKeychainRoundTrip(t *testing.T) {
+	keyring.MockInit()
+	ref, err := StoreKeychain("", "greynoise-api_key", "gn-secret")
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if ref != "keychain://reckon/greynoise-api_key" {
+		t.Errorf("ref = %q", ref)
+	}
+	v, err := Resolve(ref)
+	if err != nil || v != "gn-secret" {
+		t.Fatalf("resolve = %q, %v; want the stored value", v, err)
+	}
+	if _, err := StoreKeychain("", "x", ""); err == nil {
+		t.Error("storing an empty secret must refuse")
+	}
+}
+
+// TestSchemaHelpers: required order preserved; x-secret set extracted;
+// description read.
+func TestSchemaHelpers(t *testing.T) {
+	schema := map[string]any{
+		"required": []any{"api_key", "region"},
+		"properties": map[string]any{
+			"api_key": map[string]any{"type": "string", "x-secret": true, "description": "vendor key"},
+			"region":  map[string]any{"type": "string"},
+		},
+	}
+	if got := SchemaRequiredFields(schema); len(got) != 2 || got[0] != "api_key" || got[1] != "region" {
+		t.Errorf("required = %v", got)
+	}
+	if s := SchemaSecretFields(schema); !s["api_key"] || s["region"] {
+		t.Errorf("secrets = %v", s)
+	}
+	if d := SchemaFieldDescription(schema, "api_key"); d != "vendor key" {
+		t.Errorf("description = %q", d)
+	}
+	if got := SchemaRequiredFields(nil); got != nil {
+		t.Errorf("nil schema required = %v", got)
+	}
+}

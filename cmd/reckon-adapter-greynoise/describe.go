@@ -10,10 +10,11 @@ import (
 // verb (03 §3) and no action types. The engine reconciles the verb into its
 // catalog (it is already a DefaultCatalog verb) and owns tier/coverage.
 //
-// The operation names ARE the greynoise-mcp tool names (readOp whitelists them);
-// these match the vendor docs (docs.greynoise.io/docs/mcp-server). NOTE (validate
-// live, 11 §3): confirm the exact tool argument names via `reckon adapter
-// mcp-probe greynoise` and adjust the binding params if they differ.
+// The operation names ARE the greynoise-mcp tool names (readOp whitelists
+// them), validated against the shipped 0.5.4 source: lookup-ip-context (arg
+// `ip`), bsi-lookup (Business Service Intelligence — the RIOT successor), and
+// gnql-query (returns data[] of IP contexts). The last live check remaining is
+// an actual authenticated call (Enterprise key).
 func describe() adapterplugin.DescribeResult {
 	return adapterplugin.DescribeResult{
 		Verbs: []capability.CapabilityDescriptor{
@@ -26,8 +27,8 @@ func describe() adapterplugin.DescribeResult {
 		},
 		Operations: []adapterplugin.OperationSchema{
 			{Name: "lookup-ip-context", Params: objSchema()},
-			{Name: "riot-lookup", Params: objSchema()},
-			{Name: "gnql-stats", Params: objSchema()},
+			{Name: "bsi-lookup", Params: objSchema()},
+			{Name: "gnql-query", Params: objSchema()},
 		},
 		DefaultReadBindings: []adapterplugin.ReadBinding{
 			// The indicator SCO carries the IP in `value` (03 §4 ipv4-addr). Only
@@ -62,7 +63,7 @@ func objSchema() map[string]any { return map[string]any{"type": "object"} }
 // bridge serves.
 func readOp(operation string, params map[string]any) (tool string, args map[string]any, ok bool) {
 	switch operation {
-	case "lookup-ip-context", "riot-lookup", "gnql-stats":
+	case "lookup-ip-context", "bsi-lookup", "gnql-query":
 		if params == nil {
 			params = map[string]any{}
 		}

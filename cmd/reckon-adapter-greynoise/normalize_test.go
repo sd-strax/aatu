@@ -5,8 +5,12 @@ import (
 	"testing"
 )
 
+// Fixtures follow the vendor's shipped v3 response schema (0.5.4):
+// classification/actor/last_seen/tags nested under
+// internet_scanner_intelligence; tags are objects with a name.
+
 func TestNormalizeMaliciousToDetectionFinding(t *testing.T) {
-	text := `{"ip":"45.83.64.1","seen":true,"classification":"malicious","actor":"Mirai","tags":["Mirai","SSH Bruteforcer"],"last_seen":"2026-08-01T00:00:00Z"}`
+	text := `{"ip":"45.83.64.1","internet_scanner_intelligence":{"seen":true,"classification":"malicious","actor":"Mirai","last_seen":"2026-08-01","tags":[{"id":"t1","slug":"mirai","name":"Mirai","category":"actor"},{"id":"t2","slug":"ssh-bruteforcer","name":"SSH Bruteforcer","category":"activity"}]},"business_service_intelligence":{"found":false}}`
 	evs, err := normalize("lookup-ip-context", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
@@ -25,6 +29,12 @@ func TestNormalizeMaliciousToDetectionFinding(t *testing.T) {
 	if title, _ := finding["title"].(string); !strings.Contains(title, "Mirai") {
 		t.Errorf("finding.title = %q, want it to name the actor", title)
 	}
+	if types, _ := finding["types"].([]string); len(types) != 2 || types[0] != "Mirai" {
+		t.Errorf("finding.types = %v, want the tag NAMES", finding["types"])
+	}
+	if e.Time.IsZero() {
+		t.Error("date-only last_seen must parse")
+	}
 	// The nested evidence must carry the IP so the engine mints an ipv4-addr SCO.
 	ev, _ := e.Raw["evidence"].(map[string]any)
 	se, _ := ev["src_endpoint"].(map[string]any)
@@ -34,7 +44,7 @@ func TestNormalizeMaliciousToDetectionFinding(t *testing.T) {
 }
 
 func TestNormalizeBenignToOpaqueNoIndicator(t *testing.T) {
-	text := `{"ip":"8.8.8.8","seen":false,"classification":"benign","last_seen":"2026-08-01T00:00:00Z"}`
+	text := `{"ip":"8.8.8.8","internet_scanner_intelligence":{"seen":false,"classification":"benign"},"business_service_intelligence":{"found":true,"name":"Google Public DNS","trust_level":"1"}}`
 	evs, err := normalize("lookup-ip-context", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
@@ -48,26 +58,26 @@ func TestNormalizeBenignToOpaqueNoIndicator(t *testing.T) {
 }
 
 func TestNormalizeGnqlWrapperUnwraps(t *testing.T) {
-	text := `{"data":[{"ip":"1.2.3.4","classification":"malicious"}],"count":1}`
-	evs, err := normalize("gnql-stats", text)
+	text := `{"data":[{"ip":"1.2.3.4","internet_scanner_intelligence":{"classification":"malicious"}}],"request_metadata":{"count":1}}`
+	evs, err := normalize("gnql-query", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
 	if len(evs) != 1 || evs[0].ClassUID != 2004 {
-		t.Fatalf("gnql wrapper must unwrap to a finding, got %+v", evs)
+		t.Fatalf("gnql data wrapper must unwrap to a finding, got %+v", evs)
 	}
 }
 
-func TestNormalizeRiotIsBenignEnrichment(t *testing.T) {
-	text := `{"ip":"8.8.8.8","riot":true,"category":"public_dns","name":"Google Public DNS","trust_level":"1"}`
-	evs, err := normalize("riot-lookup", text)
+func TestNormalizeBSIIsBenignEnrichment(t *testing.T) {
+	text := `{"ip":"8.8.8.8","business_service_intelligence":{"found":true,"category":"public_dns","name":"Google Public DNS","trust_level":"1"}}`
+	evs, err := normalize("bsi-lookup", text)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
 	if len(evs) != 1 || evs[0].ClassUID != 0 {
-		t.Fatalf("RIOT must be opaque enrichment, got %+v", evs)
+		t.Fatalf("BSI must be opaque enrichment, got %+v", evs)
 	}
 	if evs[0].Raw["reputation"] != "benign" {
-		t.Errorf("RIOT reputation = %v, want benign", evs[0].Raw["reputation"])
+		t.Errorf("BSI reputation = %v, want benign", evs[0].Raw["reputation"])
 	}
 }

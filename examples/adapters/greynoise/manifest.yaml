@@ -8,9 +8,10 @@
 # adapter serves the get_indicator_context verb and no action types.
 #
 # Requires a GreyNoise ENTERPRISE API key (the free Community key is not accepted
-# by the MCP server). NOTE — the pinned package version and the exact bin/tool
-# names still need confirming with `reckon adapter mcp-probe greynoise` (11 §3
-# handshake-for-truth) against a live server + an Enterprise (or trial) key.
+# by the MCP server). Package name, version pin, and the gnapi entrypoint are
+# validated by a real npm install; the MCP TOOL names/argument shapes are from
+# vendor docs and still need one live `reckon adapter mcp-probe greynoise`
+# against an Enterprise (or trial) key (11 §3 handshake-for-truth).
 manifest_version: 1
 name: greynoise
 version: 0.1.0
@@ -19,9 +20,9 @@ class: MCP
 exec: ["./reckon-adapter-greynoise"] # the bridge binary the engine spawns
 runtime: # reckon provisions this (managed Node) — the operator installs nothing
   kind: node
-  package: "@greynoise/greynoise-mcp-server" # the official npm package (docs.greynoise.io/docs/mcp-server)
-  version: "" # VALIDATE: pin to the release confirmed via mcp-probe (empty = latest for now)
-  entrypoint: greynoise-mcp-server # node_modules/.bin script; VALIDATE the exact bin name via mcp-probe
+  package: "@greynoise/greynoise-mcp-server" # the official npm package (validated: installs)
+  version: "0.5.4" # pinned to the validated npm release
+  entrypoint: gnapi # the vendor's console-script name (validated: node_modules/.bin/gnapi)
 summary: # CLAIMED — the describe handshake is the authority (11 §3)
   verbs: [get_indicator_context]
   action_types: []

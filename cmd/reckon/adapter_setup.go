@@ -19,6 +19,7 @@ import (
 	"github.com/sd-strax/reckon/internal/branding"
 	"github.com/sd-strax/reckon/internal/bundledadapters"
 	"github.com/sd-strax/reckon/internal/mcpclient"
+	"github.com/sd-strax/reckon/internal/secretref"
 )
 
 // runAdapterSetup provisions an installed adapter's ambient runtime so the
@@ -35,14 +36,21 @@ func runAdapterSetup(args []string) error {
 		name, args = args[0], args[1:]
 	}
 	fs := flag.NewFlagSet("adapter setup", flag.ContinueOnError)
-	configPath := fs.String("config", "", "tenant config to read the adapter's login config from (default: the reckon config's capability.config_path)")
-	orgFlag := fs.String("org", "", "Okta org URL (else read from config, else prompted)")
-	clientFlag := fs.String("client-id", "", "Okta app client id (else read from config, else prompted)")
-	scopesFlag := fs.String("scopes", "", "space-separated OKTA_SCOPES (else config/default)")
+	configPath := fs.String("config", "", "tenant config to read the adapter's instance config from (default: the reckon config's capability.config_path)")
+	sets := kvFlags{}
+	fs.Var(sets, "set", "instance config field, key=value; repeatable (the adapter's manifest config_schema names the fields)")
+	orgFlag := fs.String("org", "", "alias for --set org_url=… (Okta)")
+	clientFlag := fs.String("client-id", "", "alias for --set client_id=… (Okta)")
+	scopesFlag := fs.String("scopes", "", "alias for --set scopes=… (Okta)")
 	enableWrites := fs.Bool("enable-writes", false, "enable the adapter's write action-types too (else prompted; writes are deliberate, 11 §5)")
-	noAuth := fs.Bool("no-auth", false, "provision dependencies only; skip enablement + the one-time login")
+	noAuth := fs.Bool("no-auth", false, "provision dependencies only; skip enablement + any one-time login")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	for k, v := range map[string]string{"org_url": *orgFlag, "client_id": *clientFlag, "scopes": *scopesFlag} {
+		if v != "" {
+			sets[k] = v
+		}
 	}
 	if name == "" {
 		name = fs.Arg(0)
@@ -115,26 +123,49 @@ func runAdapterSetup(args []string) error {
 		return fmt.Errorf("unsupported runtime kind %q (python | node | container)", rt.Kind)
 	}
 
-	// Resolve creds (prompt only when we'll also log in). Enablement is config-
-	// only and needs no auth, so it runs even under --no-auth when creds are given.
-	orgURL, clientID, scopes := resolveOktaCreds(name, cfg, *configPath, *orgFlag, *clientFlag, *scopesFlag, !*noAuth)
+	// Resolve the instance config, schema-driven (the manifest's config_schema
+	// exists exactly so enablement can collect config without spawning, 11 §3):
+	// flags > the tenant config's existing stanza > an interactive prompt per
+	// missing REQUIRED field. x-secret fields are captured no-echo and stored in
+	// the OS keychain — only the reference lands in YAML (11 §4.3).
+	cfgMap, missing := resolveAdapterConfig(name, installed.Manifest.ConfigSchema, cfg, *configPath, sets, !*noAuth)
+	if len(missing) > 0 {
+		fmt.Printf("\nDependencies are ready. Skipping enablement — required config missing: %s\n(pass --set %s=…, or configure %s in the tenant config, then re-run setup).\n",
+			strings.Join(missing, ", "), missing[0], name)
+		return nil
+	}
 
 	// Enable the adapter in the tenant config (the shared adopt+enable primitive,
 	// 11 §5) so the backend serves it after a restart — no hand-edited YAML.
-	if orgURL != "" && clientID != "" {
-		if err := enableAdapter(name, installed, cfg, *configPath, orgURL, clientID, scopes, *enableWrites); err != nil {
-			return err
-		}
+	if err := enableAdapter(name, installed, cfg, *configPath, cfgMap, *enableWrites); err != nil {
+		return err
 	}
 
 	if *noAuth {
 		return nil
 	}
-	if orgURL == "" || clientID == "" {
-		fmt.Printf("\nDependencies are ready. Skipping login — no org URL / client id available\n(pass --org and --client-id, or configure %s, then re-run setup).\n", name)
-		return nil
+	// Login priming is vendor-specific. Okta's device-authorization grant needs
+	// a one-time interactive login (cached token → headless after); an adapter
+	// that authenticates by static secret (e.g. an API key) needs none — the
+	// backend resolves its secret reference at spawn.
+	if name == "okta" {
+		return primeAuth(name, adapterDir, *rt, cfgMap["org_url"], cfgMap["client_id"], cfgMap["scopes"])
 	}
-	return primeAuth(name, adapterDir, *rt, orgURL, clientID, scopes)
+	fmt.Printf("✓ %s needs no interactive login — the backend resolves its credentials at spawn.\n", name)
+	return nil
+}
+
+// kvFlags is a repeatable key=value flag.
+type kvFlags map[string]string
+
+func (k kvFlags) String() string { return "" }
+func (k kvFlags) Set(s string) error {
+	key, val, ok := strings.Cut(s, "=")
+	if !ok || key == "" {
+		return fmt.Errorf("want key=value, got %q", s)
+	}
+	k[key] = val
+	return nil
 }
 
 // dockerPull fetches a container-kind adapter's image (11 §3). The container is
@@ -156,12 +187,19 @@ func dockerPull(ctx context.Context, image string) error {
 // and writes the enablement (adapter stanza + verb/action bindings) into the
 // tenant config file. Reads are enabled wholesale; each write action-type is
 // per-op explicit (§5), enabled only with --enable-writes or an interactive yes.
-func enableAdapter(name string, installed adapterplugin.Installed, cfg config.Config, configOverride, org, client, scopes string, enableAllWrites bool) error {
+// cfgMap is the resolved instance config; x-secret fields carry REFERENCES,
+// which are resolved to plaintext only for this describe spawn (mirroring the
+// host's own spawn path) — the references, never the values, are what adopt
+// writes into YAML.
+func enableAdapter(name string, installed adapterplugin.Installed, cfg config.Config, configOverride string, cfgMap map[string]string, enableAllWrites bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cfgMap := map[string]string{"org_url": org, "client_id": client, "scopes": scopes}
-	p, err := adapterplugin.New(name, installed, toAnyMap(cfgMap), version)
+	resolved, err := secretref.ResolveConfig(installed.Manifest.ConfigSchema, toAnyMap(cfgMap))
+	if err != nil {
+		return fmt.Errorf("resolve %s secrets for describe: %w", name, err)
+	}
+	p, err := adapterplugin.New(name, installed, resolved, version)
 	if err != nil {
 		return err
 	}
@@ -175,7 +213,15 @@ func enableAdapter(name string, installed adapterplugin.Installed, cfg config.Co
 	if err != nil {
 		return err
 	}
-	plan := adopt.PlanFrom(desc, name, installed.Manifest.Name, string(class), cfgMap,
+	// Unset optional fields stay OUT of the YAML — the adapter's own configure
+	// defaults apply (e.g. the okta bridge's default scopes).
+	planCfg := map[string]string{}
+	for k, v := range cfgMap {
+		if v != "" {
+			planCfg[k] = v
+		}
+	}
+	plan := adopt.PlanFrom(desc, name, installed.Manifest.Name, string(class), planCfg,
 		readOperations(desc), chooseWrites(desc, enableAllWrites))
 	if plan.ReadAdapter == nil && plan.WriteAdapter == nil {
 		return nil
@@ -249,50 +295,96 @@ func toAnyMap(m map[string]string) map[string]any {
 	return out
 }
 
-// resolveOktaCreds resolves the org URL, client id, and scopes in precedence
-// flags > tenant config > interactive prompt. Returns empty strings when nothing
-// supplies them and we can't prompt (non-interactive) — the caller skips login.
-func resolveOktaCreds(name string, cfg config.Config, configOverride, orgFlag, clientFlag, scopesFlag string, promptOK bool) (org, client, scopes string) {
-	org, client, scopes = orgFlag, clientFlag, scopesFlag
+// resolveAdapterConfig assembles the instance config for enablement,
+// schema-driven: precedence --set flags (and the Okta aliases) > the tenant
+// config's existing stanza > an interactive prompt per missing REQUIRED field.
+// A missing x-secret field is captured no-echo and stored in the OS keychain,
+// and the config carries only the keychain:// reference — plaintext never lands
+// in YAML (11 §4.3); when the keychain is unavailable (headless Linux), it
+// falls back to writing an env:// reference and telling the operator which
+// variable to export. Optional fields are never prompted. Returns the resolved
+// map plus the required fields still missing (non-interactive runs) — the
+// caller skips enablement with guidance rather than failing.
+func resolveAdapterConfig(name string, schema map[string]any, cfg config.Config, configOverride string, flagVals map[string]string, promptOK bool) (map[string]string, []string) {
+	out := map[string]string{}
+	for k, v := range flagVals {
+		out[k] = v
+	}
 
-	// Fill gaps from the tenant config if one is available.
-	if org == "" || client == "" {
-		cfgPath := configOverride
-		if cfgPath == "" {
-			cfgPath = cfg.Capability.ConfigPath
-		}
-		if cfgPath != "" {
-			if tc, err := capability.LoadTenantConfig(cfgPath); err == nil {
-				if spec, ok := tc.Adapters[name]; ok && spec.Config != nil {
-					if org == "" {
-						org, _ = spec.Config["org_url"].(string)
-					}
-					if client == "" {
-						client, _ = spec.Config["client_id"].(string)
-					}
-					if scopes == "" {
-						scopes, _ = spec.Config["scopes"].(string)
+	// Fill gaps from the tenant config's existing stanza, if one is available.
+	cfgPath := configOverride
+	if cfgPath == "" {
+		cfgPath = cfg.Capability.ConfigPath
+	}
+	if cfgPath != "" {
+		if tc, err := capability.LoadTenantConfig(cfgPath); err == nil {
+			if spec, ok := tc.Adapters[name]; ok {
+				for k, v := range spec.Config {
+					if s, ok := v.(string); ok && s != "" && out[k] == "" {
+						out[k] = s
 					}
 				}
 			}
 		}
 	}
 
-	// Prompt for anything still missing, if we'll log in and have a terminal.
-	if promptOK && (org == "" || client == "") && stdinIsTerminal() {
-		fmt.Printf("\nConfigure the %s login:\n", name)
-		if org == "" {
-			org, _ = promptLine("Okta org URL (e.g. https://acme.okta.com)")
+	// Prompt for each still-missing required field, when we can.
+	secrets := secretref.SchemaSecretFields(schema)
+	var missing []string
+	for _, field := range secretref.SchemaRequiredFields(schema) {
+		if out[field] != "" {
+			continue
 		}
-		if client == "" {
-			client, _ = promptLine("Okta app Client ID")
+		if !promptOK || !stdinIsTerminal() {
+			missing = append(missing, field)
+			continue
 		}
+		label := field
+		if d := secretref.SchemaFieldDescription(schema, field); d != "" {
+			label = fmt.Sprintf("%s (%s)", field, d)
+		}
+		if !secrets[field] {
+			v, _ := promptLine(label)
+			if v == "" {
+				missing = append(missing, field)
+			} else {
+				out[field] = v
+			}
+			continue
+		}
+		// x-secret: capture no-echo, store, and reference — never the value.
+		v, err := promptSecretValue(label)
+		if err != nil || v == "" {
+			missing = append(missing, field)
+			continue
+		}
+		ref, err := secretref.StoreKeychain("", name+"-"+field, v)
+		if err != nil {
+			envName := envVarNameFor(name, field)
+			fmt.Printf("  keychain unavailable (%v)\n  falling back to an env reference: export %s=<the secret> before starting the backend.\n", err, envName)
+			ref = secretref.SchemeEnv + envName
+		}
+		out[field] = ref
 	}
+	return out, missing
+}
 
-	if scopes == "" {
-		scopes = "okta.users.read okta.groups.read okta.logs.read okta.users.manage"
+// envVarNameFor derives the env:// variable name for an adapter's secret field
+// (e.g. greynoise + api_key → GREYNOISE_API_KEY).
+func envVarNameFor(adapter, field string) string {
+	clean := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'a' && r <= 'z':
+				return r - 32
+			case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				return r
+			default:
+				return '_'
+			}
+		}, s)
 	}
-	return org, client, scopes
+	return clean(adapter) + "_" + clean(field)
 }
 
 // primeAuth runs the adapter's one-time interactive login by spawning the
@@ -300,6 +392,11 @@ func resolveOktaCreds(name string, cfg config.Config, configOverride, orgFlag, c
 // device-authorization flow; the server prints the verification URL (streamed to
 // the terminal) and caches the token on success.
 func primeAuth(name, adapterDir string, rt adapterplugin.RuntimeSpec, orgURL, clientID, scopes string) error {
+	if scopes == "" {
+		// The same default the bridge's configure applies — the login must prime
+		// a token with the scopes the adapter will actually use.
+		scopes = "okta.users.read okta.groups.read okta.logs.read okta.users.manage"
+	}
 	entry := filepath.Join(adapterDir, adapterruntime.VenvDir, "bin", rt.EntrypointName())
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),

@@ -122,6 +122,59 @@ func ResolveConfig(configSchema map[string]any, config map[string]any) (map[stri
 	return out, nil
 }
 
+// StoreKeychain writes a secret into the OS credential store and returns the
+// keychain:// reference that resolves back to it — the capture half of the
+// scheme, used by enablement surfaces (`adapter setup` now, the §5.1
+// conversational form later): the VALUE goes to the keychain, only the
+// REFERENCE goes into the config file. An empty service defaults to the
+// branding service, mirroring resolveKeychain. Errors surface (e.g. no Secret
+// Service on a headless Linux) so the caller can fall back to instructing an
+// env:// reference instead.
+func StoreKeychain(service, name, value string) (string, error) {
+	if service == "" {
+		service = branding.CLI
+	}
+	if name == "" {
+		return "", fmt.Errorf("keychain secret has no name")
+	}
+	if value == "" {
+		return "", fmt.Errorf("refusing to store an empty secret for %s/%s", service, name)
+	}
+	if err := keyring.Set(service, name, value); err != nil {
+		return "", fmt.Errorf("store keychain secret %s/%s: %w", service, name, err)
+	}
+	return SchemeKeychain + service + "/" + name, nil
+}
+
+// SchemaSecretFields returns the x-secret property names of a config_schema —
+// exported for the enablement surfaces that must know which fields to capture
+// no-echo and reference-ify (§4.3).
+func SchemaSecretFields(schema map[string]any) map[string]bool { return xSecretFields(schema) }
+
+// SchemaRequiredFields returns the schema's required property names, in the
+// schema's order.
+func SchemaRequiredFields(schema map[string]any) []string {
+	raw, ok := schema["required"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if s, ok := r.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// SchemaFieldDescription returns a property's description, for prompt labels.
+func SchemaFieldDescription(schema map[string]any, field string) string {
+	props, _ := schema["properties"].(map[string]any)
+	p, _ := props[field].(map[string]any)
+	d, _ := p["description"].(string)
+	return d
+}
+
 // xSecretFields extracts the set of property names marked `"x-secret": true` in
 // a JSON-Schema-shaped config_schema (§4.3).
 func xSecretFields(schema map[string]any) map[string]bool {

@@ -36,7 +36,12 @@ type ContentBlock struct {
 // error which surfaces as a Go error from CallTool.
 type ToolResult struct {
 	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError"`
+	// StructuredContent is MCP's machine-readable result: servers that return
+	// {text, structured} pairs put human-FORMATTED prose in the text blocks and
+	// the raw JSON here. Consumers that parse (normalizers) must prefer it —
+	// see StructuredOrText.
+	StructuredContent json.RawMessage `json:"structuredContent"`
+	IsError           bool            `json:"isError"`
 }
 
 // Text concatenates the text content blocks — the common case, where a tool
@@ -49,6 +54,16 @@ func (r ToolResult) Text() string {
 		}
 	}
 	return b.String()
+}
+
+// StructuredOrText returns the structured JSON when the server provided it,
+// else the concatenated text. The right input for anything that parses the
+// result (a server's text block may be prose formatted for humans).
+func (r ToolResult) StructuredOrText() string {
+	if len(r.StructuredContent) > 0 {
+		return string(r.StructuredContent)
+	}
+	return r.Text()
 }
 
 // ServerInfo identifies the MCP server from the initialize handshake.

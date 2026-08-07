@@ -19,10 +19,10 @@ const version = "0.1.0"
 // path relative to the install dir the host spawns the bridge in — deterministic,
 // offline). Override with the `server_command` config field.
 //
-// NOTE (validate live, 11 §3 handshake-for-truth): the node_modules/.bin script
-// name is the vendor's; confirm with `reckon adapter mcp-probe greynoise` and
-// correct here + in the manifest entrypoint if it differs.
-var defaultServerCommand = []string{"./node_modules/.bin/greynoise-mcp-server"}
+// The vendor's console script is `gnapi` (validated against the real npm
+// package); the remaining live validation is the tool names/arguments, which
+// need an Enterprise key (`reckon adapter mcp-probe greynoise`).
+var defaultServerCommand = []string{"./node_modules/.bin/gnapi"}
 
 // bridge holds the instance config and the lazily-spawned MCP client to
 // greynoise-mcp-server. Read-only: no dispatch path.
@@ -136,7 +136,9 @@ func (b *bridge) invoke(ctx context.Context, params []byte) (any, *wireError) {
 	if res.IsError {
 		return nil, classErr(-32000, "greynoise tool "+tool+": "+res.Text(), string(capability.ErrFallthrough))
 	}
-	events, err := normalize(p.Operation, res.Text())
+	// StructuredOrText: this server returns {text: human-formatted, structured:
+	// raw JSON} pairs — the normalizer must parse the structured half.
+	events, err := normalize(p.Operation, res.StructuredOrText())
 	if err != nil {
 		return nil, classErr(-32000, "normalize "+tool+": "+err.Error(), string(capability.ErrFallthrough))
 	}
