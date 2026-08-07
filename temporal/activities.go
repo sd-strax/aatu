@@ -99,10 +99,11 @@ func (a *Activities) EmitDispatched(ctx context.Context, in EmitDispatchedInput)
 
 // DispatchInput is the frozen action content the resolver dispatches.
 type DispatchInput struct {
-	ActionID   string
-	ActionType string
-	Targets    []aggregate.TargetSpec
-	Parameters map[string]any
+	ActionID    string
+	ActionType  string
+	Targets     []aggregate.TargetSpec
+	Parameters  map[string]any
+	SourceScope string
 }
 
 // DispatchOutput is the classified outcome the workflow records. Attempts is
@@ -126,10 +127,11 @@ func (a *Activities) DoDispatch(ctx context.Context, in DispatchInput) (Dispatch
 		return DispatchOutput{}, sdktemporal.NewApplicationError(err.Error(), fatalErrorType)
 	}
 	res, binding, err := a.resolver.Resolve(ctx, action.DispatchRequest{
-		ActionID:   id,
-		ActionType: in.ActionType,
-		Targets:    in.Targets,
-		Parameters: in.Parameters,
+		ActionID:    id,
+		ActionType:  in.ActionType,
+		Targets:     in.Targets,
+		Parameters:  in.Parameters,
+		SourceScope: in.SourceScope,
 	})
 	if err != nil {
 		var we *action.WriteError

@@ -22,6 +22,11 @@ type ActionLifecycleInput struct {
 	ActionType  string                 `json:"action_type"`
 	Targets     []aggregate.TargetSpec `json:"targets"`
 	Parameters  map[string]any         `json:"parameters,omitempty"`
+	// SourceScope is the investigation's source scope (03 §3.5), carried so the
+	// write resolver dispatches to the matching organization's instance. Read
+	// from the investigation's immutable Seed when the workflow is started;
+	// empty in single-organization tenants.
+	SourceScope string `json:"source_scope,omitempty"`
 }
 
 // ActionLifecycle is the durable dispatch of an APPROVED action (05 §6.2,
@@ -90,10 +95,11 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, err
 	})
 	var out DispatchOutput
 	dispErr := workflow.ExecuteActivity(dispatchCtx, a.DoDispatch, DispatchInput{
-		ActionID:   in.ActionID,
-		ActionType: in.ActionType,
-		Targets:    in.Targets,
-		Parameters: in.Parameters,
+		ActionID:    in.ActionID,
+		ActionType:  in.ActionType,
+		Targets:     in.Targets,
+		Parameters:  in.Parameters,
+		SourceScope: in.SourceScope,
 	}).Get(dispatchCtx, &out)
 
 	// 4. Record the outcome.

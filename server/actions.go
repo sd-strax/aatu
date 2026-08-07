@@ -552,6 +552,21 @@ func (b *Backend) startActionWorkflow(ctx context.Context, s dispatchSpec) strin
 		Targets:     s.Targets,
 		Parameters:  paramsMap(s.Parameters),
 	}
+
+	// Route the dispatch to the investigation's organization (03 §3.5). The
+	// source scope lives on the immutable Seed, so every action in an
+	// investigation inherits one value — reading it here covers the auto-approve,
+	// manual-approve, and reversal paths uniformly (all flow through this func).
+	// A lookup miss leaves it empty: fail-closed for a scoped tenant (a scoped
+	// write finds no binding rather than mis-routing) and a no-op for a
+	// single-organization one.
+	if b.cfg.Handler != nil {
+		if inv, err := aggregate.LoadInvestigationCurrent(ctx, b.cfg.Handler.DB(), s.AggregateID); err != nil {
+			log.Printf("action %s: source-scope lookup failed, dispatch will be unscoped: %v", s.ActionID, err)
+		} else if inv.Seed != nil {
+			lifecycle.SourceScope = inv.Seed.SourceScope
+		}
+	}
 	var (
 		wfID string
 		err  error
