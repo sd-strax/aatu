@@ -1,0 +1,36 @@
+# Example tenant config enabling the GreyNoise MCP-bridge adapter (design/11 §5).
+# Point the backend at it with
+#   capability:
+#     config_path: examples/adapters/greynoise/tenant-config.yaml
+# after installing the adapter under <data>/adapters/greynoise/ (see manifest.yaml).
+#
+# GreyNoise is read-only threat-intel enrichment: it appears ONLY in the read
+# `adapters` section — there is no write side. It is also the canonical UNSCOPED
+# shared tool of source scope (03 §3.5): a threat-intel adapter serves every
+# organization, so it carries no `scope:` and answers get_indicator_context for
+# any investigation (scoped or not).
+#
+# api_key is an x-secret reference (11 §4.3): the host resolves it to plaintext
+# before configure. Store the real key in the OS keychain / an env var / a vault
+# and point the reference at it — never a literal.
+
+tenant: demo
+
+adapters:
+  greynoise:
+    class: mcp
+    enabled: true
+    adapter: greynoise # installed adapter name (defaults to the key)
+    # no scope: — a shared tool applicable to every source scope (03 §3.5)
+    config:
+      api_key: "keychain://reckon/greynoise-api-key" # or env://GREYNOISE_API_KEY, or vault://...
+    reads: # per-op allowlist (11 §5)
+      - ip_context
+
+bindings:
+  get_indicator_context:
+    - adapter: greynoise
+      operation: ip_context
+      priority: 100
+      params:
+        ip: "${entity.value}"

@@ -17,6 +17,9 @@ import (
 //go:embed manifests/okta.yaml
 var oktaManifest []byte
 
+//go:embed manifests/greynoise.yaml
+var greynoiseManifest []byte
+
 // Bundled is one first-party adapter reckon can install.
 type Bundled struct {
 	Name string
@@ -28,7 +31,8 @@ type Bundled struct {
 }
 
 var registry = map[string]Bundled{
-	"okta": {Name: "okta", Manifest: oktaManifest, Binary: "reckon-adapter-okta"},
+	"okta":      {Name: "okta", Manifest: oktaManifest, Binary: "reckon-adapter-okta"},
+	"greynoise": {Name: "greynoise", Manifest: greynoiseManifest, Binary: "reckon-adapter-greynoise"},
 }
 
 // Get returns the bundled adapter for a name.

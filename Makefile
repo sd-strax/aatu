@@ -9,6 +9,7 @@ build: ## Build reckon, reckon-backend, and the bundled adapters to bin/
 	go build -o bin/reckon ./cmd/reckon
 	go build -o bin/reckon-backend ./cmd/reckon-backend
 	go build -o bin/reckon-adapter-okta ./cmd/reckon-adapter-okta
+	go build -o bin/reckon-adapter-greynoise ./cmd/reckon-adapter-greynoise
 
 test: ## Fast tests: unit + httptest integration. Race detector on. Skips slow embedded-Pg/Temporal/Keycloak lifecycle tests.
 	go test -race -short ./...
