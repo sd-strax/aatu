@@ -122,6 +122,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  adapter install <name>  install a bundled first-party adapter (okta) into the data dir")
 	fmt.Fprintln(os.Stderr, "  adapter setup <name>  provision an installed adapter's runtime (managed uv + venv) and run its one-time login")
 	fmt.Fprintln(os.Stderr, "  adapter test <dir>  run the plugin conformance handshake against an adapter directory (11 §7)")
+	fmt.Fprintln(os.Stderr, "  adapter reload  hot-reload the capability layer of a running backend after a tenant-config edit (no restart)")
 	fmt.Fprintln(os.Stderr, "  dev-auth   provision a local dev/CI login principal + enable the direct grant (dev/CI ONLY)")
 	fmt.Fprintln(os.Stderr, "  prefetch-runtimes --dir <dir>  download the Pg/Temporal/Keycloak distributions into <dir> (image build + air-gap bundles)")
 	fmt.Fprintln(os.Stderr, "  set-anthropic-key    store your BYOK Anthropic key in the OS keychain (client-side)")

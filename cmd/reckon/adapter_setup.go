@@ -136,22 +136,34 @@ func runAdapterSetup(args []string) error {
 	}
 
 	// Enable the adapter in the tenant config (the shared adopt+enable primitive,
-	// 11 §5) so the backend serves it after a restart — no hand-edited YAML.
+	// 11 §5) so the backend serves it — no hand-edited YAML.
 	if err := enableAdapter(name, installed, cfg, *configPath, cfgMap, *enableWrites); err != nil {
 		return err
 	}
 
-	if *noAuth {
-		return nil
+	if !*noAuth {
+		// Login priming is vendor-specific. Okta's device-authorization grant
+		// needs a one-time interactive login (cached token → headless after); an
+		// adapter that authenticates by static secret (e.g. an API key) needs
+		// none — the backend resolves its secret reference at spawn.
+		if name == "okta" {
+			if err := primeAuth(name, adapterDir, *rt, cfgMap["org_url"], cfgMap["client_id"], cfgMap["scopes"]); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("✓ %s needs no interactive login — the backend resolves its credentials at spawn.\n", name)
+		}
 	}
-	// Login priming is vendor-specific. Okta's device-authorization grant needs
-	// a one-time interactive login (cached token → headless after); an adapter
-	// that authenticates by static secret (e.g. an API key) needs none — the
-	// backend resolves its secret reference at spawn.
-	if name == "okta" {
-		return primeAuth(name, adapterDir, *rt, cfgMap["org_url"], cfgMap["client_id"], cfgMap["scopes"])
+
+	// Apply without a restart if the backend is running (11 §5.1). Best-effort:
+	// a signal failure is reported, not fatal — the config is already written.
+	if reloaded, rerr := signalReload(); rerr != nil {
+		fmt.Printf("  (reload signal failed: %v — restart the backend to serve it)\n", rerr)
+	} else if reloaded {
+		fmt.Printf("✓ reloaded the running %s — reads are live now (a new WRITE adapter still needs a restart).\n", branding.CLI)
+	} else {
+		fmt.Printf("  restart the backend (or `%s start`) to serve it.\n", branding.CLI)
 	}
-	fmt.Printf("✓ %s needs no interactive login — the backend resolves its credentials at spawn.\n", name)
 	return nil
 }
 

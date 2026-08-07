@@ -183,9 +183,12 @@ func (b *Backend) applyEnablement(w http.ResponseWriter, r *http.Request, adapte
 			fmt.Sprintf("adapter %q is not installed — enablement never installs (11 §6.1)", adapter))
 		return
 	}
-	if body.Enabled && spec.Class != capability.ClassFixture {
+	// A plugin (out-of-process) adapter can only be hot-enabled when the
+	// plugin-aware rebuild closure is wired (runtime injects it). Without it,
+	// only the fixture class can be spawned in-package — the honest v0 gate.
+	if body.Enabled && spec.Class != capability.ClassFixture && b.cfg.CapabilityRebuild == nil {
 		writeJSONError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("adapter %q has class %q; v0 can spawn only the fixture class (out-of-process adapters land in Phase E)", adapter, spec.Class))
+			fmt.Sprintf("adapter %q has class %q and no plugin rebuild is wired; enable it via the tenant config + a restart", adapter, spec.Class))
 		return
 	}
 
@@ -194,22 +197,11 @@ func (b *Backend) applyEnablement(w http.ResponseWriter, r *http.Request, adapte
 		return
 	}
 
-	// Rebuild from the FILE (the authority) and hot-swap. A rebuild failure
-	// after a write is surfaced loudly — the file changed, the surface didn't.
-	tc, err = capability.LoadTenantConfig(b.cfg.CapabilityConfigPath)
-	if err == nil {
-		var resolver *capability.Resolver
-		var catalog *capability.Catalog
-		ns := uuid.Nil
-		if b.cfg.TenantNamespace != "" {
-			ns, _ = uuid.Parse(b.cfg.TenantNamespace)
-		}
-		resolver, catalog, err = capability.BuildResolver(tc, b.cfg.CapabilityFixtureRoot, ns)
-		if err == nil {
-			b.setCapabilitySurface(resolver, catalog)
-		}
-	}
-	if err != nil {
+	// Rebuild from the FILE (the authority) and hot-swap — through the full
+	// plugin path when the closure is wired, else the fixture-only in-package
+	// build. A rebuild failure after a write is surfaced loudly (the file
+	// changed, the surface didn't) so the operator fixes or reverts.
+	if err := b.rebuildCapabilityFromFile(); err != nil {
 		writeJSONError(w, http.StatusInternalServerError,
 			"config written but rebuild failed (fix the file or revert): "+err.Error())
 		return
@@ -223,6 +215,31 @@ func (b *Backend) applyEnablement(w http.ResponseWriter, r *http.Request, adapte
 		"adapter": adapter,
 		"enabled": body.Enabled,
 	})
+}
+
+// rebuildCapabilityFromFile rebuilds + hot-swaps the capability surface from
+// the tenant config on disk: the injected plugin-aware closure when wired
+// (11 §5.1, the full adapter path), else the fixture-only in-package build (the
+// v0 path with no adapter host). Shared by the enablement endpoint and any
+// reload trigger.
+func (b *Backend) rebuildCapabilityFromFile() error {
+	if b.cfg.CapabilityRebuild != nil {
+		return b.ReloadCapability()
+	}
+	tc, err := capability.LoadTenantConfig(b.cfg.CapabilityConfigPath)
+	if err != nil {
+		return err
+	}
+	ns := uuid.Nil
+	if b.cfg.TenantNamespace != "" {
+		ns, _ = uuid.Parse(b.cfg.TenantNamespace)
+	}
+	resolver, catalog, err := capability.BuildResolver(tc, b.cfg.CapabilityFixtureRoot, ns)
+	if err != nil {
+		return err
+	}
+	b.setCapabilitySurface(resolver, catalog)
+	return nil
 }
 
 // appendEnablementAudit records one config-plane change (11 §5.1: "casual

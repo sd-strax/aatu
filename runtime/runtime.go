@@ -346,11 +346,17 @@ func serve(cfg config.Config) error {
 		// was built from and rebuilds it in place.
 		CapabilityConfigPath:  cfg.Capability.ConfigPath,
 		CapabilityFixtureRoot: cfg.Capability.FixtureRoot,
-		Gate2:                 gate2,
-		ActionCatalog:         actionCatalog,
-		ActionResolver:        actionResolver,
-		Knowledge:             knowledgeStore,
-		Comms:                 commsStore,
+		// The no-restart reload closure: re-run the full plugin build path
+		// (adapter host + out-of-process adapters + catalog reconciliation).
+		// Injected here because only runtime holds adapterHost.
+		CapabilityRebuild: func() (*capability.Resolver, *capability.Catalog, error) {
+			return buildCapability(cfg, adapterHost)
+		},
+		Gate2:          gate2,
+		ActionCatalog:  actionCatalog,
+		ActionResolver: actionResolver,
+		Knowledge:      knowledgeStore,
+		Comms:          commsStore,
 
 		TenantNamespace:         cfg.Capability.TenantNamespace,
 		ExportIncludeSideStores: cfg.Export.IncludeSideStores,
@@ -363,6 +369,30 @@ func serve(cfg config.Config) error {
 	}
 	backend := server.NewBackend(backendCfg, sup)
 	sup.Register(backend, supervisor.RestartOnExit)
+
+	// SIGHUP is the no-restart capability reload (11 §5.1): `reckon adapter
+	// setup`/`reload` signals the running supervisor after editing the tenant
+	// config, and the read layer rebuilds in place — Postgres/Temporal/Keycloak
+	// have no reason to bounce because a YAML file changed. Reads only: the
+	// write-dispatch resolver lives in the durable Temporal worker (buildAction
+	// Activities) and still needs a restart to pick up a new write adapter.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if err := backend.ReloadCapability(); err != nil {
+					log.Printf("%s: capability reload failed (running surface unchanged): %v", branding.CLI, err)
+				} else {
+					log.Printf("%s: capability layer reloaded from %s", branding.CLI, cfg.Capability.ConfigPath)
+				}
+			}
+		}
+	}()
 
 	log.Printf("%s: pid %d; /status on http://localhost:%d/status; %s stop to shut down",
 		branding.CLI, os.Getpid(), cfg.Backend.HTTPPort, branding.CLI)

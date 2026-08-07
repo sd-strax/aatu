@@ -113,6 +113,16 @@ type BackendConfig struct {
 	CapabilityConfigPath  string
 	CapabilityFixtureRoot string
 
+	// CapabilityRebuild re-reads the tenant capability config from disk and
+	// builds a fresh resolver + catalog through the FULL plugin path (the
+	// adapter host, out-of-process adapters, catalog reconciliation) — the
+	// no-restart reload (11 §5.1). It is injected by runtime because only
+	// runtime holds the adapter host; the server calls it without importing the
+	// plugin layer. Nil falls back to the fixture-only in-package rebuild, which
+	// is why enabling a plugin adapter without this closure still needs a
+	// restart.
+	CapabilityRebuild func() (*capability.Resolver, *capability.Catalog, error)
+
 	// Gate2 and ActionCatalog, when both non-nil, enable the POST /api/actions
 	// (request_action) route (the write-side authorization path, Phase C). Nil
 	// leaves it a 503. The Temporal dispatch client is opened at Start
@@ -786,6 +796,25 @@ func (b *Backend) setCapabilitySurface(r *capability.Resolver, c *capability.Cat
 type capabilitySurface struct {
 	resolver *capability.Resolver
 	catalog  *capability.Catalog
+}
+
+// ReloadCapability rebuilds the capability surface from the tenant config on
+// disk (through the full plugin path) and hot-swaps it — the no-restart reload
+// (11 §5.1), triggered by SIGHUP or the enablement endpoint. In-flight requests
+// keep the surface they already read (a resolver is immutable once built). A
+// rebuild failure leaves the running surface untouched and returns the error,
+// so a broken config edit degrades to "the change didn't take" rather than
+// taking the layer down. Returns nil (no-op) when no rebuild closure is wired.
+func (b *Backend) ReloadCapability() error {
+	if b.cfg.CapabilityRebuild == nil {
+		return nil
+	}
+	resolver, catalog, err := b.cfg.CapabilityRebuild()
+	if err != nil {
+		return fmt.Errorf("capability reload: %w", err)
+	}
+	b.setCapabilitySurface(resolver, catalog)
+	return nil
 }
 
 // --- dependency probes -------------------------------------------------------

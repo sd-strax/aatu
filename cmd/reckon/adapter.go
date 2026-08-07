@@ -31,8 +31,10 @@ func runAdapter(args []string) error {
 		return runAdapterTest(args[1:])
 	case "mcp-probe":
 		return runMcpProbe(args[1:])
+	case "reload":
+		return runAdapterReload()
 	default:
-		return fmt.Errorf("unknown adapter subcommand %q (want: install, setup, test, mcp-probe)", args[0])
+		return fmt.Errorf("unknown adapter subcommand %q (want: install, setup, test, mcp-probe, reload)", args[0])
 	}
 }
 
