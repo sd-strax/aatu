@@ -923,3 +923,57 @@ func TestClipRunes(t *testing.T) {
 		t.Errorf("clip mangled short string: %q", got)
 	}
 }
+
+// TestSession_ReconcileActionClaims: the deterministic ground-truth backstop.
+// When the model's final text cites action_ids, the engine appends the REAL
+// status of each — correcting a misreported status (a FAILED action the model
+// calls REQUESTED) and flagging a fabricated id that isn't on record. This is
+// what the prompt honesty rules could not guarantee.
+func TestSession_ReconcileActionClaims(t *testing.T) {
+	const realID = "dd4352b1-4924-4e6d-a448-94005141264a"  // exists, FAILED
+	const fakeID = "7c3e0f9b-4d2a-4e1c-9a6f-2b8d1e5a0c34"  // fabricated
+	f := newFakeBackend(t)
+	f.actions = []ActionStatus{{ActionID: realID, ActionType: "ticket.create", Tier: "T2", Status: "FAILED"}}
+
+	llm := &scriptedLLM{script: []CompleteResponse{{
+		StopReason: StopEndTurn,
+		Content: []ContentBlock{TextBlock(
+			"Two now sit live and approvable: " + realID + " REQUESTED, and " + fakeID + " the one I just created REQUESTED."),
+		},
+	}}}
+	s, err := NewSession(context.Background(), Config{Backend: f.client(), LLM: llm, InvestigationID: "inv-1"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	res, err := s.Turn(context.Background(), "create another and confirm")
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if !strings.Contains(res.Text, "engine record") {
+		t.Fatalf("no ground-truth footer appended: %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "dd4352b1=FAILED") {
+		t.Errorf("real id not corrected to its true status FAILED: %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "7c3e0f9b=NOT ON RECORD") {
+		t.Errorf("fabricated id not flagged as absent: %q", res.Text)
+	}
+}
+
+// TestSession_ReconcileNoop: a turn that cites no action_ids gets no footer —
+// the backstop only speaks when the model makes id claims.
+func TestSession_ReconcileNoop(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &scriptedLLM{script: []CompleteResponse{{
+		StopReason: StopEndTurn,
+		Content:    []ContentBlock{TextBlock("Here is what I observed in the logons.")},
+	}}}
+	s, _ := NewSession(context.Background(), Config{Backend: f.client(), LLM: llm, InvestigationID: "inv-1"})
+	res, err := s.Turn(context.Background(), "what did you see")
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if strings.Contains(res.Text, "engine record") {
+		t.Errorf("footer appended with no action_ids cited: %q", res.Text)
+	}
+}

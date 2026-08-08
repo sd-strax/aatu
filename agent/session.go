@@ -354,6 +354,23 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 		s.messages = append(s.messages, Message{Role: RoleUser, Content: results})
 	}
 
+	// Deterministic ground-truth backstop (the prompt honesty rules have proven
+	// insufficient): state the real status of every action_id the model cited so
+	// a fabricated id or misreported status is corrected IN PLACE — visible to
+	// the analyst, committed to the transcript, and folded into the assistant
+	// message so the correction is in the model's own history next turn.
+	if gt := s.reconcileActionClaims(ctx, finalText.String()); gt != "" {
+		fmt.Fprintf(&transcript, "[assistant] %s\n", sanitizeTranscript(gt))
+		finalText.WriteString("\n\n")
+		finalText.WriteString(gt)
+		if s.hooks.OnText != nil {
+			s.hooks.OnText("\n\n" + gt)
+		}
+		if n := len(s.messages); n > 0 && s.messages[n-1].Role == RoleAssistant {
+			s.messages[n-1].Content = append(s.messages[n-1].Content, TextBlock(gt))
+		}
+	}
+
 	res := &TurnResult{
 		Text:           finalText.String(),
 		PendingActions: s.refreshPending(ctx),
