@@ -33,7 +33,7 @@ config_schema:
       description: ServiceNow instance base URL, e.g. https://dev12345.service-now.com
     username:
       type: string
-      description: ServiceNow user for Basic auth (needs write on the incident table)
+      description: ServiceNow user for Basic auth (needs write on the incident table, e.g. the itil role). Use a dedicated integration user (Identity type Machine, no MFA) — an MFA-enabled user (the PDI admin default) cannot Basic-auth to the REST API
     password:
       type: string
       x-secret: true # the host resolves the reference to plaintext before configure (11 §4.3)

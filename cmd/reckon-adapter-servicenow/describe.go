@@ -113,7 +113,7 @@ func describe() adapterplugin.DescribeResult {
 				},
 				"username": map[string]any{
 					"type":        "string",
-					"description": "ServiceNow user for Basic auth (needs write on the incident table)",
+					"description": "ServiceNow user for Basic auth (needs write on the incident table, e.g. the itil role). Use a dedicated integration user (Identity type Machine, no MFA) — an MFA-enabled user (the PDI admin default) cannot Basic-auth to the REST API",
 				},
 				"password": map[string]any{
 					"type":        "string",
