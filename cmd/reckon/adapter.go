@@ -239,6 +239,18 @@ func validateDescribe(desc *adapterplugin.DescribeResult, rep *confReport) {
 			rep.fail(fmt.Sprintf("describe: write binding references undescribed operation %q", b.Operation))
 		}
 	}
+	// A default write binding must speak the ENGINE catalog's canonical input
+	// vocabulary (what the agent emits), not the tool's own field names — else it
+	// is silently never-applicable and the action falls through to another tool.
+	// Validate against the engine catalog (grouping the flat default bindings by
+	// action type) so an authoring mismatch fails here, not at dispatch.
+	byType := map[string][]action.ActionBinding{}
+	for _, b := range desc.DefaultWriteBindings {
+		byType[b.ActionType] = append(byType[b.ActionType], b)
+	}
+	for _, p := range action.ValidateBindingParams(byType, action.DefaultActionCatalog()) {
+		rep.fail("describe: " + p)
+	}
 	rep.pass(fmt.Sprintf("describe well-formed: %d verb(s), %d action type(s), %d operation(s)",
 		len(desc.Verbs), len(desc.ActionTypes), len(desc.Operations)))
 }

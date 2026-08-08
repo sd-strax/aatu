@@ -2,6 +2,7 @@ package action
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -101,5 +102,13 @@ func BuildActionResolverWithAdapters(cfg TenantActionConfig, fixtureRoot string,
 		}
 		bindings[at] = scoped
 	}
-	return NewActionResolver(bindings, adapters), DefaultActionCatalog(), nil
+	catalog := DefaultActionCatalog()
+	// A binding that references an undeclared input is silently never-applicable
+	// (it falls through to a lower-priority binding at dispatch); surface it
+	// loudly here rather than letting the wrong tool act. Non-fatal: the binding
+	// simply never fires, so the engine stays up (honest degradation).
+	for _, p := range ValidateBindingParams(bindings, catalog) {
+		log.Printf("action: binding warning: %s", p)
+	}
+	return NewActionResolver(bindings, adapters), catalog, nil
 }
