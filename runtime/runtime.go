@@ -279,7 +279,7 @@ func serve(cfg config.Config) error {
 	// result path opens threads for SUCCEEDED notify.* dispatches, and the
 	// backend serves/acts on them.
 	commsStore := comms.NewStore(handler.DB())
-	activities, err := buildActionActivities(cfg, handler, commsStore, adapterHost)
+	activities, dispatchResolver, err := buildActionActivities(cfg, handler, commsStore, adapterHost)
 	if err != nil {
 		return err
 	}
@@ -370,12 +370,14 @@ func serve(cfg config.Config) error {
 	backend := server.NewBackend(backendCfg, sup)
 	sup.Register(backend, supervisor.RestartOnExit)
 
-	// SIGHUP is the no-restart capability reload (11 §5.1): `reckon adapter
-	// setup`/`reload` signals the running supervisor after editing the tenant
-	// config, and the read layer rebuilds in place — Postgres/Temporal/Keycloak
-	// have no reason to bounce because a YAML file changed. Reads only: the
-	// write-dispatch resolver lives in the durable Temporal worker (buildAction
-	// Activities) and still needs a restart to pick up a new write adapter.
+	// SIGHUP is the no-restart reload (11 §5.1): `reckon adapter setup`/`reload`
+	// signals the running supervisor after editing the tenant config, and both
+	// the read layer AND the write-dispatch resolver rebuild in place —
+	// Postgres/Temporal/Keycloak never bounce because a YAML file changed. The
+	// write swap covers even enabling the first write adapter, because the
+	// worker always registers the action activities when the action layer is
+	// configured (buildActionActivities); the one case still needing a restart
+	// is turning the action layer on from a config that had no path at all.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -385,10 +387,23 @@ func serve(cfg config.Config) error {
 			case <-ctx.Done():
 				return
 			case <-hup:
+				// Reads: rebuild + swap the capability surface.
 				if err := backend.ReloadCapability(); err != nil {
 					log.Printf("%s: capability reload failed (running surface unchanged): %v", branding.CLI, err)
 				} else {
 					log.Printf("%s: capability layer reloaded from %s", branding.CLI, cfg.Capability.ConfigPath)
+				}
+				// Writes: rebuild the action resolver once, swap it into both the
+				// worker's dispatch path and the backend's /action-types readout.
+				if dispatchResolver != nil {
+					newAR, aerr := buildActionResolverFromFile(cfg, adapterHost)
+					if aerr != nil {
+						log.Printf("%s: action reload failed (running dispatch unchanged): %v", branding.CLI, aerr)
+					} else {
+						dispatchResolver.Store(newAR)
+						backend.SetActionResolver(newAR)
+						log.Printf("%s: action-dispatch layer reloaded", branding.CLI)
+					}
 				}
 			}
 		}
@@ -456,17 +471,32 @@ func buildBackendActionResolver(cfg config.Config, host *adapterplugin.Host) (*a
 // handler + write-side action resolver) from the tenant config, or nil when no
 // write bindings are configured. Reuses the capability config path — the
 // action_adapters/action_bindings keys can share the same file (08 §4).
-func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsStore *comms.Store, host *adapterplugin.Host) (*temporal.Activities, error) {
-	path := cfg.Capability.ConfigPath
-	if path == "" {
-		return nil, nil
+func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsStore *comms.Store, host *adapterplugin.Host) (*temporal.Activities, *action.AtomicResolver, error) {
+	if cfg.Capability.ConfigPath == "" {
+		return nil, nil, nil // action layer off entirely
 	}
-	ac, err := action.LoadActionConfig(path)
+	// Build the resolver even with zero write bindings, and register the
+	// activities regardless: the worker cannot register after start, so
+	// always-registering is what lets a later reload (11 §5.1) enable the FIRST
+	// write adapter without a restart. A zero-binding resolver is harmless —
+	// Resolve yields ErrNoBinding, and nothing triggers dispatch without a
+	// binding anyway.
+	resolver, err := buildActionResolverFromFile(cfg, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	holder := action.NewAtomicResolver(resolver)
+	return temporal.NewActivities(handler, holder, commsStore), holder, nil
+}
+
+// buildActionResolverFromFile builds the write-side action resolver from the
+// tenant config on disk (the raw resolver, shared by the worker's dispatch
+// holder and the backend's /action-types readout). Returns a valid resolver
+// even when there are no write bindings.
+func buildActionResolverFromFile(cfg config.Config, host *adapterplugin.Host) (*action.ActionResolver, error) {
+	ac, err := action.LoadActionConfig(cfg.Capability.ConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("load action config: %w", err)
-	}
-	if len(ac.Bindings) == 0 {
-		return nil, nil // no write bindings — workflows-only worker
 	}
 	plugins, err := pluginWriteAdapters(host, ac)
 	if err != nil {
@@ -476,7 +506,7 @@ func buildActionActivities(cfg config.Config, handler *aggregate.Handler, commsS
 	if err != nil {
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
-	return temporal.NewActivities(handler, resolver, commsStore), nil
+	return resolver, nil
 }
 
 // buildArchiveActivities constructs the post-conclusion export activities: the

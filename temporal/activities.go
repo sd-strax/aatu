@@ -27,18 +27,23 @@ const fatalErrorType = "FATAL_ERROR"
 // resolver (to dispatch). Activities run outside the workflow's determinism
 // constraint, so they may touch the DB, the clock, and the network.
 type Activities struct {
-	handler  *aggregate.Handler
-	resolver *action.ActionResolver
+	handler *aggregate.Handler
+	// resolver is a swappable holder, not a bare pointer, so a no-restart reload
+	// (11 §5.1) can replace the dispatch resolver under a running worker — the
+	// worker registers this struct wholesale and cannot re-register, so the
+	// swap has to happen behind a stable field.
+	resolver *action.AtomicResolver
 	comms    *comms.Store
 }
 
-// NewActivities constructs the activity set. comms (Phase F) may be nil —
-// with it, a SUCCEEDED notify.* result opens (or, via thread_ref, extends) its
-// comms thread; without it, results record exactly as before. It is a
-// constructor parameter rather than a builder method because the worker
+// NewActivities constructs the activity set. resolver is an AtomicResolver so
+// the dispatch path can be hot-swapped on reload (11 §5.1). comms (Phase F) may
+// be nil — with it, a SUCCEEDED notify.* result opens (or, via thread_ref,
+// extends) its comms thread; without it, results record exactly as before. It
+// is a constructor parameter rather than a builder method because the worker
 // registers this struct wholesale (RegisterActivity), and Temporal panics on
 // any exported method that isn't a valid activity signature.
-func NewActivities(handler *aggregate.Handler, resolver *action.ActionResolver, comms *comms.Store) *Activities {
+func NewActivities(handler *aggregate.Handler, resolver *action.AtomicResolver, comms *comms.Store) *Activities {
 	return &Activities{handler: handler, resolver: resolver, comms: comms}
 }
 
@@ -126,7 +131,16 @@ func (a *Activities) DoDispatch(ctx context.Context, in DispatchInput) (Dispatch
 	if err != nil {
 		return DispatchOutput{}, sdktemporal.NewApplicationError(err.Error(), fatalErrorType)
 	}
-	res, binding, err := a.resolver.Resolve(ctx, action.DispatchRequest{
+	var resolver *action.ActionResolver
+	if a.resolver != nil {
+		resolver = a.resolver.Load()
+	}
+	if resolver == nil {
+		// No write resolver wired (bare worker, or the action layer is off).
+		// Honest: nothing to dispatch to.
+		return DispatchOutput{}, sdktemporal.NewApplicationError("no write resolver configured", fatalErrorType)
+	}
+	res, binding, err := resolver.Resolve(ctx, action.DispatchRequest{
 		ActionID:    id,
 		ActionType:  in.ActionType,
 		Targets:     in.Targets,

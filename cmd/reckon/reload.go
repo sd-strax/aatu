@@ -65,6 +65,6 @@ func runAdapterReload() error {
 		fmt.Printf("%s is not running — the config change will apply on next `%s start`.\n", branding.CLI, branding.CLI)
 		return nil
 	}
-	fmt.Printf("✓ signalled the running %s to reload the capability layer (reads apply immediately; a new WRITE adapter still needs a restart).\n", branding.CLI)
+	fmt.Printf("✓ signalled the running %s to reload — reads and writes apply immediately (unless the action layer was entirely off at boot).\n", branding.CLI)
 	return nil
 }

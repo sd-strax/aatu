@@ -140,12 +140,13 @@ func (b *Backend) listActionTypes(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, "GET")
 		return
 	}
-	if b.cfg.ActionCatalog == nil || b.cfg.ActionResolver == nil {
+	resolver := b.actionResolver()
+	if b.cfg.ActionCatalog == nil || resolver == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "action layer not configured")
 		return
 	}
 	b.requireRolesOrDeny(w, r, []string{authz.RoleViewer, authz.RoleAnalyst, authz.RoleAuditor}, func(w http.ResponseWriter, _ *http.Request) {
-		summaries := b.cfg.ActionResolver.ListActionTypes(b.cfg.ActionCatalog)
+		summaries := resolver.ListActionTypes(b.cfg.ActionCatalog)
 		writeJSON(w, http.StatusOK, map[string]any{"action_types": summaries})
 	})
 }

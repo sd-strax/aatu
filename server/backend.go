@@ -199,6 +199,10 @@ type Backend struct {
 	// Catalog — the enablement endpoint's hot swap after a config rewrite.
 	capOverride *capabilitySurface
 
+	// actionOverride, when set (under mu), supersedes cfg.ActionResolver for the
+	// /action-types readout — the write-side reload swap (11 §5.1).
+	actionOverride *action.ActionResolver
+
 	// identityOnce/identityRes memoize the tenant identity resolver used to
 	// mint STIX ids for entity seeds (createInvestigation). Built lazily from
 	// cfg.TenantNamespace; nil when the namespace is unset/invalid, which
@@ -796,6 +800,28 @@ func (b *Backend) setCapabilitySurface(r *capability.Resolver, c *capability.Cat
 type capabilitySurface struct {
 	resolver *capability.Resolver
 	catalog  *capability.Catalog
+}
+
+// actionResolver returns the live write-side resolver for the /action-types
+// availability readout: the hot-swapped one when a reload installed it, else
+// the boot-time one. (The dispatch path itself lives in the Temporal worker,
+// swapped in lockstep — this override only governs the availability display.)
+func (b *Backend) actionResolver() *action.ActionResolver {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.actionOverride != nil {
+		return b.actionOverride
+	}
+	return b.cfg.ActionResolver
+}
+
+// SetActionResolver installs a rebuilt action resolver (reload write-side swap
+// for the availability readout). Exported because runtime rebuilds it (it holds
+// the adapter host) and calls this in the SIGHUP handler.
+func (b *Backend) SetActionResolver(r *action.ActionResolver) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.actionOverride = r
 }
 
 // ReloadCapability rebuilds the capability surface from the tenant config on

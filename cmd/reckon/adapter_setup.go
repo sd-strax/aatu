@@ -160,7 +160,7 @@ func runAdapterSetup(args []string) error {
 	if reloaded, rerr := signalReload(); rerr != nil {
 		fmt.Printf("  (reload signal failed: %v — restart the backend to serve it)\n", rerr)
 	} else if reloaded {
-		fmt.Printf("✓ reloaded the running %s — reads are live now (a new WRITE adapter still needs a restart).\n", branding.CLI)
+		fmt.Printf("✓ reloaded the running %s — reads and writes are live now.\n", branding.CLI)
 	} else {
 		fmt.Printf("  restart the backend (or `%s start`) to serve it.\n", branding.CLI)
 	}

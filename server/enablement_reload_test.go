@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/capability"
 	"github.com/sd-strax/reckon/identity"
 )
@@ -74,5 +75,22 @@ func TestReloadCapabilityNoClosure(t *testing.T) {
 	b := &Backend{cfg: BackendConfig{}}
 	if err := b.ReloadCapability(); err != nil {
 		t.Errorf("no-closure reload should be a nil no-op, got %v", err)
+	}
+}
+
+// TestSetActionResolverSwaps: the write-side availability readout follows the
+// hot-swapped resolver (11 §5.1), else the boot-time one.
+func TestSetActionResolverSwaps(t *testing.T) {
+	boot := action.NewActionResolver(nil, nil)
+	b := &Backend{cfg: BackendConfig{ActionResolver: boot}}
+	if b.actionResolver() != boot {
+		t.Fatal("pre-swap action resolver is not the boot one")
+	}
+	next := action.NewActionResolver(map[string][]action.ActionBinding{
+		"host.isolate": {{ActionType: "host.isolate", Adapter: "a", Operation: "op", Priority: 1}},
+	}, nil)
+	b.SetActionResolver(next)
+	if b.actionResolver() != next {
+		t.Error("SetActionResolver did not swap the availability resolver")
 	}
 }
