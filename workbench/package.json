@@ -59,6 +59,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "reckon.resetAgentContext",
+        "category": "reckon",
+        "title": "Reset Agent Context (rebuild from investigation record)"
+      },
+      {
         "command": "reckon.newInvestigation",
         "category": "reckon",
         "title": "New Investigation",
@@ -116,6 +121,11 @@
           "command": "reckon.renameInvestigation",
           "when": "view == reckon.investigations && viewItem == reckon.investigation && reckon.signedIn",
           "group": "inline@1"
+        },
+        {
+          "command": "reckon.resetAgentContext",
+          "when": "view == reckon.investigations && viewItem == reckon.investigation && reckon.signedIn",
+          "group": "context@1"
         }
       ],
       "commandPalette": [
@@ -125,6 +135,10 @@
         },
         {
           "command": "reckon.renameInvestigation",
+          "when": "false"
+        },
+        {
+          "command": "reckon.resetAgentContext",
           "when": "false"
         },
         {

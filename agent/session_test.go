@@ -981,3 +981,139 @@ func TestSession_ReconcileNoop(t *testing.T) {
 		t.Errorf("footer appended with no action_ids cited: %q", res.Text)
 	}
 }
+
+// TestSession_NoActionAttestation: a turn whose prose claims a creation but
+// made zero request_action calls gets the deterministic engine attestation —
+// the exact confabulation observed live (a "created and verified" narration on
+// a turn with no tool calls at all).
+func TestSession_NoActionAttestation(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &scriptedLLM{script: []CompleteResponse{{
+		StopReason: StopEndTurn,
+		Content:    []ContentBlock{TextBlock("Created — the ticket is queued and awaiting your approval.")},
+	}}}
+	s, _ := NewSession(context.Background(), Config{Backend: f.client(), LLM: llm, InvestigationID: "inv-1"})
+	res, err := s.Turn(context.Background(), "create a ticket")
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if !strings.Contains(res.Text, "NO action was requested this turn") {
+		t.Errorf("missing no-action attestation: %q", res.Text)
+	}
+
+	// And a turn that REALLY requested an action gets no attestation.
+	llm2 := &scriptedLLM{script: []CompleteResponse{
+		{StopReason: StopToolUse, Content: []ContentBlock{
+			toolUse("t1", ToolRequestAction, `{"action_type":"host.isolate","targets":[{"entity_ref":"x-host--1","resolved_identifier":"H1"}],"rationale":"contain"}`),
+		}},
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("Requested isolation — the action is queued for your approval.")}},
+	}}
+	s2, _ := NewSession(context.Background(), Config{Backend: f.client(), LLM: llm2, InvestigationID: "inv-1"})
+	res2, err := s2.Turn(context.Background(), "isolate H1")
+	if err != nil {
+		t.Fatalf("Turn2: %v", err)
+	}
+	if strings.Contains(res2.Text, "NO action was requested") {
+		t.Errorf("attestation fired on a turn that really requested an action: %q", res2.Text)
+	}
+}
+
+// TestSession_ResetContextAndAnchor: ResetContext drops the working messages,
+// records the durable thread marker, and forces the engine-state anchor onto
+// the next turn's user message — the model's first post-reset context is
+// authoritative record, not remembered prose.
+func TestSession_ResetContextAndAnchor(t *testing.T) {
+	f := newFakeBackend(t)
+	f.actions = []ActionStatus{
+		{ActionID: "dd4352b1-4924-4e6d-a448-94005141264a", ActionType: "ticket.create", Tier: "T2", Status: "FAILED"},
+	}
+	llm := &scriptedLLM{script: []CompleteResponse{{
+		StopReason: StopEndTurn,
+		Content:    []ContentBlock{TextBlock("Proceeding from the record.")},
+	}}}
+	s, err := NewSession(context.Background(), Config{Backend: f.client(), LLM: llm, InvestigationID: "inv-1"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	// Poisoned working memory: the model's own past fabrications.
+	s.messages = []Message{
+		{Role: RoleUser, Content: []ContentBlock{TextBlock("create a ticket")}},
+		{Role: RoleAssistant, Content: []ContentBlock{TextBlock("Created ticket 7c3e0f9b — queued and awaiting approval.")}},
+	}
+
+	if err := s.ResetContext(context.Background()); err != nil {
+		t.Fatalf("ResetContext: %v", err)
+	}
+	if len(s.messages) != 0 {
+		t.Fatalf("messages not cleared: %d remain", len(s.messages))
+	}
+	// The reset marker was committed to the thread (durability across respawn).
+	marked := false
+	for _, c := range f.callsTo("/api/interpretations") {
+		if strings.Contains(string(c.Body), "context reset:") {
+			marked = true
+		}
+	}
+	if !marked {
+		t.Error("no context-reset marker recorded on the thread")
+	}
+
+	// Next turn opens with the engine-state anchor ahead of the user text.
+	if _, err := s.Turn(context.Background(), "where were we?"); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	req := llm.requests[len(llm.requests)-1]
+	first := req.Messages[0]
+	if first.Role != RoleUser || len(first.Content) < 2 {
+		t.Fatalf("first message should carry anchor + user text: %+v", first)
+	}
+	if !strings.Contains(first.Content[0].Text, "engine state") || !strings.Contains(first.Content[0].Text, "dd4352b1 ticket.create=FAILED") {
+		t.Errorf("anchor missing or wrong: %q", first.Content[0].Text)
+	}
+}
+
+// TestSession_RehydrateHonorsResetMarker: transcripts recorded BEFORE the
+// newest context-reset marker are not replayed into a fresh session — the
+// reset survives a sidecar respawn.
+func TestSession_RehydrateHonorsResetMarker(t *testing.T) {
+	f := newFakeBackend(t)
+	f.override = func(w http.ResponseWriter, r *http.Request) bool {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/thread"):
+			_, _ = w.Write([]byte(`{"thread":[
+				{"sequence_no":1,"interpretation_id":"i1","has_transcript":true,"summary":"poisoned turn"},
+				{"sequence_no":2,"interpretation_id":"i2","has_transcript":false,"summary":"context reset: the analyst rebuilt the agent's working conversation from the engine record; earlier narration is not replayed"},
+				{"sequence_no":3,"interpretation_id":"i3","has_transcript":true,"summary":"clean turn"}]}`))
+			return true
+		case strings.Contains(r.URL.Path, "/transcript"):
+			id := "i1"
+			if strings.Contains(r.URL.Path, "i3") {
+				id = "i3"
+			}
+			body := "[user] old poisoned question\n[assistant] Created fake ticket 7c3e0f9b.\n"
+			if id == "i3" {
+				body = "[user] fresh question\n[assistant] Grounded answer.\n"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"body": body})
+			return true
+		}
+		return false
+	}
+	llm := &scriptedLLM{}
+	s, err := NewSession(context.Background(), Config{Backend: f.client(), LLM: llm, InvestigationID: "inv-1"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	joined := ""
+	for _, m := range s.messages {
+		for _, c := range m.Content {
+			joined += c.Text + "\n"
+		}
+	}
+	if strings.Contains(joined, "fake ticket") {
+		t.Errorf("pre-reset narration replayed despite the marker: %q", joined)
+	}
+	if !strings.Contains(joined, "Grounded answer") {
+		t.Errorf("post-reset turn should replay: %q", joined)
+	}
+}

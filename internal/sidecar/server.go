@@ -63,6 +63,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, opts Options) error {
 		"initialize":    s.handleInitialize,
 		"createSession": s.handleCreateSession,
 		"turn":          s.handleTurn,
+		"resetSession":  s.handleResetSession,
 		"cancel":        s.handleCancel,
 		"shutdown":      func(context.Context, json.RawMessage) (any, error) { return struct{}{}, nil },
 	})
@@ -476,6 +477,35 @@ type cancelParams struct {
 
 // handleCancel aborts the session's in-flight turn, if any. Idempotent — a
 // cancel that races the turn's natural end is a no-op.
+// resetSessionParams identifies the session whose model context to reset.
+type resetSessionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// handleResetSession is the analyst's context reset (agent.Session.
+// ResetContext): drop the model's working conversation — the vector for
+// narrative poisoning — and re-ground on the engine record. The durable
+// investigation state is untouched. Serialized with turns via turnMu so a
+// reset never yanks the history out from under an in-flight completion.
+func (s *service) handleResetSession(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p resetSessionParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, errInvalidParams("resetSession: %v", err)
+	}
+	st, err := s.session(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !st.turnMu.TryLock() {
+		return nil, fmt.Errorf("a turn is in flight — wait for it to finish (or cancel) before resetting")
+	}
+	defer st.turnMu.Unlock()
+	if err := st.sess.ResetContext(ctx); err != nil {
+		return nil, err
+	}
+	return struct{}{}, nil
+}
+
 func (s *service) handleCancel(_ context.Context, raw json.RawMessage) (any, error) {
 	var p cancelParams
 	if err := json.Unmarshal(raw, &p); err != nil {

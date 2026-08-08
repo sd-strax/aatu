@@ -164,6 +164,21 @@ export class SidecarTransport implements AgentTransport {
     await this.connection.sendRequest("cancel", { session_id: sessionId });
   }
 
+  /**
+   * Reset the agent's working context for one investigation: the sidecar drops
+   * the model's conversation (its own past narration included — the vector for
+   * narrative poisoning) and re-grounds on the engine record. The durable
+   * investigation state is untouched. The session is created first if none is
+   * live — the reset also writes the durable thread marker that stops FUTURE
+   * rehydration replaying the discarded narration, so it must run even when
+   * no in-process session exists yet.
+   */
+  async resetSession(investigationId: string): Promise<void> {
+    const conn = await this.ensureConnection();
+    const sessionId = await this.ensureSession(conn, investigationId);
+    await conn.sendRequest("resetSession", { session_id: sessionId });
+  }
+
   dispose(): void {
     this.disposed = true;
     this.teardown("dispose");

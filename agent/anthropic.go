@@ -13,9 +13,12 @@ import (
 	"time"
 )
 
-// DefaultAnthropicModel is the v0 default for the interactive loop. Overridable
-// per session — the loop treats model choice as configuration, not code.
-const DefaultAnthropicModel = "claude-sonnet-4-6"
+// DefaultAnthropicModel matches the workbench default (reckon.model): the
+// agent's honesty-under-tooling discipline is materially better on the Opus
+// tier, and an IR agent's claims must be trustworthy. Overridable per surface
+// (RECKON_MODEL env for the CLI; reckon.model for the workbench) — the loop
+// treats model choice as configuration, not code.
+const DefaultAnthropicModel = "claude-opus-4-8"
 
 const (
 	anthropicBaseURL = "https://api.anthropic.com"

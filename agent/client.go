@@ -421,6 +421,9 @@ type ThreadEntry struct {
 	SequenceNo       int64  `json:"sequence_no"`
 	InterpretationID string `json:"interpretation_id"`
 	HasTranscript    bool   `json:"has_transcript"`
+	// Summary is the act's rationale — rehydrate reads it to honor a durable
+	// context-reset marker (entries before the newest marker are not replayed).
+	Summary string `json:"summary"`
 }
 
 // Thread returns the investigation's committed reasoning thread in sequence

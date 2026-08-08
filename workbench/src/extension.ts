@@ -104,6 +104,39 @@ export function activate(context: vscode.ExtensionContext): void {
         documents.beginRename(row.invId, row.invTitle);
       }
     }),
+    // Context reset (agent honesty): rebuild the agent's working conversation
+    // from the engine record, discarding its own accumulated narration — the
+    // recovery from narrative poisoning. Investigation state is untouched; the
+    // reset is recorded on the thread and survives sidecar respawns.
+    vscode.commands.registerCommand("reckon.resetAgentContext", async (arg?: unknown) => {
+      if (!session.signedIn) {
+        void vscode.window.showWarningMessage("reckon: sign in first");
+        return;
+      }
+      if (!arg || typeof arg !== "object" || !("invId" in arg)) {
+        return;
+      }
+      const row = arg as { invId: string; invTitle?: string };
+      const ok = await vscode.window.showWarningMessage(
+        `reckon: reset the agent's conversation context for "${row.invTitle ?? row.invId}"? ` +
+        "The investigation record (evidence, hypotheses, actions, chronicle) is untouched — " +
+        "only the agent's working memory is rebuilt from it. Use this when the conversation " +
+        "has drifted from the recorded state.",
+        { modal: true },
+        "Reset context",
+      );
+      if (ok !== "Reset context") {
+        return;
+      }
+      try {
+        await transport.resetSession(row.invId);
+        void vscode.window.showInformationMessage(
+          "reckon: agent context reset — the next turn starts from the engine record.",
+        );
+      } catch (err) {
+        void vscode.window.showErrorMessage(`reckon: context reset failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }),
 
     vscode.commands.registerCommand("reckon.signIn", async () => {
       try {

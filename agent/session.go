@@ -70,6 +70,11 @@ type Session struct {
 	// consulted accumulates the turn's recall_sops retrievals (by sop_id,
 	// keeping the best score) — the knowledge provenance the commit carries.
 	consulted map[string]ConsultedSOP
+	// turnsSinceAnchor counts turns since the engine-state anchor last rode a
+	// user message; at anchorEveryTurns the next turn re-grounds the model on
+	// the authoritative action record (countering narrative drift in long
+	// conversations). ResetContext sets it to fire immediately.
+	turnsSinceAnchor int
 }
 
 // TurnResult is what one analyst turn produced.
@@ -121,13 +126,36 @@ func NewSession(ctx context.Context, cfg Config) (*Session, error) {
 		s.maxTokens = defaultMaxTokens
 	}
 
+	if err := s.refreshContext(ctx); err != nil {
+		return nil, err
+	}
+
+	// Rehydrate the conversation (05 §3.4; the workbench's cold-restore): a
+	// reconnecting session must be able to CONTINUE, not just re-read. The
+	// committed transcripts are the message history — replay each turn's
+	// analyst question and the model's own prose as a user/assistant pair, so
+	// the model resumes with genuine memory of the exchange. Tool detail is
+	// deliberately NOT replayed: collapsing to text keeps the reconstruction
+	// robust (no dangling tool_use the provider would reject) and the model
+	// re-queries tools for fresh data when it needs them. Best-effort — a
+	// rehydration failure leaves a fresh session (context still rides the
+	// system prompt), never blocks the session.
+	s.rehydrate(ctx)
+	return s, nil
+}
+
+// refreshContext (re)fetches the investigation, capabilities, hypotheses, and
+// action catalog and rebuilds the tool set + system prompt from them. Shared by
+// NewSession and ResetContext so a reset re-grounds on exactly what a fresh
+// session would see.
+func (s *Session) refreshContext(ctx context.Context) error {
 	inv, err := s.backend.GetInvestigation(ctx, s.investigationID)
 	if err != nil {
-		return nil, fmt.Errorf("agent: load investigation: %w", err)
+		return fmt.Errorf("agent: load investigation: %w", err)
 	}
 	caps, err := s.backend.ListCapabilities(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("agent: list capabilities: %w", err)
+		return fmt.Errorf("agent: list capabilities: %w", err)
 	}
 	// Hypotheses are optional context — a fresh investigation has none.
 	hyps, err := s.backend.ListHypotheses(ctx, s.investigationID)
@@ -144,19 +172,42 @@ func NewSession(ctx context.Context, cfg Config) (*Session, error) {
 
 	s.tools = buildTools(caps, actionTypes)
 	s.system = systemPrompt(inv, caps, hyps)
+	return nil
+}
 
-	// Rehydrate the conversation (05 §3.4; the workbench's cold-restore): a
-	// reconnecting session must be able to CONTINUE, not just re-read. The
-	// committed transcripts are the message history — replay each turn's
-	// analyst question and the model's own prose as a user/assistant pair, so
-	// the model resumes with genuine memory of the exchange. Tool detail is
-	// deliberately NOT replayed: collapsing to text keeps the reconstruction
-	// robust (no dangling tool_use the provider would reject) and the model
-	// re-queries tools for fresh data when it needs them. Best-effort — a
-	// rehydration failure leaves a fresh session (context still rides the
-	// system prompt), never blocks the session.
-	s.rehydrate(ctx)
-	return s, nil
+// contextResetRationale marks a context reset in the reasoning thread. It makes
+// the reset DURABLE: rehydrate refuses to replay transcripts from before the
+// newest marker, so a sidecar respawn cannot re-import the discarded narration.
+// Written by ResetContext, matched by rehydrate — keep them in lockstep.
+const contextResetRationale = "context reset: the analyst rebuilt the agent's working conversation from the engine record; earlier narration is not replayed"
+
+// ResetContext is the analyst's context reset: it discards the model's working
+// conversation — including its own past narration, the vector by which a
+// confabulated claim compounds turn over turn ("narrative poisoning") — and
+// re-grounds on the engine record alone. The durable investigation state
+// (events, actions, hypotheses, chronicle) is untouched: it IS the source of
+// truth this rebuilds from, so no investigative state is lost. The next turn
+// opens with the engine-state anchor so the model's first post-reset context is
+// authoritative fact, not remembered prose. The reset itself is committed to
+// the thread (attributed, auditable) and honored by future rehydration.
+func (s *Session) ResetContext(ctx context.Context) error {
+	if err := s.refreshContext(ctx); err != nil {
+		return err
+	}
+	s.messages = nil
+	s.turnsSinceAnchor = anchorEveryTurns // anchor immediately on the next turn
+
+	// Durability: without the marker, the next sidecar respawn would rehydrate
+	// the discarded narration straight back. The reset is itself a recorded,
+	// attributed act on the thread.
+	if _, err := s.backend.RecordInterpretation(ctx, InterpretationRequest{
+		InvestigationRef:   s.investigationID,
+		InterpretationType: "other",
+		Rationale:          contextResetRationale,
+	}); err != nil {
+		return fmt.Errorf("context reset applied to the live session, but recording it failed (a sidecar respawn would replay the old narration): %w", err)
+	}
+	return nil
 }
 
 // maxRehydratedTurns bounds how many prior turns seed the conversation on
@@ -166,15 +217,23 @@ const maxRehydratedTurns = 20
 
 // rehydrate seeds s.messages from the committed thread so a reconnected
 // session continues the conversation. Best-effort and side-effect-free on
-// failure.
+// failure. It honors the newest context-reset marker: transcripts from before
+// it are NOT replayed — an analyst's reset survives sidecar respawns instead of
+// silently re-importing the narration they discarded.
 func (s *Session) rehydrate(ctx context.Context) {
 	thread, err := s.backend.Thread(ctx, s.investigationID)
 	if err != nil {
 		return
 	}
+	var resetAfter int64 = -1
+	for _, e := range thread {
+		if strings.HasPrefix(e.Summary, "context reset:") && e.SequenceNo > resetAfter {
+			resetAfter = e.SequenceNo
+		}
+	}
 	var withTranscript []ThreadEntry
 	for _, e := range thread {
-		if e.HasTranscript {
+		if e.HasTranscript && e.SequenceNo > resetAfter {
 			withTranscript = append(withTranscript, e)
 		}
 	}
@@ -259,14 +318,29 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	var toolLog []ToolCall
 	var turnUsage Usage
 	var finalText strings.Builder
+
+	// Periodic ground-truth anchor: every anchorEveryTurns (and immediately
+	// after a ResetContext), the engine's authoritative action record rides the
+	// user message so the model re-grounds on fact rather than its own
+	// accumulated narration. Deterministic — states only what the engine holds.
+	userContent := []ContentBlock{TextBlock(userMsg)}
+	s.turnsSinceAnchor++
+	if s.turnsSinceAnchor >= anchorEveryTurns {
+		if anchor := s.engineStateAnchor(ctx); anchor != "" {
+			userContent = append([]ContentBlock{TextBlock(anchor)}, userContent...)
+			fmt.Fprintf(&transcript, "[engine] %s\n", sanitizeTranscript(anchor))
+			s.turnsSinceAnchor = 0
+		}
+	}
+
 	// A turn aborted by a model-call failure leaves the history ending in a
 	// user message (the tool results, or the aborted turn's own text). Merge
 	// rather than append a sibling — consecutive same-role messages violate the
 	// provider contract.
 	if n := len(s.messages); n > 0 && s.messages[n-1].Role == RoleUser {
-		s.messages[n-1].Content = append(s.messages[n-1].Content, TextBlock(userMsg))
+		s.messages[n-1].Content = append(s.messages[n-1].Content, userContent...)
 	} else {
-		s.messages = append(s.messages, Message{Role: RoleUser, Content: []ContentBlock{TextBlock(userMsg)}})
+		s.messages = append(s.messages, Message{Role: RoleUser, Content: userContent})
 	}
 
 	rounds := 0
@@ -355,11 +429,12 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	}
 
 	// Deterministic ground-truth backstop (the prompt honesty rules have proven
-	// insufficient): state the real status of every action_id the model cited so
-	// a fabricated id or misreported status is corrected IN PLACE — visible to
-	// the analyst, committed to the transcript, and folded into the assistant
-	// message so the correction is in the model's own history next turn.
-	if gt := s.reconcileActionClaims(ctx, finalText.String()); gt != "" {
+	// insufficient): state the real status of every action_id the model cited,
+	// and attest when a creation claim had no matching request_action — so a
+	// fabricated id or narrated-but-never-made call is corrected IN PLACE:
+	// visible to the analyst, committed to the transcript, and folded into the
+	// assistant message so the correction is in the model's own history.
+	if gt := s.turnFooter(ctx, finalText.String(), len(s.pendingActions)); gt != "" {
 		fmt.Fprintf(&transcript, "[assistant] %s\n", sanitizeTranscript(gt))
 		finalText.WriteString("\n\n")
 		finalText.WriteString(gt)
