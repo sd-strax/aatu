@@ -76,18 +76,20 @@ func runAdapterSetup(args []string) error {
 	if err != nil {
 		return fmt.Errorf("adapter %q is not installed under %s: %w", name, adapterDir, err)
 	}
-	rt := installed.Manifest.Runtime
-	if rt == nil {
-		fmt.Printf("%s has no runtime to provision (native adapter) — nothing to set up.\n", name)
-		return nil
-	}
 	// Provisioning fetches a toolchain + the package — no timeout. The kind
 	// selects the mechanism (11 §3): managed python/node keep the zero-prereq
 	// promise (reckon downloads the toolchain); container is the one-prereq
-	// opt-in (reckon pulls the image, the exec is `docker run -i`).
+	// opt-in (reckon pulls the image, the exec is `docker run -i`). A native
+	// adapter (no runtime block) has nothing to provision — but setup does NOT
+	// stop there: it still captures the x-secret config and enables the adapter
+	// below, so `adapter setup` is one command for native adapters too (e.g.
+	// servicenow's password, crowdstrike-response's client_secret).
+	rt := installed.Manifest.Runtime
 	ctx := context.Background()
-	switch rt.Kind {
-	case "python":
+	switch {
+	case rt == nil:
+		fmt.Printf("%s is a native adapter — no runtime to provision.\n", name)
+	case rt.Kind == "python":
 		uvBin, err := adapterruntime.EnsureUv(ctx, cfg.Data.Dir, os.Stdout)
 		if err != nil {
 			return err
@@ -96,7 +98,7 @@ func runAdapterSetup(args []string) error {
 			return err
 		}
 		fmt.Printf("✓ %s runtime ready (%s, python %s)\n", name, rt.Package, rt.Python)
-	case "node":
+	case rt.Kind == "node":
 		binDir, err := adapterruntime.EnsureNode(ctx, cfg.Data.Dir, os.Stdout)
 		if err != nil {
 			return err
@@ -105,7 +107,7 @@ func runAdapterSetup(args []string) error {
 			return err
 		}
 		fmt.Printf("✓ %s runtime ready (%s, managed node)\n", name, rt.Package)
-	case "container":
+	case rt.Kind == "container":
 		// EXPERIMENTAL (design/11 §3.2 "v0 scope"): pull + attached run only.
 		// The lifecycle contract (named containers, labels, reconciliation
 		// sweep, force-kill-by-name, runtime auto-detect) is specified in §3.2
@@ -364,8 +366,14 @@ func resolveAdapterConfig(name string, schema map[string]any, cfg config.Config,
 			}
 			continue
 		}
-		// x-secret: capture no-echo, store, and reference — never the value.
-		v, err := promptSecretValue(label)
+		// x-secret: capture no-echo, store, and reference — never the value. The
+		// prompt must ask for the ACTUAL secret. The schema description documents
+		// the YAML field (where a keychain://… reference belongs) and reads
+		// backwards at an interactive prompt — "give a secret reference" wrongly
+		// suggests typing a reference — so the prompt is phrased around the value
+		// reckon then stores and references on the operator's behalf.
+		secretPrompt := fmt.Sprintf("Enter the %s for %s — reckon stores it in your keychain and writes only a reference to the config", field, name)
+		v, err := promptSecretValue(secretPrompt)
 		if err != nil || v == "" {
 			missing = append(missing, field)
 			continue
