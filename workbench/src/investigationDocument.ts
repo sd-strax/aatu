@@ -220,6 +220,19 @@ export class InvestigationDocuments {
     }
   }
 
+  /**
+   * Re-load an investigation's panel from the backend if it is open — used
+   * after an out-of-panel act that changed the thread (e.g. a context reset
+   * from the tree), so the chronicle shows the committed marker immediately
+   * instead of on the next manual refresh.
+   */
+  refreshOpen(id: string): void {
+    const panel = this.open.get(id);
+    if (panel) {
+      void this.load(id, panel);
+    }
+  }
+
   /** Apply a confirmed rename, then update the tab + webview title in place. */
   private async applyRename(id: string, panel: vscode.WebviewPanel, title: string): Promise<void> {
     const trimmed = title.trim();
@@ -1419,6 +1432,11 @@ export class InvestigationDocuments {
     .actrow .armeta { color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
     .actrow .armeta.via { font-family: var(--mono, ui-monospace, monospace); color: var(--text-2); }
     .actrow .armeta.err { color: var(--bad, #e5534b); word-break: break-word; }
+    /* Context-reset boundary: a visible break in the chronicle — above it is
+       narration the agent no longer holds; below, it reasons from the record. */
+    .ctxreset { display: flex; align-items: center; gap: 10px; margin: 14px 0;
+      color: var(--text-2); font-size: var(--fs-xs); font-style: italic; white-space: nowrap; }
+    .ctxreset::before, .ctxreset::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
     .predictions { list-style: none; padding: 0; margin: 6px 0 0; }
     .predictions li {
       padding: 3px 0 3px 10px; border-left: 2px solid var(--border);
@@ -2765,6 +2783,19 @@ export class InvestigationDocuments {
       const entries = (lastThread || []).slice().sort((a, b) => a.sequenceNo - b.sequenceNo);
       for (const e of entries) {
         const body = restoredBodies.get(e.sequenceNo);
+        // A context reset is a BOUNDARY, not a line: everything above it is
+        // narration the agent no longer holds; below it the agent reasons from
+        // the engine record. The analyst must see the break to judge which
+        // statements predate the re-grounding. (Prefix contract shared with
+        // the agent's rehydrate marker — keep in lockstep.)
+        if (e.summary && e.summary.indexOf("context reset:") === 0) {
+          const hr = document.createElement("div");
+          hr.className = "ctxreset";
+          const when = e.occurredAt ? " · " + new Date(e.occurredAt).toLocaleTimeString() : "";
+          hr.textContent = "⟲ context reset — agent re-grounded from the investigation record" + when;
+          box.appendChild(hr);
+          continue;
+        }
         if (body) {
           box.appendChild(restoredTurn({ sequenceNo: e.sequenceNo, occurredAt: e.occurredAt, body: body.body }));
           appendSopChips(box, e);

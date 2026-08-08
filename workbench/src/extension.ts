@@ -130,6 +130,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       try {
         await transport.resetSession(row.invId);
+        // The reset is a committed act on the thread; refresh an open panel so
+        // the chronicle shows the boundary immediately.
+        documents.refreshOpen(row.invId);
         void vscode.window.showInformationMessage(
           "reckon: agent context reset — the next turn starts from the engine record.",
         );
