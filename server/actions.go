@@ -74,6 +74,17 @@ type ActionView struct {
 	TierEscalated bool `json:"tier_escalated,omitempty"`
 	// RetryOf: lineage to the action this one replaces (zero when not a retry).
 	RetryOf string `json:"retry_of,omitempty"`
+	// Adapter is the tool that dispatched the action (write-side provenance):
+	// which of several possible tools actually acted. Empty until dispatched.
+	Adapter string `json:"adapter,omitempty"`
+	// PlannedAdapter is the tool the resolver WOULD dispatch to if approved now —
+	// the pre-approval preview so the analyst sees which system of record an
+	// external action will hit before committing. Set only while pending
+	// (superseded by Adapter once dispatched).
+	PlannedAdapter string `json:"planned_adapter,omitempty"`
+	// ErrorDetail is the reason a FAILED action failed (08 §6c), so the ledger
+	// explains the outcome instead of a bare FAILED. Empty on success.
+	ErrorDetail string `json:"error_detail,omitempty"`
 }
 
 // listInvestigationActions serves GET /api/investigations/{id}/actions: every
@@ -110,6 +121,8 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 			EvidenceRefs:  a.EvidenceRefs,
 			Reversibility: a.Reversibility,
 			Parameters:    a.Parameters,
+			Adapter:       a.Adapter,
+			ErrorDetail:   a.ErrorDetail,
 		}
 		if a.RetryOf != (uuid.UUID{}) {
 			v.RetryOf = a.RetryOf.String()
@@ -123,6 +136,25 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 		if b.cfg.ActionCatalog != nil {
 			if d, ok := b.cfg.ActionCatalog.Descriptor(a.ActionType); ok && d.DefaultTier != a.Tier && a.Tier == aggregate.TierT3 {
 				v.TierEscalated = true
+			}
+		}
+		// Pre-approval preview: which adapter WOULD dispatch this if approved now
+		// (superseded by the actual Adapter once dispatched). SourceScope is v0
+		// unscoped; a scoped preview reads the Seed scope (03 §3.5) in v1.
+		if a.Adapter == "" {
+			if resolver := b.actionResolver(); resolver != nil {
+				var params map[string]any
+				if len(a.Parameters) > 0 {
+					_ = json.Unmarshal(a.Parameters, &params)
+				}
+				if binding, ok := resolver.PlannedBinding(action.DispatchRequest{
+					ActionID:   a.ActionID,
+					ActionType: a.ActionType,
+					Targets:    a.Targets,
+					Parameters: params,
+				}); ok {
+					v.PlannedAdapter = binding.Adapter
+				}
 			}
 		}
 		out = append(out, v)

@@ -203,7 +203,16 @@ type ActionResulted struct {
 	PerTargetResults       map[string]string `json:"per_target_results,omitempty"`
 	Attempts               int               `json:"attempts"`
 	RawResponseRef         string            `json:"raw_response_ref,omitempty"`
-	ResultInterpretationID uuid.UUID         `json:"result_interpretation_id"`
+	// ErrorDetail is the adapter/dispatch reason for a non-success outcome
+	// (08 §6c) — what the analyst reads to know WHY a FAILED action failed.
+	// Empty on SUCCEEDED.
+	ErrorDetail string `json:"error_detail,omitempty"`
+	// Adapter is the tool the dispatch ACTUALLY used. ActionDispatched recorded
+	// the planned selection before the outbound call (08 §6b); a non-empty value
+	// here corrects the record to the live choice. Empty when the dispatch never
+	// chose a binding.
+	Adapter                string    `json:"adapter,omitempty"`
+	ResultInterpretationID uuid.UUID `json:"result_interpretation_id"`
 }
 
 // ActionReversed records the original action's status moving to REVERSED on the
@@ -532,6 +541,8 @@ type ResultAction struct {
 	PerTargetResults map[string]string `json:"per_target_results,omitempty"`
 	Attempts         int               `json:"attempts"`
 	RawResponseRef   string            `json:"raw_response_ref,omitempty"`
+	ErrorDetail      string            `json:"error_detail,omitempty"`
+	Adapter          string            `json:"adapter,omitempty"` // the tool actually used (corrects the planned record)
 }
 
 // Kind returns "ResultAction".
@@ -862,14 +873,20 @@ func applyResultAction(env Envelope, state aggregateState, c ResultAction) ([]Ev
 		PerTargetResults:       c.PerTargetResults,
 		Attempts:               c.Attempts,
 		RawResponseRef:         c.RawResponseRef,
+		ErrorDetail:            c.ErrorDetail,
+		Adapter:                c.Adapter,
 		ResultInterpretationID: interpID,
 	})
 	if err != nil {
 		return nil, err
 	}
 	domain := lifecycleDomainEvent(env, state.Seq+1, EventTypeActionResulted, payload)
+	rationale := fmt.Sprintf("%s: %s", act.label(), c.FinalOutcome)
+	if c.ErrorDetail != "" {
+		rationale += " — " + c.ErrorDetail
+	}
 	interp, err := interpretationEvent(env, state.Seq+2, interpID, InterpretationActionResult,
-		fmt.Sprintf("%s: %s", act.label(), c.FinalOutcome), nil)
+		rationale, nil)
 	if err != nil {
 		return nil, err
 	}

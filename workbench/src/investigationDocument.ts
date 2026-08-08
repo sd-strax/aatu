@@ -871,6 +871,36 @@ export class InvestigationDocuments {
       void vscode.window.showErrorMessage(`reckon: approve failed — ${errText(err)}`);
     }
     await this.postPending(id, panel);
+    // Dispatch runs asynchronously (Temporal), so the refresh above catches the
+    // action mid-flight (APPROVED/EXECUTING). Poll a few times so the terminal
+    // outcome (SUCCEEDED/FAILED with its reason) lands in the ledger without a
+    // manual Refresh — otherwise a failed dispatch looks like it "disappeared".
+    this.pollDispatchOutcome(id, panel, msg.actionId);
+  }
+
+  /**
+   * Poll the actions list after an approval until the action settles to a
+   * terminal state (or a bounded number of ticks), refreshing the ledger and
+   * chronicle each time so an async dispatch outcome appears on its own.
+   */
+  private pollDispatchOutcome(id: string, panel: vscode.WebviewPanel, actionId: string): void {
+    let n = 0;
+    const tick = async (): Promise<void> => {
+      n += 1;
+      await this.postPending(id, panel);
+      let settled = true;
+      try {
+        const actions = await this.client.actions(id);
+        const a = actions.find((x) => x.actionId === actionId);
+        settled = !a || (a.status !== "APPROVED" && a.status !== "EXECUTING");
+      } catch {
+        settled = false; // layer momentarily unreachable — keep polling
+      }
+      if (!settled && n < 6) {
+        setTimeout(() => void tick(), 2000);
+      }
+    };
+    setTimeout(() => void tick(), 1500);
   }
 
   /** Reject one action — human token only; reason from the webview prompt card. */
@@ -1387,6 +1417,8 @@ export class InvestigationDocuments {
     .actrow .atype { font-weight: 600; font-size: var(--fs-sm); }
     .actrow .artgt { color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
     .actrow .armeta { color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
+    .actrow .armeta.via { font-family: var(--mono, ui-monospace, monospace); color: var(--text-2); }
+    .actrow .armeta.err { color: var(--bad, #e5534b); word-break: break-word; }
     .predictions { list-style: none; padding: 0; margin: 6px 0 0; }
     .predictions li {
       padding: 3px 0 3px 10px; border-left: 2px solid var(--border);
@@ -1436,6 +1468,7 @@ export class InvestigationDocuments {
     .hyphead { display: flex; align-items: baseline; gap: 6px; }
     .hyphead .statement { flex: 1; min-width: 0; }
     .cardmeta { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; word-break: break-word; }
+    .cardmeta.via { font-family: var(--mono, ui-monospace, monospace); color: var(--text-1); }
     .decide { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
     .decide button { font-size: var(--fs-sm); padding: 3px 10px; }
     .empty { color: var(--text-3); font-style: italic; font-size: var(--fs-sm); }
@@ -3424,6 +3457,16 @@ export class InvestigationDocuments {
         tgt.textContent = "→ " + (a.targets || []).join(", ");
         row.append(top, tgt);
 
+        // Write-side provenance: WHICH tool dispatched it (set once executing).
+        // When several adapters can serve an action type, the analyst sees the
+        // one that actually acted — trust + audit.
+        if (a.adapter) {
+          const via = document.createElement("div");
+          via.className = "armeta via";
+          via.textContent = "via " + a.adapter;
+          row.append(via);
+        }
+
         // Reversal lineage / classification, stated honestly for the record.
         if (a.status === "REVERSED") {
           const m = document.createElement("div");
@@ -3441,6 +3484,13 @@ export class InvestigationDocuments {
           m.className = "armeta";
           m.textContent = "⚠ escalated to " + a.tier + " (blast radius)";
           row.append(m);
+        }
+        // Why a FAILED action failed — the honest reason, not a bare badge.
+        if (a.errorDetail && (a.status === "FAILED" || a.status === "TIMEOUT" || a.status === "PARTIAL")) {
+          const e = document.createElement("div");
+          e.className = "armeta err";
+          e.textContent = "✗ " + a.errorDetail;
+          row.append(e);
         }
 
         box.appendChild(row);
@@ -3486,6 +3536,16 @@ export class InvestigationDocuments {
         targets.textContent = "→ " + (a.targets || []).join(", ");
 
         row.append(head, targets);
+
+        // Pre-approval provenance (08 §4): which tool WILL execute this if
+        // approved now — so the analyst confirms the destination system of
+        // record (e.g. servicenow, not a fixture) BEFORE committing.
+        if (a.plannedAdapter) {
+          const via = document.createElement("div");
+          via.className = "cardmeta via";
+          via.textContent = "⇒ will dispatch via " + a.plannedAdapter;
+          row.append(via);
+        }
 
         // The mandatory pre-send preview (binding §4): approving a notify.*
         // action IS sending the message, so the approver sees exactly what

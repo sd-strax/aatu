@@ -48,6 +48,14 @@ type ActionCurrent struct {
 	// only (a retry is always a new action; the dispatch ledger forbids
 	// re-dispatching one id). Zero when not a retry.
 	RetryOf uuid.UUID
+	// Adapter is the tool that dispatched the action (from ActionDispatched.
+	// Adapter, 08 §6b) — the write-side provenance a surface shows so the
+	// analyst sees WHICH tool acted when several could serve the action type.
+	// Empty until the action is dispatched.
+	Adapter string
+	// ErrorDetail is the reason a non-success action failed (from ActionResulted,
+	// 08 §6c) — surfaced so the ledger explains a FAILED action. Empty otherwise.
+	ErrorDetail       string
 	LastEventSequence int64
 }
 
@@ -148,7 +156,17 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			return fmt.Errorf("unmarshal ActionDispatched: %w", err)
 		}
-		return setActionStatus(ctx, tx, evt, p.ActionID, ActionStatusExecuting)
+		// Record the dispatcher alongside the EXECUTING status: this is where
+		// the write-side adapter provenance lands on the projection.
+		_, err := tx.ExecContext(ctx, `
+			UPDATE action_current
+			SET status = $2, adapter = $3, last_event_sequence = $4, updated_at = $5
+			WHERE action_id = $1
+		`, p.ActionID, ActionStatusExecuting, p.Adapter, evt.SequenceNo, evt.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("update action_current dispatched: %w", err)
+		}
+		return nil
 
 	case EventTypeActionResulted:
 		var p ActionResulted
@@ -159,7 +177,22 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 		if p.FinalOutcome == "FAILED" || p.FinalOutcome == "TIMEOUT" {
 			status = ActionStatusFailed
 		}
-		return setActionStatus(ctx, tx, evt, p.ActionID, status)
+		// Store the failure reason alongside the terminal status so the ledger
+		// can say WHY a FAILED action failed (08 §6c) — and converge adapter to
+		// the tool the dispatch ACTUALLY used when the resulted event carries it
+		// (the dispatched event recorded the planned selection; a live reload
+		// between the two could differ). Empty actual keeps the planned value.
+		_, err := tx.ExecContext(ctx, `
+			UPDATE action_current
+			SET status = $2, error_detail = $3,
+			    adapter = COALESCE(NULLIF($4, ''), adapter),
+			    last_event_sequence = $5, updated_at = $6
+			WHERE action_id = $1
+		`, p.ActionID, status, p.ErrorDetail, p.Adapter, evt.SequenceNo, evt.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("update action_current resulted: %w", err)
+		}
+		return nil
 
 	case EventTypeActionReversed:
 		var p ActionReversed
@@ -237,7 +270,7 @@ const actionCurrentColumns = `action_id, aggregate_id, action_type, tier, status
 	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref, retry_of,
 	       reversibility, reversed_by_ref, reversal_attempted_by_ref,
 	       required_mode, secondary_approver_pool, parameters, targets, evidence_refs,
-	       expires_at, last_event_sequence`
+	       expires_at, adapter, error_detail, last_event_sequence`
 
 // scanActionCurrent decodes one actionCurrentColumns row (sql.Row or sql.Rows).
 func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
@@ -250,7 +283,7 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf, &retryOf,
 		&reversibility, &reversedBy, &attemptedBy,
 		&requiredMode, &pool, &params, &targets, &evidence, &expiresAt,
-		&a.LastEventSequence)
+		&a.Adapter, &a.ErrorDetail, &a.LastEventSequence)
 	if err != nil {
 		return ActionCurrent{}, err
 	}

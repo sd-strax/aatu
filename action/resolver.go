@@ -84,16 +84,24 @@ func ValidateActionBindings(bindings map[string][]ActionBinding) error {
 // action type — dispatch cannot proceed.
 var ErrNoBinding = errors.New("no applicable write binding")
 
-// Resolve picks the highest-priority applicable binding for the request,
-// renders its params against the frozen targets/parameters, injects the action
-// context + idempotency key, and dispatches exactly once. It returns the binding
-// used (so the caller records the adapter/idempotency context) alongside the
-// result.
-func (r *ActionResolver) Resolve(ctx context.Context, req DispatchRequest) (WriteResult, ActionBinding, error) {
-	bindings := sortedActionBindings(r.bindings[req.ActionType])
-	tctx := dispatchContext(req)
+// selection is one chosen binding with its configured adapter and rendered
+// params — the SINGLE selection implementation behind both Resolve (dispatch)
+// and PlannedBinding (the pre-approval preview), so what a surface promises is
+// structurally what dispatch picks.
+type selection struct {
+	binding ActionBinding
+	adapter WriteAdapter
+	params  map[string]any
+}
 
-	for _, b := range bindings {
+// selectBinding walks the action type's bindings by priority and returns the
+// first applicable one (scope match, adapter configured, required params
+// render). ok=false when nothing applies. A template-render error is returned
+// with the offending binding — Resolve fails hard on it; a preview treats it
+// as not-applicable.
+func (r *ActionResolver) selectBinding(req DispatchRequest) (selection, bool, error) {
+	tctx := dispatchContext(req)
+	for _, b := range sortedActionBindings(r.bindings[req.ActionType]) {
 		if !capability.ScopeApplicable(b.Scope, req.SourceScope) {
 			continue // §3.5: wrong organization's instance — not applicable, no dispatch
 		}
@@ -103,27 +111,57 @@ func (r *ActionResolver) Resolve(ctx context.Context, req DispatchRequest) (Writ
 		}
 		params, applicable, err := capability.RenderParams(b.Params, tctx)
 		if err != nil {
-			return WriteResult{}, b, fmt.Errorf("action_type %s, adapter %s: template render: %w", req.ActionType, b.Adapter, err)
+			return selection{binding: b}, false, fmt.Errorf("action_type %s, adapter %s: template render: %w", req.ActionType, b.Adapter, err)
 		}
 		if !applicable {
 			continue // required input missing — not this binding
 		}
-
-		// Binding chosen. From here there is NO fall-through: this is the single
-		// outbound path for the action.
-		params[ParamActionType] = req.ActionType
-		if len(req.Targets) > 0 {
-			params[ParamResolvedIdentifier] = req.Targets[0].ResolvedIdentifier
-		}
-		key := IdempotencyKey(req.ActionID, "")
-
-		result, err := adapter.Dispatch(ctx, b.Operation, params, key)
-		if err != nil {
-			return WriteResult{}, b, err // classified WriteError; caller applies the retry budget
-		}
-		return result, b, nil
+		return selection{binding: b, adapter: adapter, params: params}, true, nil
 	}
-	return WriteResult{}, ActionBinding{}, fmt.Errorf("%w for action_type %q", ErrNoBinding, req.ActionType)
+	return selection{}, false, nil
+}
+
+// Resolve picks the highest-priority applicable binding for the request,
+// renders its params against the frozen targets/parameters, injects the action
+// context + idempotency key, and dispatches exactly once. It returns the binding
+// used (so the caller records the adapter/idempotency context) alongside the
+// result.
+func (r *ActionResolver) Resolve(ctx context.Context, req DispatchRequest) (WriteResult, ActionBinding, error) {
+	sel, ok, err := r.selectBinding(req)
+	if err != nil {
+		return WriteResult{}, sel.binding, err
+	}
+	if !ok {
+		return WriteResult{}, ActionBinding{}, fmt.Errorf("%w for action_type %q", ErrNoBinding, req.ActionType)
+	}
+
+	// Binding chosen. From here there is NO fall-through: this is the single
+	// outbound path for the action.
+	sel.params[ParamActionType] = req.ActionType
+	if len(req.Targets) > 0 {
+		sel.params[ParamResolvedIdentifier] = req.Targets[0].ResolvedIdentifier
+	}
+	key := IdempotencyKey(req.ActionID, "")
+
+	result, err := sel.adapter.Dispatch(ctx, sel.binding.Operation, sel.params, key)
+	if err != nil {
+		return WriteResult{}, sel.binding, err // classified WriteError; caller applies the retry budget
+	}
+	return result, sel.binding, nil
+}
+
+// PlannedBinding returns the binding Resolve WOULD select for req, without
+// dispatching — the "which tool will act" preview an approval surface shows
+// BEFORE a human approves (08 §4). It IS Resolve's selection (selectBinding),
+// so what the card promises is structurally what dispatch will pick. ok is
+// false when nothing applies (no binding, wrong scope, adapter disabled,
+// required inputs missing, or a binding whose template fails to render).
+func (r *ActionResolver) PlannedBinding(req DispatchRequest) (ActionBinding, bool) {
+	sel, ok, err := r.selectBinding(req)
+	if err != nil || !ok {
+		return ActionBinding{}, false
+	}
+	return sel.binding, true
 }
 
 // dispatchContext assembles the template roots for action bindings: the target

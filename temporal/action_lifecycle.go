@@ -77,6 +77,10 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, err
 		AggregateID:      in.AggregateID,
 		TenantID:         in.TenantID,
 		ApproverID:       in.ApproverID,
+		ActionType:       in.ActionType,
+		Targets:          in.Targets,
+		Parameters:       in.Parameters,
+		SourceScope:      in.SourceScope,
 		AdapterRequestID: requestID,
 	}).Get(ctx, nil); err != nil {
 		return "", err
@@ -118,6 +122,7 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, err
 		result.FinalOutcome = "FAILED"
 		result.PerTargetResults = unknownTargets(in.Targets)
 		result.Attempts = 3
+		result.ErrorDetail = dispErr.Error() // the honest reason the analyst sees
 		var appErr *sdktemporal.ApplicationError
 		if errors.As(dispErr, &appErr) && appErr.Type() == fatalErrorType {
 			result.Attempts = 1
@@ -128,6 +133,8 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, err
 		// The real attempt number the dispatch succeeded on (from activity
 		// info), never a fabricated 1.
 		result.Attempts = out.Attempts
+		result.ErrorDetail = out.ErrorDetail // set on a completed-but-FAILED/PARTIAL
+		result.Adapter = out.Adapter         // the binding the dispatch ACTUALLY used
 	}
 	if err := workflow.ExecuteActivity(ctx, a.EmitResulted, result).Get(ctx, nil); err != nil {
 		return "", err

@@ -73,6 +73,48 @@ func TestListActionTypesStatus(t *testing.T) {
 	}
 }
 
+// TestPlannedBinding: the pre-approval preview picks the same binding Resolve
+// would — highest priority whose adapter is configured — without dispatching.
+func TestPlannedBinding(t *testing.T) {
+	r := NewActionResolver(
+		map[string][]ActionBinding{
+			// The real SoR outranks the demo fixture (mirrors servicenow@200 vs
+			// fixture_write@100).
+			"ticket.create": {
+				{ActionType: "ticket.create", Adapter: "servicenow", Operation: "create_incident", Priority: 200},
+				{ActionType: "ticket.create", Adapter: "fixture_write", Operation: "dispatch", Priority: 100},
+			},
+		},
+		map[string]WriteAdapter{
+			"servicenow":    &stubWriteAdapter{name: "servicenow", healthy: true},
+			"fixture_write": &stubWriteAdapter{name: "fixture_write", healthy: true},
+		},
+	)
+
+	b, ok := r.PlannedBinding(DispatchRequest{ActionType: "ticket.create", Targets: []aggregate.TargetSpec{target("Service Desk")}})
+	if !ok || b.Adapter != "servicenow" {
+		t.Fatalf("planned = %q (ok=%v); want servicenow (higher priority)", b.Adapter, ok)
+	}
+
+	// With servicenow not configured, the preview falls to the next binding —
+	// exactly what dispatch would do (no false promise of a disabled tool).
+	r2 := NewActionResolver(
+		map[string][]ActionBinding{"ticket.create": {
+			{ActionType: "ticket.create", Adapter: "servicenow", Operation: "create_incident", Priority: 200},
+			{ActionType: "ticket.create", Adapter: "fixture_write", Operation: "dispatch", Priority: 100},
+		}},
+		map[string]WriteAdapter{"fixture_write": &stubWriteAdapter{name: "fixture_write", healthy: true}},
+	)
+	if b, ok := r2.PlannedBinding(DispatchRequest{ActionType: "ticket.create", Targets: []aggregate.TargetSpec{target("Service Desk")}}); !ok || b.Adapter != "fixture_write" {
+		t.Errorf("planned with servicenow disabled = %q (ok=%v); want fixture_write", b.Adapter, ok)
+	}
+
+	// No binding for the type → no preview.
+	if _, ok := r.PlannedBinding(DispatchRequest{ActionType: "email.purge"}); ok {
+		t.Error("email.purge has no binding; want ok=false")
+	}
+}
+
 // --- request construction + blast-radius escalator ---------------------------
 
 func TestBuildRequestCommand(t *testing.T) {

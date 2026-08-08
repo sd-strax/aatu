@@ -77,6 +77,93 @@ func TestAction_RequestApproveProjection(t *testing.T) {
 	}
 }
 
+// TestAction_DispatchProjectsAdapter: once dispatched, the action_current
+// projection carries the dispatching adapter (write-side provenance) so the
+// actions API can tell a surface WHICH tool acted. Empty until dispatch, set at
+// EXECUTING from ActionDispatched.Adapter.
+func TestAction_DispatchProjectsAdapter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	resetTables(t)
+	ctx := context.Background()
+	h := newTestHandler()
+	aggID := mustActivate(t, h)
+
+	actionID := uuid.New()
+	mustHandle(t, h, cmdEnv(aggID), RequestAction{
+		ActionID: actionID, ActionType: "host.isolate", Tier: TierT2,
+		Targets:   []TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-DC01"}},
+		ExpiresAt: time.Now().Add(time.Hour), Rationale: "contain",
+	})
+	mustHandle(t, h, cmdEnv(aggID), ApproveAction{
+		ActionID: actionID,
+		Authorization: Authorization{
+			Mode: AuthModeManual, Stage: AuthStageSolo,
+			PrimaryApproverRef: "alice", PrimaryApprovedAt: time.Now(),
+		},
+	})
+
+	// Before dispatch: no adapter yet.
+	ac, err := LoadActionCurrent(ctx, testDB, actionID)
+	if err != nil {
+		t.Fatalf("LoadActionCurrent: %v", err)
+	}
+	if ac.Adapter != "" {
+		t.Errorf("adapter before dispatch = %q; want empty", ac.Adapter)
+	}
+
+	// SYSTEM dispatches (the workflow is the only emitter) via crowdstrike-response.
+	sysEnv := cmdEnv(aggID)
+	sysEnv.Actor = Actor{Kind: ActorSystem, PrincipalID: "alice"}
+	mustHandle(t, h, sysEnv, DispatchAction{
+		ActionID: actionID, Adapter: "crowdstrike-response", AdapterRequestID: "wf-1",
+	})
+
+	ac, err = LoadActionCurrent(ctx, testDB, actionID)
+	if err != nil {
+		t.Fatalf("LoadActionCurrent after dispatch: %v", err)
+	}
+	if ac.Status != ActionStatusExecuting {
+		t.Errorf("status = %q; want EXECUTING", ac.Status)
+	}
+	if ac.Adapter != "crowdstrike-response" {
+		t.Errorf("adapter = %q; want crowdstrike-response", ac.Adapter)
+	}
+
+	// A FAILED result carries the reason onto the projection (08 §6c) so the
+	// ledger can explain WHY, not just that it failed — and the resulted event's
+	// ACTUAL adapter corrects the planned one recorded at dispatch (a live
+	// reload between the two activities can change the selection).
+	mustHandle(t, h, sysEnv2(aggID), ResultAction{
+		ActionID: actionID, FinalOutcome: "FAILED",
+		PerTargetResults: map[string]string{"WIN-DC01": "FAIL"},
+		Attempts:         1, ErrorDetail: "HTTP 401: User Not Authenticated",
+		Adapter: "crowdstrike-response-v2", // the live selection differed
+	})
+	ac, err = LoadActionCurrent(ctx, testDB, actionID)
+	if err != nil {
+		t.Fatalf("LoadActionCurrent after result: %v", err)
+	}
+	if ac.Status != ActionStatusFailed {
+		t.Errorf("status = %q; want FAILED", ac.Status)
+	}
+	if ac.ErrorDetail != "HTTP 401: User Not Authenticated" {
+		t.Errorf("error_detail = %q; want the 401 reason", ac.ErrorDetail)
+	}
+	if ac.Adapter != "crowdstrike-response-v2" {
+		t.Errorf("adapter = %q; want the ACTUAL dispatcher (resulted wins over planned)", ac.Adapter)
+	}
+}
+
+// sysEnv2 is a SYSTEM-attributed envelope (approver alice) for the dispatch/
+// result lifecycle commands the workflow emits.
+func sysEnv2(aggID uuid.UUID) Envelope {
+	e := cmdEnv(aggID)
+	e.Actor = Actor{Kind: ActorSystem, PrincipalID: "alice"}
+	return e
+}
+
 // TestAction_ReplayRebuildsProjection: replaying the event stream rebuilds
 // action_current to the same state (the projection is derived, never primary).
 func TestAction_ReplayRebuildsProjection(t *testing.T) {

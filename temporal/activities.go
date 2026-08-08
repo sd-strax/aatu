@@ -73,18 +73,30 @@ func (a *Activities) CheckDispatched(ctx context.Context, actionID string) (bool
 }
 
 // EmitDispatchedInput carries what EmitDispatched needs to record the ledger
-// entry. ApproverID is the human principal the workflow carries (05 §6.2).
+// entry. ApproverID is the human principal the workflow carries (05 §6.2). The
+// resolution fields (ActionType/Targets/Parameters/SourceScope) let EmitDispatched
+// compute WHICH adapter will handle this action, so the dispatched event — and
+// thus the ledger's "via <adapter>" and the chronicle's "dispatched via …" —
+// records the real tool instead of an empty string (the binding is only
+// resolved inside DoDispatch, which runs AFTER this).
 type EmitDispatchedInput struct {
 	ActionID         string
 	AggregateID      string
 	TenantID         string
 	ApproverID       string
-	Adapter          string
+	ActionType       string
+	Targets          []aggregate.TargetSpec
+	Parameters       map[string]any
+	SourceScope      string
 	AdapterRequestID string
 }
 
 // EmitDispatched records ActionDispatched (the ledger entry, 08 §6b) BEFORE the
-// outbound call, so a crash-and-retrigger sees it via CheckDispatched.
+// outbound call, so a crash-and-retrigger sees it via CheckDispatched. It stamps
+// the resolved adapter (via PlannedBinding — the same selection DoDispatch will
+// make) so the write-side provenance is captured at dispatch time. An empty
+// adapter (no applicable binding) is not fatal here: DoDispatch surfaces the
+// no-binding error authoritatively.
 func (a *Activities) EmitDispatched(ctx context.Context, in EmitDispatchedInput) error {
 	env, err := systemEnvelope(in.AggregateID, in.TenantID, in.ApproverID)
 	if err != nil {
@@ -94,9 +106,23 @@ func (a *Activities) EmitDispatched(ctx context.Context, in EmitDispatchedInput)
 	if err != nil {
 		return err
 	}
+	adapter := ""
+	if a.resolver != nil {
+		if r := a.resolver.Load(); r != nil {
+			if b, ok := r.PlannedBinding(action.DispatchRequest{
+				ActionID:    id,
+				ActionType:  in.ActionType,
+				Targets:     in.Targets,
+				Parameters:  in.Parameters,
+				SourceScope: in.SourceScope,
+			}); ok {
+				adapter = b.Adapter
+			}
+		}
+	}
 	_, err = a.handler.Handle(ctx, env, aggregate.DispatchAction{
 		ActionID:         id,
-		Adapter:          in.Adapter,
+		Adapter:          adapter,
 		AdapterRequestID: in.AdapterRequestID,
 	})
 	return err
@@ -120,6 +146,10 @@ type DispatchOutput struct {
 	Adapter          string
 	AdapterRequestID string
 	Attempts         int
+	// ErrorDetail is the adapter's human-readable reason on a completed-but-
+	// FAILED/PARTIAL dispatch (e.g. "HTTP 401: User Not Authenticated"), so a
+	// FAILED action can tell the analyst WHY. Empty on success.
+	ErrorDetail string
 }
 
 // DoDispatch runs the actual outbound write via the action resolver. A FATAL
@@ -164,6 +194,7 @@ func (a *Activities) DoDispatch(ctx context.Context, in DispatchInput) (Dispatch
 		Adapter:          binding.Adapter,
 		AdapterRequestID: res.AdapterRequestID,
 		Attempts:         activityAttempt(ctx),
+		ErrorDetail:      res.ErrorDetail,
 	}, nil
 }
 
@@ -188,6 +219,13 @@ type EmitResultedInput struct {
 	FinalOutcome     string
 	PerTargetResults map[string]string
 	Attempts         int
+	ErrorDetail      string
+	// Adapter is the tool the dispatch ACTUALLY used (from the resolver's chosen
+	// binding). The dispatched event recorded the PLANNED adapter before the
+	// outbound call; this corrects the record if the live selection differed
+	// (e.g. a hot reload between the two activities). Empty when the dispatch
+	// never chose a binding (resolve failure) — the planned value then stands.
+	Adapter string
 }
 
 // EmitResulted records ActionResulted, closing the action.
@@ -205,6 +243,8 @@ func (a *Activities) EmitResulted(ctx context.Context, in EmitResultedInput) err
 		FinalOutcome:     in.FinalOutcome,
 		PerTargetResults: in.PerTargetResults,
 		Attempts:         in.Attempts,
+		ErrorDetail:      in.ErrorDetail,
+		Adapter:          in.Adapter,
 	})
 	if err != nil {
 		return err

@@ -59,7 +59,7 @@ func TestComms_NotifyResultOpensThread(t *testing.T) {
 		if err := acts.EmitDispatched(context.Background(), temporal.EmitDispatchedInput{
 			ActionID: actionID.String(), AggregateID: invID.String(),
 			TenantID: module.SingleTenantUUID.String(), ApproverID: "test-subject",
-			Adapter: "fixture_write", AdapterRequestID: "wf-" + actionID.String(),
+			AdapterRequestID: "wf-" + actionID.String(),
 		}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}

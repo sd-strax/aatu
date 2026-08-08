@@ -280,6 +280,19 @@ export interface ActionRow {
   /** Lineage: the FAILED/EXPIRED action this request replaces. */
   retryOf?: string;
   /**
+   * The tool that dispatched the action (write-side provenance) — which of
+   * several possible adapters actually acted. Empty until dispatched.
+   */
+  adapter?: string;
+  /**
+   * The tool the resolver WOULD dispatch to if approved now — the pre-approval
+   * preview so the analyst sees which system of record an external action will
+   * hit before committing. Present only while pending.
+   */
+  plannedAdapter?: string;
+  /** Why a FAILED action failed (adapter/dispatch reason). Empty on success. */
+  errorDetail?: string;
+  /**
    * The request's frozen parameters (raw JSON) — the pre-send preview for
    * notify.* actions renders the exact message from here.
    */
@@ -710,6 +723,9 @@ export class BackendClient {
       tier_escalated?: boolean;
       evidence_refs?: string[];
       retry_of?: string;
+      adapter?: string;
+      planned_adapter?: string;
+      error_detail?: string;
     }
     const body = await this.authedGet<{ actions?: Raw[] }>(
       `/api/investigations/${encodeURIComponent(investigationId)}/actions`,
@@ -744,6 +760,9 @@ export class BackendClient {
         tierEscalated: a.tier_escalated ?? false,
         evidenceRefs: a.evidence_refs ?? [],
         retryOf: a.retry_of,
+        adapter: a.adapter,
+        plannedAdapter: a.planned_adapter,
+        errorDetail: a.error_detail,
         parameters: params,
       };
     });
