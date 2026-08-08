@@ -18,6 +18,11 @@ is enforced, how the system prompt is structured and versioned as it grows, and 
 mechanics, the authorization mechanisms, and SOP retrieval are specified elsewhere and are
 authoritative; this note builds on them.
 
+Field evidence for this discipline — what actually broke against a live stack and the deterministic
+mechanisms that fixed it (narrative poisoning, ground-truth guards, the analyst context reset) —
+lives in `implementation/agent-reliability.md`. Read the two together: this note decides *where a
+fix belongs*; that one records *what the field taught us*.
+
 | Owned here (`09`) | Owned elsewhere (authoritative) |
 |---|---|
 | The mechanism-vs-prompt layer decision (`§2`) | The AI-delegate write protections, Gate 2, baseline DENY (`04`) |
