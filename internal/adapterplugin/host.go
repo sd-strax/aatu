@@ -23,11 +23,10 @@ type Host struct {
 	engineVersion string
 	logger        *slog.Logger
 
-	installed map[string]Installed
-	problems  []Problem
-
-	mu      sync.Mutex
-	plugins map[string]*Plugin
+	mu        sync.Mutex
+	installed map[string]Installed // guarded by mu (Rescan replaces it)
+	problems  []Problem            // guarded by mu
+	plugins   map[string]*Plugin
 }
 
 // NewHost scans root (`<data>/adapters`, §3) for installed adapters. A missing
@@ -51,10 +50,33 @@ func NewHost(root, engineVersion string, logger *slog.Logger) *Host {
 
 // Problems returns the malformed/duplicate installs skipped during the scan,
 // for `reckon check` and boot-time logging.
-func (h *Host) Problems() []Problem { return h.problems }
+func (h *Host) Problems() []Problem {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.problems
+}
 
 // Installed returns the adapters that scanned cleanly, keyed by manifest name.
-func (h *Host) Installed() map[string]Installed { return h.installed }
+func (h *Host) Installed() map[string]Installed {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.installed
+}
+
+// Rescan re-reads the install layout, picking up adapters installed since boot
+// (`reckon adapter setup <new adapter>` + SIGHUP must work without a restart —
+// the scan-once cache otherwise makes a brand-new install invisible to hot
+// reload while the CLI reports success). Already-constructed Plugins are kept:
+// running processes are unaffected, and a re-installed binary takes effect on
+// that plugin's next respawn. Returns the scan problems for logging.
+func (h *Host) Rescan() []Problem {
+	installed, problems := ScanAdapters(h.root)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.installed = installed
+	h.problems = problems
+	return problems
+}
 
 // Plugin returns the Plugin for an enablement instance, constructing it once and
 // caching it so repeated calls (read wiring, write wiring, the worker) share one

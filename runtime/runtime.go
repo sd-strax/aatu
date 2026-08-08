@@ -387,6 +387,13 @@ func serve(cfg config.Config) error {
 			case <-ctx.Done():
 				return
 			case <-hup:
+				// Pick up adapters installed since boot (or since the last
+				// reload): `adapter setup <new adapter>` signals HUP right after
+				// installing, and the host's scan-once cache would otherwise
+				// leave the new install invisible until a restart.
+				for _, p := range adapterHost.Rescan() {
+					log.Printf("%s: adapter scan: %s: %s", branding.CLI, p.Dir, p.Message)
+				}
 				// Reads: rebuild + swap the capability surface.
 				if err := backend.ReloadCapability(); err != nil {
 					log.Printf("%s: capability reload failed (running surface unchanged): %v", branding.CLI, err)

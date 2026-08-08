@@ -98,3 +98,35 @@ func TestScanAdaptersMissingRootIsClean(t *testing.T) {
 		t.Fatalf("missing root should be clean: installed=%v problems=%v", installed, problems)
 	}
 }
+
+// TestHostRescanPicksUpNewInstall: an adapter installed AFTER the host booted
+// becomes visible on Rescan — the hot-reload path for `adapter setup <new>`
+// (a scan-once cache otherwise forces a restart while setup reports success).
+func TestHostRescanPicksUpNewInstall(t *testing.T) {
+	root := t.TempDir()
+	h := NewHost(root, "test", nil)
+	if len(h.Installed()) != 0 {
+		t.Fatalf("fresh empty root should have no installs: %+v", h.Installed())
+	}
+
+	// Install arrives after boot (what `adapter setup servicenow` does).
+	writeManifest(t, root, "servicenow", `
+manifest_version: 1
+name: servicenow
+version: 0.1.0
+protocol_versions: [1]
+class: NATIVE_API
+exec: ["./reckon-adapter-servicenow"]
+summary:
+  action_types: [ticket.create]
+`)
+	if _, ok := h.Installed()["servicenow"]; ok {
+		t.Fatal("pre-rescan visibility would mean the cache isn't a cache")
+	}
+	if problems := h.Rescan(); len(problems) != 0 {
+		t.Fatalf("rescan problems = %v, want none", problems)
+	}
+	if _, ok := h.Installed()["servicenow"]; !ok {
+		t.Fatalf("servicenow not visible after Rescan: %+v", h.Installed())
+	}
+}
