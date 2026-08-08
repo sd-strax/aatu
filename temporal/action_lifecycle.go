@@ -133,8 +133,9 @@ func ActionLifecycle(ctx workflow.Context, in ActionLifecycleInput) (string, err
 		// The real attempt number the dispatch succeeded on (from activity
 		// info), never a fabricated 1.
 		result.Attempts = out.Attempts
-		result.ErrorDetail = out.ErrorDetail // set on a completed-but-FAILED/PARTIAL
-		result.Adapter = out.Adapter         // the binding the dispatch ACTUALLY used
+		result.ErrorDetail = out.ErrorDetail       // set on a completed-but-FAILED/PARTIAL
+		result.Adapter = out.Adapter               // the binding the dispatch ACTUALLY used
+		result.RawResponseRef = out.RawResponseRef // e.g. the created INC number
 	}
 	if err := workflow.ExecuteActivity(ctx, a.EmitResulted, result).Get(ctx, nil); err != nil {
 		return "", err

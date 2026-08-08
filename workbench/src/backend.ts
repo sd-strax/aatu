@@ -292,6 +292,8 @@ export interface ActionRow {
   plannedAdapter?: string;
   /** Why a FAILED action failed (adapter/dispatch reason). Empty on success. */
   errorDetail?: string;
+  /** The operational reference the dispatch returned (e.g. the INC number). */
+  resultRef?: string;
   /**
    * The request's frozen parameters (raw JSON) — the pre-send preview for
    * notify.* actions renders the exact message from here.
@@ -726,6 +728,7 @@ export class BackendClient {
       adapter?: string;
       planned_adapter?: string;
       error_detail?: string;
+      result_ref?: string;
     }
     const body = await this.authedGet<{ actions?: Raw[] }>(
       `/api/investigations/${encodeURIComponent(investigationId)}/actions`,
@@ -763,6 +766,7 @@ export class BackendClient {
         adapter: a.adapter,
         plannedAdapter: a.planned_adapter,
         errorDetail: a.error_detail,
+        resultRef: a.result_ref,
         parameters: params,
       };
     });

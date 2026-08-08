@@ -55,7 +55,11 @@ type ActionCurrent struct {
 	Adapter string
 	// ErrorDetail is the reason a non-success action failed (from ActionResulted,
 	// 08 §6c) — surfaced so the ledger explains a FAILED action. Empty otherwise.
-	ErrorDetail       string
+	ErrorDetail string
+	// RawResponseRef is the operational reference the dispatch returned (e.g.
+	// the created incident number) — the analyst's handle into the external
+	// system of record.
+	RawResponseRef    string
 	LastEventSequence int64
 }
 
@@ -186,9 +190,10 @@ func (ActionCurrentProjector) Apply(ctx context.Context, tx *sql.Tx, evt Event) 
 			UPDATE action_current
 			SET status = $2, error_detail = $3,
 			    adapter = COALESCE(NULLIF($4, ''), adapter),
-			    last_event_sequence = $5, updated_at = $6
+			    raw_response_ref = $5,
+			    last_event_sequence = $6, updated_at = $7
 			WHERE action_id = $1
-		`, p.ActionID, status, p.ErrorDetail, p.Adapter, evt.SequenceNo, evt.OccurredAt)
+		`, p.ActionID, status, p.ErrorDetail, p.Adapter, p.RawResponseRef, evt.SequenceNo, evt.OccurredAt)
 		if err != nil {
 			return fmt.Errorf("update action_current resulted: %w", err)
 		}
@@ -270,7 +275,7 @@ const actionCurrentColumns = `action_id, aggregate_id, action_type, tier, status
 	       primary_approver_ref, primary_approved_at, is_reversal, reversal_of_ref, retry_of,
 	       reversibility, reversed_by_ref, reversal_attempted_by_ref,
 	       required_mode, secondary_approver_pool, parameters, targets, evidence_refs,
-	       expires_at, adapter, error_detail, last_event_sequence`
+	       expires_at, adapter, error_detail, raw_response_ref, last_event_sequence`
 
 // scanActionCurrent decodes one actionCurrentColumns row (sql.Row or sql.Rows).
 func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
@@ -283,7 +288,7 @@ func scanActionCurrent(scan func(dest ...any) error) (ActionCurrent, error) {
 		&mode, &approver, &primaryAt, &a.IsReversal, &reversalOf, &retryOf,
 		&reversibility, &reversedBy, &attemptedBy,
 		&requiredMode, &pool, &params, &targets, &evidence, &expiresAt,
-		&a.Adapter, &a.ErrorDetail, &a.LastEventSequence)
+		&a.Adapter, &a.ErrorDetail, &a.RawResponseRef, &a.LastEventSequence)
 	if err != nil {
 		return ActionCurrent{}, err
 	}

@@ -121,6 +121,9 @@ type InboundMessage =
 
 export class InvestigationDocuments {
   private readonly open = new Map<string, vscode.WebviewPanel>();
+  // Per-investigation refresh timers for in-flight dispatches (APPROVED/
+  // EXECUTING → poll until terminal; see scheduleDispatchWatch).
+  private readonly dispatchWatch = new Map<string, { timer: ReturnType<typeof setTimeout>; ticks: number }>();
   // Monotonic key for not-yet-seeded draft panels (design/ui/02 §2.7): a draft
   // has no investigation id until its seed is typed, so it lives under a
   // synthetic key until seedDraft re-keys it to the real aggregate id.
@@ -429,6 +432,12 @@ export class InvestigationDocuments {
     try {
       const actions = await this.client.actions(id);
       void this.post(panel, { type: "pending", actions });
+      // Dispatch is asynchronous (a Temporal workflow) and its result events are
+      // recorded by the worker, not the HTTP path — no delta reaches this panel.
+      // While any action is mid-dispatch, keep refreshing until it settles, so
+      // DISPATCHING never sticks past the real outcome (SNOW cold calls + the
+      // retry budget can take a minute or more).
+      this.scheduleDispatchWatch(id, panel, actions);
     } catch (err) {
       // A 503 here just means the action layer is off — not a broken panel.
       this.log.debug(`list actions ${id}: ${errText(err)}`);
@@ -884,36 +893,40 @@ export class InvestigationDocuments {
       void vscode.window.showErrorMessage(`reckon: approve failed — ${errText(err)}`);
     }
     await this.postPending(id, panel);
-    // Dispatch runs asynchronously (Temporal), so the refresh above catches the
-    // action mid-flight (APPROVED/EXECUTING). Poll a few times so the terminal
-    // outcome (SUCCEEDED/FAILED with its reason) lands in the ledger without a
-    // manual Refresh — otherwise a failed dispatch looks like it "disappeared".
-    this.pollDispatchOutcome(id, panel, msg.actionId);
+    // postPending arms the dispatch watch: the approved action is now
+    // APPROVED/EXECUTING, so the ledger keeps refreshing until it settles.
   }
 
   /**
-   * Poll the actions list after an approval until the action settles to a
-   * terminal state (or a bounded number of ticks), refreshing the ledger and
-   * chronicle each time so an async dispatch outcome appears on its own.
+   * Keep the ledger honest through an async dispatch: while any action sits in
+   * a transient state (APPROVED/EXECUTING), re-fetch on a short interval until
+   * everything is terminal — regardless of which surface (this panel, the
+   * agent, auto-approval) started the dispatch. Bounded (~3 min) so a truly
+   * wedged workflow cannot poll forever; the ledger then shows the honest
+   * transient state until the next interaction.
    */
-  private pollDispatchOutcome(id: string, panel: vscode.WebviewPanel, actionId: string): void {
-    let n = 0;
-    const tick = async (): Promise<void> => {
-      n += 1;
-      await this.postPending(id, panel);
-      let settled = true;
-      try {
-        const actions = await this.client.actions(id);
-        const a = actions.find((x) => x.actionId === actionId);
-        settled = !a || (a.status !== "APPROVED" && a.status !== "EXECUTING");
-      } catch {
-        settled = false; // layer momentarily unreachable — keep polling
+  private scheduleDispatchWatch(id: string, panel: vscode.WebviewPanel, actions: ActionRow[]): void {
+    const existing = this.dispatchWatch.get(id);
+    const inFlight = actions.some((a) => a.status === "APPROVED" || a.status === "EXECUTING");
+    if (!inFlight) {
+      if (existing) {
+        clearTimeout(existing.timer);
+        this.dispatchWatch.delete(id);
       }
-      if (!settled && n < 6) {
-        setTimeout(() => void tick(), 2000);
-      }
-    };
-    setTimeout(() => void tick(), 1500);
+      return;
+    }
+    const ticks = existing ? existing.ticks + 1 : 0;
+    if (existing) {
+      clearTimeout(existing.timer);
+    }
+    if (ticks >= 45 || this.open.get(id) !== panel) {
+      this.dispatchWatch.delete(id);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void this.postPending(id, panel); // re-arms (or clears) the watch from fresh state
+    }, 4000);
+    this.dispatchWatch.set(id, { timer, ticks });
   }
 
   /** Reject one action — human token only; reason from the webview prompt card. */
@@ -3488,13 +3501,13 @@ export class InvestigationDocuments {
         tgt.textContent = "→ " + (a.targets || []).join(", ");
         row.append(top, tgt);
 
-        // Write-side provenance: WHICH tool dispatched it (set once executing).
-        // When several adapters can serve an action type, the analyst sees the
-        // one that actually acted — trust + audit.
+        // Write-side provenance: WHICH tool dispatched it (set once executing),
+        // and the operational reference it returned (e.g. the INC number) —
+        // the analyst's handle into the external system of record.
         if (a.adapter) {
           const via = document.createElement("div");
           via.className = "armeta via";
-          via.textContent = "via " + a.adapter;
+          via.textContent = "via " + a.adapter + (a.resultRef ? " → " + a.resultRef : "");
           row.append(via);
         }
 

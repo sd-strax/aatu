@@ -85,6 +85,10 @@ type ActionView struct {
 	// ErrorDetail is the reason a FAILED action failed (08 §6c), so the ledger
 	// explains the outcome instead of a bare FAILED. Empty on success.
 	ErrorDetail string `json:"error_detail,omitempty"`
+	// ResultRef is the operational reference the dispatch returned (e.g. the
+	// created ServiceNow incident number) — the analyst's handle into the
+	// external system of record.
+	ResultRef string `json:"result_ref,omitempty"`
 }
 
 // listInvestigationActions serves GET /api/investigations/{id}/actions: every
@@ -123,6 +127,7 @@ func (b *Backend) listInvestigationActions(w http.ResponseWriter, r *http.Reques
 			Parameters:    a.Parameters,
 			Adapter:       a.Adapter,
 			ErrorDetail:   a.ErrorDetail,
+			ResultRef:     a.RawResponseRef,
 		}
 		if a.RetryOf != (uuid.UUID{}) {
 			v.RetryOf = a.RetryOf.String()

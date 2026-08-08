@@ -150,6 +150,10 @@ type DispatchOutput struct {
 	// FAILED/PARTIAL dispatch (e.g. "HTTP 401: User Not Authenticated"), so a
 	// FAILED action can tell the analyst WHY. Empty on success.
 	ErrorDetail string
+	// RawResponseRef is the operational reference the adapter returned (e.g.
+	// the created ServiceNow incident number) — the analyst's handle into the
+	// external system of record.
+	RawResponseRef string
 }
 
 // DoDispatch runs the actual outbound write via the action resolver. A FATAL
@@ -195,6 +199,7 @@ func (a *Activities) DoDispatch(ctx context.Context, in DispatchInput) (Dispatch
 		AdapterRequestID: res.AdapterRequestID,
 		Attempts:         activityAttempt(ctx),
 		ErrorDetail:      res.ErrorDetail,
+		RawResponseRef:   res.RawResponseRef,
 	}, nil
 }
 
@@ -220,6 +225,7 @@ type EmitResultedInput struct {
 	PerTargetResults map[string]string
 	Attempts         int
 	ErrorDetail      string
+	RawResponseRef   string
 	// Adapter is the tool the dispatch ACTUALLY used (from the resolver's chosen
 	// binding). The dispatched event recorded the PLANNED adapter before the
 	// outbound call; this corrects the record if the live selection differed
@@ -245,6 +251,7 @@ func (a *Activities) EmitResulted(ctx context.Context, in EmitResultedInput) err
 		Attempts:         in.Attempts,
 		ErrorDetail:      in.ErrorDetail,
 		Adapter:          in.Adapter,
+		RawResponseRef:   in.RawResponseRef,
 	})
 	if err != nil {
 		return err
