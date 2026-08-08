@@ -2,6 +2,7 @@
 /bin/
 /reckon
 /reckon-backend
+/reckon-adapter-*
 /cmd/reckon/reckon
 /cmd/reckon-backend/reckon-backend
 

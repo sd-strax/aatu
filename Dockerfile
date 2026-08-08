@@ -50,6 +50,7 @@ RUN useradd --create-home --uid 10001 reckon \
 COPY --from=build /src/bin/reckon /src/bin/reckon-backend /usr/local/bin/
 COPY --from=build /src/bin/reckon-adapter-okta /src/bin/reckon-adapter-greynoise /usr/local/bin/
 COPY --from=build /src/bin/reckon-adapter-crowdstrike-falcon /src/bin/reckon-adapter-crowdstrike-response /usr/local/bin/
+COPY --from=build /src/bin/reckon-adapter-servicenow /usr/local/bin/
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/reckon-entrypoint
 
 # The seeded demo scenario resolves fixtures relative to the working directory

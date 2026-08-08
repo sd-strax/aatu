@@ -1,0 +1,83 @@
+# Example tenant config enabling the ServiceNow ticketing adapter (design/11 §5).
+# Point the backend at it with
+#   action:
+#     config_path: examples/adapters/servicenow/tenant-config.yaml
+# after installing the adapter under <data>/adapters/servicenow/ (see manifest.yaml)
+# and running `reckon adapter setup servicenow`.
+#
+# ServiceNow is a write-only surface here — the ticketing family closes the
+# investigation→action loop (04 §2.2 Handoff), so the adapter appears only in the
+# action sections. Incident enrichment/query verbs (a read surface) are Phase F+.
+#
+# password is an x-secret reference (11 §4.3) resolved to plaintext before
+# configure. This is a single-instance setup; for a multi-organization
+# deployment, add `scope: <org>` to bind one instance per child organization
+# (03 §3.5), exactly as the CrowdStrike example does.
+
+tenant: demo
+
+# --- write side (08 §4) ---
+action_adapters:
+  servicenow:
+    class: native_api
+    enabled: true
+    adapter: servicenow
+    config:
+      instance_url: https://YOUR-INSTANCE.service-now.com
+      username: YOUR_SNOW_USER
+      password: "keychain://reckon/servicenow-password"
+      table: incident
+    actions: # per-op allowlist, NO wildcard (11 §5)
+      - create_incident
+      - add_comment
+      - set_state
+      - close_incident
+
+action_bindings:
+  # ticket.create targets the DESTINATION assignment group; the entities the
+  # ticket concerns go in evidence_refs, not targets (04 §2.2). short_description
+  # and description come from the x-action parameters the agent proposes.
+  # Params map the ENGINE's canonical ticket vocabulary (the agent sends
+  # summary/description/body/to_status/resolution) onto ServiceNow incident
+  # fields. Optional inputs are marked `?` so a missing one omits the field
+  # instead of rejecting the binding (03 §3.3.4).
+  ticket.create:
+    - action_type: ticket.create
+      adapter: servicenow
+      operation: create_incident
+      priority: 200
+      params:
+        assignment_group: "${target.resolved_identifier}"
+        short_description: "${parameters.summary}"
+        description: "${parameters.description?}"
+        assigned_to: "${parameters.assignee?}"
+        urgency: "${parameters.urgency ?? 3 - Low}"
+
+  # comment / transition / close target the incident itself — the adapter accepts
+  # either a sys_id or a display number (INC…) and resolves the number to sys_id.
+  ticket.comment:
+    - action_type: ticket.comment
+      adapter: servicenow
+      operation: add_comment
+      priority: 200
+      params:
+        ticket: "${target.resolved_identifier}"
+        work_notes: "${parameters.body}"
+
+  ticket.transition:
+    - action_type: ticket.transition
+      adapter: servicenow
+      operation: set_state
+      priority: 200
+      params:
+        ticket: "${target.resolved_identifier}"
+        state: "${parameters.to_status}"
+
+  ticket.close:
+    - action_type: ticket.close
+      adapter: servicenow
+      operation: close_incident
+      priority: 200
+      params:
+        ticket: "${target.resolved_identifier}"
+        close_notes: "${parameters.resolution ?? Closed by reckon}"

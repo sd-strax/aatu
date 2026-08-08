@@ -26,6 +26,9 @@ var crowdstrikeFalconManifest []byte
 //go:embed manifests/crowdstrike-response.yaml
 var crowdstrikeResponseManifest []byte
 
+//go:embed manifests/servicenow.yaml
+var servicenowManifest []byte
+
 // Bundled is one first-party adapter reckon can install.
 type Bundled struct {
 	Name string
@@ -41,6 +44,7 @@ var registry = map[string]Bundled{
 	"greynoise":            {Name: "greynoise", Manifest: greynoiseManifest, Binary: "reckon-adapter-greynoise"},
 	"crowdstrike-falcon":   {Name: "crowdstrike-falcon", Manifest: crowdstrikeFalconManifest, Binary: "reckon-adapter-crowdstrike-falcon"},
 	"crowdstrike-response": {Name: "crowdstrike-response", Manifest: crowdstrikeResponseManifest, Binary: "reckon-adapter-crowdstrike-response"},
+	"servicenow":           {Name: "servicenow", Manifest: servicenowManifest, Binary: "reckon-adapter-servicenow"},
 }
 
 // Get returns the bundled adapter for a name.

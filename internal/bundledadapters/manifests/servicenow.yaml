@@ -1,0 +1,43 @@
+# Install manifest for the ServiceNow ticketing adapter (design/11 §3;
+# implementation/adapter-candidates.md — Phase F ticketing).
+#
+# NATIVE_API class: a static Go binary with no runtime block (no venv, no vendor
+# package, no child process) — the reckon plugin protocol on stdio and a
+# hand-rolled Basic-auth + HTTPS client to the ServiceNow Table API
+# (/api/now/table/incident). It serves the ticketing family — the
+# operational-handoff vehicle (04 §2.2 Handoff; 07 §7.1): ticket.create /
+# ticket.comment / ticket.transition / ticket.close.
+#
+# ticket.create is made idempotent against re-dispatch through the incident
+# correlation_id field (08 §6a): the idempotency key is stamped on create and
+# looked up before a second POST, so a retry-in-budget never opens a duplicate.
+# The target is the destination assignment group (create) or the incident
+# sys_id/number (comment/transition/close), which the engine resolves at request
+# time (08 §4).
+manifest_version: 1
+name: servicenow
+version: 0.1.0
+protocol_versions: [1]
+class: NATIVE_API
+exec: ["./reckon-adapter-servicenow"]
+# no runtime: — native static binary (12 §2)
+summary: # CLAIMED — the describe handshake is the authority (11 §3)
+  action_types: [ticket.create, ticket.comment, ticket.transition, ticket.close]
+config_schema:
+  type: object
+  required: [instance_url, username, password]
+  properties:
+    instance_url:
+      type: string
+      format: uri
+      description: ServiceNow instance base URL, e.g. https://dev12345.service-now.com
+    username:
+      type: string
+      description: ServiceNow user for Basic auth (needs write on the incident table)
+    password:
+      type: string
+      x-secret: true # the host resolves the reference to plaintext before configure (11 §4.3)
+      description: ServiceNow password, given as a secret reference (keychain:// / env:// / vault://)
+    table:
+      type: string
+      description: Table the ticketing family writes to; defaults to 'incident'

@@ -12,6 +12,7 @@ build: ## Build reckon, reckon-backend, and the bundled adapters to bin/
 	go build -o bin/reckon-adapter-greynoise ./cmd/reckon-adapter-greynoise
 	go build -o bin/reckon-adapter-crowdstrike-falcon ./cmd/reckon-adapter-crowdstrike-falcon
 	go build -o bin/reckon-adapter-crowdstrike-response ./cmd/reckon-adapter-crowdstrike-response
+	go build -o bin/reckon-adapter-servicenow ./cmd/reckon-adapter-servicenow
 
 image: ## Build the engine container image (05 §12.4): supervisor-in-container, runtimes baked, one data volume
 	docker build -t reckon:dev .
