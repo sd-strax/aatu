@@ -249,6 +249,10 @@ func TestUnwrapStringifiedObject(t *testing.T) {
 		{"plain string left alone", `"just text"`, `"just text"`},
 		{"stringified non-object left alone", `"[1,2,3]"`, `"[1,2,3]"`},
 		{"stringified invalid json left alone", `"{not json}"`, `"{not json}"`},
+		// The real malformation that blocked every ticket create: a stringified
+		// object with a stray trailing ']' the model appended. Salvage the
+		// leading object instead of failing the whole action.
+		{"stringified object with trailing junk", `"{\"summary\":\"x\",\"issue_type\":\"Task\"}]"`, `{"issue_type":"Task","summary":"x"}`},
 	}
 	for _, c := range cases {
 		got := string(UnwrapStringifiedObject(json.RawMessage(c.in)))

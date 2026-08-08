@@ -285,11 +285,21 @@ func UnwrapStringifiedObject(raw json.RawMessage) json.RawMessage {
 	if !strings.HasPrefix(trimmed, "{") {
 		return raw // a plain string, not a stringified object — leave it
 	}
+	// Decode the FIRST complete JSON object and tolerate trailing garbage: the
+	// model sometimes appends a stray ']' or other junk after the object (a
+	// real, repeated malformation that blocked every ticket create), which
+	// json.Unmarshal rejects but a streaming decoder does not. Re-marshal the
+	// clean object so the backend receives well-formed bytes.
+	dec := json.NewDecoder(strings.NewReader(trimmed))
 	var probe map[string]json.RawMessage
-	if json.Unmarshal([]byte(trimmed), &probe) != nil {
-		return raw // not valid object JSON — let the backend reject honestly
+	if dec.Decode(&probe) != nil {
+		return raw // not even a leading JSON object — let the backend reject honestly
 	}
-	return json.RawMessage(trimmed)
+	clean, err := json.Marshal(probe)
+	if err != nil {
+		return raw
+	}
+	return json.RawMessage(clean)
 }
 
 // parametersSchema builds the request_action `parameters` property as a concrete
