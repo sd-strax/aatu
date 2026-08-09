@@ -12,6 +12,8 @@ Two corpora at v0+:
 
 Both expose the same retrieval surface to the agent loop. Both are per-tenant. Both audit-link into the reasoning thread. Both inform the LLM as context, not as control.
 
+> **Boundary note (2026-08).** The storage and retrieval *mechanism* described here is being factored into a standalone, consumer-neutral **memory substrate** — spec at `knowledge/design/00-substrate.md`. That component owns the entry store, recall, similarity bands, content-hash attestation, and the wire contract; it knows nothing of STIX, Interpretations, or the agent loop. This spec (06) is becoming the *consumer-side* half: how reckon's agent loop consults the substrate, audit-links consultations into Interpretation events (§6), maps retrieval into CEL context (§12 → 04 §4.2), and scaffolds the system prompt (§5.3). Where the two overlap, the substrate spec is authoritative for the mechanism; 06 is authoritative for reckon's use of it. The boundary is enforced in code now (the `knowledge/` package imports no reckon domain types) and extracts to its own repo on the triggers in that spec's §12.
+
 ## Thread scope
 
 - The two corpora — schemas, lifecycle, governance
@@ -429,6 +431,7 @@ The post-conclusion pipeline (07) may generate candidate SOPs from concluded inv
 - **04-action-authorization.md** — the CEL context extension `ctx.sop_guidance.*` and `ctx.similarity.*` (05 §14.3) lets policies condition on knowledge retrieval outcomes
 - **05-component-architecture.md** — the knowledge service's deployment shape, isolation properties, and lift handling
 - **07-post-conclusion-outputs.md** — the `SummarizeForKnowledgeIndex` workflow and the candidate-SOP generation pipeline that populates the corpora
+- **knowledge/design/00-substrate.md** — the standalone memory substrate: the entry store, recall/similarity, content-hash attestation, and the `/v1` wire contract this service consumes. Authoritative for the retrieval mechanism; 06 owns reckon's consumption of it. (Reference is one-way: the substrate spec uses no reckon vocabulary.)
 
 ---
 
