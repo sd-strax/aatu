@@ -89,6 +89,53 @@ export function activate(context: vscode.ExtensionContext): void {
       documents.showDraft();
     }),
 
+    // Seed an investigation FROM a system-of-record case (14-case-seed.md §4.1):
+    // filter → pick → seed. The read fails closed server-side, so a bad case id
+    // never produces a half-loaded investigation.
+    vscode.commands.registerCommand("reckon.seedFromCase", async () => {
+      if (!session.signedIn) {
+        void vscode.window.showWarningMessage("reckon: sign in before seeding an investigation");
+        return;
+      }
+      const filter = await vscode.window.showInputBox({
+        title: "Seed investigation from a case",
+        prompt: "Filter your case system of record (blank = recent). A keyword from the case title works.",
+        placeHolder: "reimage",
+        ignoreFocusOut: true,
+      });
+      if (filter === undefined) {
+        return; // cancelled
+      }
+      let cases;
+      try {
+        cases = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "reckon: querying the case system of record…" },
+          () => client.queryExternalCases(filter.trim() || undefined),
+        );
+      } catch (err) {
+        void vscode.window.showErrorMessage(`reckon: case query failed — ${errText(err)}`);
+        return;
+      }
+      if (!cases.length) {
+        void vscode.window.showInformationMessage("reckon: no matching cases in the system of record.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        cases.map((c) => ({ label: c.number, description: c.status, detail: c.title, caseNumber: c.number })),
+        { title: "Select a case to investigate", matchOnDetail: true, ignoreFocusOut: true },
+      );
+      if (!pick) {
+        return;
+      }
+      try {
+        const created = await client.createInvestigationFromInput(pick.caseNumber, "case");
+        documents.show(created.id, created.title);
+        void vscode.commands.executeCommand("reckon.refreshInvestigations");
+      } catch (err) {
+        void vscode.window.showErrorMessage(`reckon: seed from case failed — ${errText(err)}`);
+      }
+    }),
+
     // Rename an investigation from the tree's context menu (human curation — the
     // aggregate bars an AI delegate). Renaming happens ON the document: this
     // reveals the panel and pops its in-document rename card, so the input is

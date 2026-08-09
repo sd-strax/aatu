@@ -70,6 +70,11 @@
         "icon": "$(add)"
       },
       {
+        "command": "reckon.seedFromCase",
+        "category": "reckon",
+        "title": "Seed Investigation from Case…"
+      },
+      {
         "command": "reckon.openInvestigation",
         "category": "reckon",
         "title": "Open Investigation"
@@ -143,6 +148,10 @@
         },
         {
           "command": "reckon.newInvestigation",
+          "when": "reckon.signedIn"
+        },
+        {
+          "command": "reckon.seedFromCase",
           "when": "reckon.signedIn"
         },
         {

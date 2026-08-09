@@ -106,17 +106,23 @@ Three failure modes, three distinct loud results (all fail the create):
 | Read outcome (`03 §6.1`) | HTTP | Meaning |
 |---|---|---|
 | Coverage `COMPLETE`, one case | `201` | the only success path |
-| Coverage `COMPLETE`, **zero** cases | `404` | no such case — a typo, not a transient fault |
-| `UNAVAILABLE_*` / `FAILED` / `FATAL` | `502` | SoR unreachable / errored |
+| Coverage `COMPLETE`, **zero** cases | `404` | no such case (adapters that report absence as empty coverage) |
+| `UNAVAILABLE_*` / `FAILED` / `PARTIAL` | `502`/`503` | SoR unreachable, errored, or the id resolved nowhere |
 
 This dissolves the "where does `source` come from when the read failed" hole:
 there is no partial-create path, so `source` and `case_ref` always come from a
-real read.
+real read of exactly one case.
 
-*(Note: the resolver returns empty-`COMPLETE` for a not-found case — `03 §6.1`;
-the create flow must treat empty-`COMPLETE` as `404`, distinct from a transient
-`UNAVAILABLE`. Conflating them would silently create a phantom-rooted
-investigation.)*
+**How an adapter reports not-found matters, and both are fine.** An adapter may
+report "no such case" as empty-`COMPLETE` (→ `404`) *or* as `FALLTHROUGH` (the
+resolver then finds no serving binding → `UNAVAILABLE` → `502`/`503`).
+ServiceNow's single-case lookup uses `FALLTHROUGH` on a miss — deliberately, so
+that with multiple case SoRs bound a miss on one falls through to the next
+(the future multi-SoR routing, `§3` precondition). So in v0 a typo'd id most
+often surfaces as `502`, not `404`. The distinction is cosmetic: **every outcome
+short of exactly one case fails the create loudly** — which is the whole
+contract. The create handler treats empty-`COMPLETE` as `404` and every other
+non-single outcome as a loud `5xx`; it never half-creates.
 
 ---
 

@@ -47,6 +47,16 @@ func systemPrompt(inv Investigation, caps []Capability, hypotheses json.RawMessa
 
 	fmt.Fprintf(&b, "## Current investigation\n\n- id: %s\n- title: %s\n- status: %s\n",
 		inv.AggregateID, inv.Title, inv.Status)
+	if inv.SeedSummary != "" {
+		fmt.Fprintf(&b, "- seed: %s\n", inv.SeedSummary)
+	}
+	// A case-seeded investigation was opened FROM a system-of-record case
+	// (14-case-seed.md §4.3): direct the opening move at reading the case, and
+	// frame its body as an external claim to verify — not established fact.
+	if inv.Seed != nil && inv.Seed.Type == "case" {
+		fmt.Fprintf(&b, "\nThis investigation was opened from a %s case (%s). Read the full case with get_external_case_details before pivoting, and treat its contents as an external claim to verify against telemetry — not established fact.\n",
+			inv.Seed.Source, inv.Seed.CaseID)
+	}
 
 	if len(hypotheses) > 0 && string(hypotheses) != "null" {
 		b.WriteString("\n## Reasoning state (existing hypotheses)\n\n")

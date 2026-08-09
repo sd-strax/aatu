@@ -251,6 +251,9 @@ func TestSeed_Validation(t *testing.T) {
 		{"entity missing ref", &Seed{Type: SeedEntity}, false},
 		{"question", &Seed{Type: SeedQuestion, HypothesisStatement: "service accounts abused for RDP?"}, true},
 		{"question empty", &Seed{Type: SeedQuestion}, false},
+		{"case", &Seed{Type: SeedCase, CaseID: "INC0010001", Source: "servicenow"}, true},
+		{"case missing source", &Seed{Type: SeedCase, CaseID: "INC0010001"}, false},
+		{"case missing id", &Seed{Type: SeedCase, Source: "servicenow"}, false},
 		{"unknown type", &Seed{Type: "vibes"}, false},
 	}
 	for _, tc := range cases {
@@ -274,5 +277,10 @@ func TestSeed_Summary(t *testing.T) {
 	}
 	if got := (Seed{Type: SeedQuestion, HypothesisStatement: "q?"}).Summary(); got != "q?" {
 		t.Errorf("question summary = %q", got)
+	}
+	// A case seed carries the "case " prefix so the triage queue distinguishes it
+	// from an alert without reading seed_type (14 §1).
+	if got := (Seed{Type: SeedCase, CaseID: "INC0010001", Source: "servicenow"}).Summary(); got != "case servicenow: INC0010001" {
+		t.Errorf("case summary = %q", got)
 	}
 }

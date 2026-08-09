@@ -232,6 +232,22 @@ type Investigation struct {
 	AggregateID string `json:"aggregate_id"`
 	Title       string `json:"title"`
 	Status      string `json:"status"`
+	// Seed is what kicked the investigation off (01 §Extension 1) — rendered into
+	// the session prompt so the agent's opening move fits the entry point (an
+	// alert to triage, an entity to pivot on, a case to read). Absent on pre-seed
+	// investigations.
+	Seed        *Seed  `json:"seed,omitempty"`
+	SeedSummary string `json:"seed_summary,omitempty"`
+}
+
+// Seed is the subset of the investigation's root the prompt renders (the fields
+// that shape the agent's opening move). CaseID/Source drive the case-seed
+// directive (14-case-seed.md §4.3).
+type Seed struct {
+	Type    string `json:"type"`
+	Source  string `json:"source,omitempty"`
+	CaseID  string `json:"case_id,omitempty"`
+	CaseRef string `json:"case_ref,omitempty"`
 }
 
 // APIError is a non-2xx backend response, surfaced with its body so the model

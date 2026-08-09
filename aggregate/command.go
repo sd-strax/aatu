@@ -68,6 +68,14 @@ type Seed struct {
 
 	// QuestionSeed (the hunt entry: hypothesis-rooted)
 	HypothesisStatement string `json:"hypothesis_statement,omitempty"`
+
+	// CaseSeed (14-case-seed.md): a system-of-record case roots the
+	// investigation. Source (shared with AlertSeed) is the SoR name; CaseRef is
+	// the class-2005 case ObservedData minted at seeding (03 §2.9), a frozen
+	// snapshot. Deliberately distinct from AlertSeed: cases are investigated,
+	// tickets are acted upon, and `source` alone cannot discriminate the two.
+	CaseID  string `json:"case_id,omitempty"`
+	CaseRef string `json:"case_ref,omitempty"`
 }
 
 // Seed type tags.
@@ -75,6 +83,7 @@ const (
 	SeedAlert    = "alert"
 	SeedEntity   = "entity"
 	SeedQuestion = "question"
+	SeedCase     = "case"
 )
 
 // Summary renders the seed's one-line display form (the triage queue's
@@ -93,6 +102,14 @@ func (s Seed) Summary() string {
 		return s.EntityRef
 	case SeedQuestion:
 		return s.HypothesisStatement
+	case SeedCase:
+		// "case servicenow: INC0010001" — the alert seed's source:id shape,
+		// prefixed so the triage queue distinguishes the two without reading
+		// seed_type (14 §1).
+		if s.Source != "" {
+			return "case " + s.Source + ": " + s.CaseID
+		}
+		return "case " + s.CaseID
 	}
 	return ""
 }
@@ -111,8 +128,12 @@ func (s Seed) validate() error {
 		if s.HypothesisStatement == "" {
 			return errors.New("CreateInvestigation: a question seed requires hypothesis_statement")
 		}
+	case SeedCase:
+		if s.CaseID == "" || s.Source == "" {
+			return errors.New("CreateInvestigation: a case seed requires case_id and source")
+		}
 	default:
-		return fmt.Errorf("CreateInvestigation: unknown seed type %q (alert | entity | question)", s.Type)
+		return fmt.Errorf("CreateInvestigation: unknown seed type %q (alert | entity | question | case)", s.Type)
 	}
 	return nil
 }

@@ -46,6 +46,7 @@ func seedBody(s *aggregate.Seed) *SeedBody {
 		Type: s.Type, AlertID: s.AlertID, Source: s.Source,
 		DetectionFindingRef: s.DetectionFindingRef, EntityRef: s.EntityRef,
 		EntityIdentifier: s.EntityIdentifier, HypothesisStatement: s.HypothesisStatement,
+		CaseID: s.CaseID, CaseRef: s.CaseRef,
 	}
 }
 
@@ -59,22 +60,27 @@ type VerdictView struct {
 
 // SeedBody is the client shape of the investigation's root (01 §Extension 1).
 type SeedBody struct {
-	Type                string `json:"type"` // alert | entity | question
+	Type                string `json:"type"` // alert | entity | question | case
 	AlertID             string `json:"alert_id,omitempty"`
 	Source              string `json:"source,omitempty"`
 	DetectionFindingRef string `json:"detection_finding_ref,omitempty"`
 	EntityRef           string `json:"entity_ref,omitempty"`
 	EntityIdentifier    string `json:"entity_identifier,omitempty"`
 	HypothesisStatement string `json:"hypothesis_statement,omitempty"`
+	CaseID              string `json:"case_id,omitempty"`
+	CaseRef             string `json:"case_ref,omitempty"`
 }
 
 // SeedInputBody is the raw analyst-typed seed (design/ui/02 §2.7): the value the
 // analyst rooted on plus their confirmed kind. The server resolves it to a full
-// seed — minting the STIX id for an entity — so the workbench never handles ids.
-// Kind is "entity" | "question" (empty = infer); alerts carry an explicit Seed.
+// seed — minting the STIX id for an entity, or reading the case for a case seed
+// (14-case-seed.md §3) — so the workbench never handles ids. Kind is
+// "entity" | "question" | "case" (empty = infer entity/question); alerts carry
+// an explicit Seed. SourceScope applies to a case seed's read (14 §3).
 type SeedInputBody struct {
-	Value string `json:"value"`
-	Kind  string `json:"kind,omitempty"`
+	Value       string `json:"value"`
+	Kind        string `json:"kind,omitempty"`
+	SourceScope string `json:"source_scope,omitempty"`
 }
 
 // CreateInvestigationRequest is the body of POST /api/investigations. Exactly
@@ -209,6 +215,20 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 	// entity so the analyst never handles ids. A fully-formed Seed (alerts)
 	// bypasses resolution.
 	switch {
+	case req.SeedInput != nil && req.SeedInput.Kind == aggregate.SeedCase && req.Seed == nil:
+		// A case seed reads the SoR through the capability layer and fails closed
+		// on anything short of exactly one case (14 §2/§3) — not the pure
+		// identity resolution the entity/question path does.
+		resolved, status, err := b.resolveCaseSeed(r, req.SeedInput.Value, req.SeedInput.SourceScope)
+		if err != nil {
+			writeJSONError(w, status, "seed from case: "+err.Error())
+			return
+		}
+		seed := resolved.Seed
+		cmd.Seed = &seed
+		if cmd.Title == "" {
+			cmd.Title = deriveSeedTitle(resolved.Display)
+		}
 	case req.SeedInput != nil && req.Seed == nil:
 		resolved, err := resolveSeedInput(b.identityResolver(), req.SeedInput.Value, req.SeedInput.Kind)
 		if err != nil {
@@ -225,6 +245,7 @@ func (b *Backend) createInvestigation(w http.ResponseWriter, r *http.Request) {
 			Type: req.Seed.Type, AlertID: req.Seed.AlertID, Source: req.Seed.Source,
 			DetectionFindingRef: req.Seed.DetectionFindingRef, EntityRef: req.Seed.EntityRef,
 			EntityIdentifier: req.Seed.EntityIdentifier, HypothesisStatement: req.Seed.HypothesisStatement,
+			CaseID: req.Seed.CaseID, CaseRef: req.Seed.CaseRef,
 		}
 		if cmd.Title == "" {
 			cmd.Title = deriveSeedTitle(cmd.Seed.Summary())

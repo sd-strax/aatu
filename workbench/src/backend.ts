@@ -69,7 +69,7 @@ export interface InvestigationSummary {
 
 /** The investigation's root (mirrors server.SeedBody, 01 §Extension 1). */
 export interface Seed {
-  type: string; // alert | entity | question
+  type: string; // alert | entity | question | case
   alertId?: string;
   source?: string;
   detectionFindingRef?: string;
@@ -77,6 +77,15 @@ export interface Seed {
   /** The human identifier an entity seed was rooted on (hostname/IP/hash). */
   entityIdentifier?: string;
   hypothesisStatement?: string;
+  caseId?: string;
+  caseRef?: string;
+}
+
+/** One case from query_external_cases, for the seed picker (14-case-seed.md §4.1). */
+export interface CaseSummary {
+  number: string;
+  title: string;
+  status: string;
 }
 
 /** The verdict of record (mirrors server.VerdictView) — absent when none. */
@@ -349,6 +358,7 @@ interface RawInvestigation {
     type?: string; alert_id?: string; source?: string;
     detection_finding_ref?: string; entity_ref?: string;
     entity_identifier?: string; hypothesis_statement?: string;
+    case_id?: string; case_ref?: string;
   };
   seed_summary?: string;
 }
@@ -364,6 +374,8 @@ function mapSeed(s: RawInvestigation["seed"]): Seed | undefined {
     entityRef: s.entity_ref,
     entityIdentifier: s.entity_identifier,
     hypothesisStatement: s.hypothesis_statement,
+    caseId: s.case_id,
+    caseRef: s.case_ref,
   };
 }
 
@@ -1083,6 +1095,32 @@ export class BackendClient {
     const body: Record<string, unknown> = { seed_input: { value, kind } };
     if (title) body.title = title;
     return this.mapCreated(await this.authedPost<RawInvestigation>("/api/investigations", body));
+  }
+
+  /**
+   * Query the case system of record for the seed picker (14-case-seed.md §4.1):
+   * runs query_external_cases and pulls each case's metadata out of the
+   * class-2005 ObservedData extensions the case normalizer wrote (03 §2.9).
+   */
+  async queryExternalCases(filter?: string, status?: string): Promise<CaseSummary[]> {
+    const extra: Record<string, unknown> = {};
+    if (filter) extra.filter = filter;
+    if (status) extra.status = status;
+    const res = await this.invokeCapability("query_external_cases", { extra });
+    const out: CaseSummary[] = [];
+    for (const n of res.normalized as Array<{ observed_data?: Array<{ extensions?: Record<string, unknown> }> }>) {
+      for (const od of n.observed_data ?? []) {
+        const ext = od.extensions ?? {};
+        const num = typeof ext.case_number === "string" ? ext.case_number : "";
+        if (!num) continue;
+        out.push({
+          number: num,
+          title: typeof ext.title === "string" ? ext.title : "",
+          status: typeof ext.status === "string" ? ext.status : "",
+        });
+      }
+    }
+    return out;
   }
 
   private mapCreated(r: RawInvestigation): InvestigationDetail {
