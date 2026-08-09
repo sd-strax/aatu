@@ -136,13 +136,18 @@ func (b *bridge) getIncident(ctx context.Context, client *snowClient, params map
 // each into a class-2005 event. An empty result set is a valid (empty) response
 // — evidence of absence, not an error.
 func (b *bridge) queryIncidents(ctx context.Context, client *snowClient, params map[string]any) (any, *wireError) {
+	filter, _ := params["filter"].(string)
+	status, _ := params["status"].(string)
+
 	var clauses []string
-	if filter, _ := params["filter"].(string); filter != "" {
+	if filter != "" {
 		clauses = append(clauses, "short_descriptionLIKE"+filter)
 	}
-	if status, _ := params["status"].(string); status != "" {
-		clauses = append(clauses, "state="+status)
-	}
+	// status is NOT put in the encoded query: a ServiceNow encoded query matches
+	// the STORED numeric state code, not the display label the agent speaks ("In
+	// Progress"). Filter client-side on the display-value label the read already
+	// returns — robust to per-instance custom state values, unlike a hardcoded
+	// label→code map.
 	encoded := strings.Join(clauses, "^")
 
 	limit := 50
@@ -152,14 +157,30 @@ func (b *bridge) queryIncidents(ctx context.Context, client *snowClient, params 
 	if limit > 200 {
 		limit = 200
 	}
+	// A status filter runs client-side, so fetch a wider page to still fill the
+	// limit after filtering (bounded by the 200 cap).
+	fetch := limit
+	if status != "" {
+		if fetch *= 4; fetch > 200 {
+			fetch = 200
+		}
+	}
 
-	recs, status, err := client.queryIncidents(ctx, encoded, limit)
+	recs, code, err := client.queryIncidents(ctx, encoded, fetch)
 	if err != nil {
-		return nil, classErr(-32000, err.Error(), readClass(status))
+		return nil, classErr(-32000, err.Error(), readClass(code))
 	}
 	events := make([]ocsfEvent, 0, len(recs))
 	for _, rec := range recs {
+		if status != "" {
+			if label, _ := rec["state"].(string); !strings.EqualFold(label, status) {
+				continue
+			}
+		}
 		events = append(events, toWire(b.caseToOcsf(rec)))
+		if len(events) >= limit {
+			break
+		}
 	}
 	return invokeResult{SourceTool: "servicenow", Events: events}, nil
 }

@@ -448,6 +448,37 @@ func TestInvokeQueryIncidents(t *testing.T) {
 	}
 }
 
+// TestInvokeQueryIncidentsStatusFilter: the status filter runs client-side on
+// the display label (ServiceNow's encoded query matches the stored numeric
+// state, not the label), case-insensitively.
+func TestInvokeQueryIncidentsStatusFilter(t *testing.T) {
+	h := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"result":[`+
+			`{"sys_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","number":"INC1","short_description":"a","state":"In Progress","opened_at":"2026-04-20 14:32:11"},`+
+			`{"sys_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","number":"INC2","short_description":"b","state":"New","opened_at":"2026-04-20 14:32:11"}]}`)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(h))
+	t.Cleanup(srv.Close)
+
+	b := configuredBridge(t, srv.URL)
+	raw, _ := json.Marshal(adapterplugin.InvokeParams{
+		Operation: "query_incidents", Params: map[string]any{"status": "new"},
+	})
+	res, werr := b.invoke(context.Background(), raw)
+	if werr != nil {
+		t.Fatalf("invoke: %v", werr)
+	}
+	ir := res.(invokeResult)
+	if len(ir.Events) != 1 {
+		t.Fatalf("status filter kept %d events, want 1 (the New case)", len(ir.Events))
+	}
+	fi, _ := ir.Events[0].Raw["finding_info"].(map[string]any)
+	if fi["uid"] != "INC2" {
+		t.Errorf("kept case uid = %v, want INC2 (the one whose label matched 'new')", fi["uid"])
+	}
+}
+
 // TestInvokeUnknownOperation: an unknown read op is FALLTHROUGH, not a crash.
 func TestInvokeUnknownOperation(t *testing.T) {
 	b := configuredBridge(t, "https://acme.service-now.com")
