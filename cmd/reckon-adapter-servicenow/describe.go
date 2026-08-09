@@ -20,6 +20,29 @@ import (
 //     (sys_id or number — the adapter resolves a number to its sys_id).
 func describe() adapterplugin.DescribeResult {
 	return adapterplugin.DescribeResult{
+		// Read surface (03 §2.9): the external-case verbs read the incident table
+		// back as class-2005 Incident Findings. These literals mirror the engine's
+		// DefaultCatalog entries (capability/descriptor.go) — the descriptors are
+		// candidates the engine reconciles into its catalog (§4.2).
+		Verbs: []capability.CapabilityDescriptor{
+			{
+				Verb:   "query_external_cases",
+				Intent: "Search the case management system of record (ServiceNow, Jira SOC, TheHive) for cases matching a filter — the read side of 'have we seen this before?'.",
+				Inputs: []capability.InputParam{
+					{Name: "filter", Type: "string", Required: false, Desc: "free-text query over case title/summary"},
+					{Name: "status", Type: "string", Required: false, Desc: "case status filter, e.g. 'In Progress'"},
+					{Name: "window", Type: "time_window", Required: false, Desc: "time bound; defaults to the tenant investigation window"},
+					{Name: "limit", Type: "int", Required: false, Desc: "max cases to return (default 50)"},
+				},
+				Output: "list<observed_data>",
+			},
+			{
+				Verb:   "get_external_case_details",
+				Intent: "Fetch full content for one case in the SoR (title, status, summary, link) — a follow-up after query_external_cases returns hits worth deep-diving.",
+				Inputs: []capability.InputParam{{Name: "case_id", Type: "string", Required: true, Desc: "the case id/number, e.g. INC0010042 or a sys_id"}},
+				Output: "observed_data",
+			},
+		},
 		ActionTypes: []action.ActionDescriptor{
 			{
 				ActionType: "ticket.create",
@@ -70,6 +93,25 @@ func describe() adapterplugin.DescribeResult {
 			{Name: "add_comment", Params: objSchema()},
 			{Name: "set_state", Params: objSchema()},
 			{Name: "close_incident", Params: objSchema()},
+			{Name: "get_incident", Params: objSchema()},
+			{Name: "query_incidents", Params: objSchema()},
+		},
+		DefaultReadBindings: []adapterplugin.ReadBinding{
+			// BINDING VOCABULARY (critical, 03 §3.3): the LEFT side is the ADAPTER's
+			// operation param name (what caseToOcsf/invoke reads); the ${...} RIGHT
+			// side is the ENGINE's read-call input root (CallInput.Extra keys /
+			// entity / window), templated by the resolver. get_external_case_details's
+			// declared input is `case_id`; query_external_cases's are
+			// `filter`/`status`/`limit`. Optional inputs are marked `?` so a missing
+			// one OMITS the param rather than rejecting the binding (§3.3.4).
+			{Verb: "get_external_case_details", Adapter: "servicenow", Operation: "get_incident", Priority: bindingPriority,
+				Params: map[string]any{"case_id": "${case_id}"}},
+			{Verb: "query_external_cases", Adapter: "servicenow", Operation: "query_incidents", Priority: bindingPriority,
+				Params: map[string]any{
+					"filter": "${filter?}",
+					"status": "${status?}",
+					"limit":  "${limit?}",
+				}},
 		},
 		DefaultWriteBindings: []action.ActionBinding{
 			// Params map the ENGINE's canonical ticket vocabulary (04 §2 catalog:

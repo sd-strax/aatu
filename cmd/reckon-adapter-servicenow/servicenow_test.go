@@ -19,10 +19,10 @@ import (
 // sys_id, indexes correlation_id and number for the two query paths the adapter
 // uses, and counts POSTs so a test can prove idempotent-create dedup.
 type snowMock struct {
-	mu        sync.Mutex
-	byCorr    map[string]*mockRec
-	byNumber  map[string]*mockRec
-	bySysID   map[string]*mockRec
+	mu         sync.Mutex
+	byCorr     map[string]*mockRec
+	byNumber   map[string]*mockRec
+	bySysID    map[string]*mockRec
 	seq        int
 	postCount  int
 	createBody map[string]any // last POST body, for assertion
@@ -306,5 +306,154 @@ func TestTransportAmbiguityUnknown(t *testing.T) {
 	res := dispatch(t, b, "create_incident", map[string]any{"assignment_group": "SOC", "short_description": "x"}, "k")
 	if res.PerTargetResults["SOC"] != action.TargetUnknown || res.ErrorClass != action.WriteRetryable {
 		t.Fatalf("result = %+v, want UNKNOWN/RETRYABLE", res)
+	}
+}
+
+// --- read side (03 §2.9) ----------------------------------------------------
+
+// caseServer is a read-only Table API double serving the case fields the read
+// verbs fetch. It returns a fixed record on the get-by-sys_id path and a fixed
+// list on the query path, resolving INC0010042→its sys_id for the number path.
+func caseServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	const sysID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	rec := func(num, short string) string {
+		return fmt.Sprintf(`{"sys_id":%q,"number":%q,"short_description":%q,"description":"full body",`+
+			`"state":"In Progress","priority":"2 - High","assignment_group":"SOC-Tier3","opened_at":"2026-04-20 14:32:11"}`,
+			sysID, num, short)
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:secret"))
+	h := func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != wantAuth {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"User Not Authenticated"},"status":"failure"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// get-by-sys_id: /api/now/table/incident/<sysid>
+		if id := strings.TrimPrefix(r.URL.Path, "/api/now/table/incident/"); id != r.URL.Path && id != "" {
+			_, _ = fmt.Fprintf(w, `{"result":%s}`, rec("INC0010042", "Suspicious RDP"))
+			return
+		}
+		// number-resolution (findOne) returns the minimal record shape.
+		q := r.URL.Query().Get("sysparm_query")
+		if v, ok := strings.CutPrefix(q, "number="); ok {
+			_, _ = fmt.Fprintf(w, `{"result":[{"sys_id":%q,"number":%q,"state":"In Progress"}]}`, sysID, v)
+			return
+		}
+		// query_incidents: return a two-record list.
+		_, _ = fmt.Fprintf(w, `{"result":[%s,%s]}`, rec("INC0010042", "Suspicious RDP"), rec("INC0010043", "Odd logon"))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(h))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestGetIncidentByID: a sys_id is fetched directly (no number lookup) and the
+// full case fields come back as a map.
+func TestGetIncidentByID(t *testing.T) {
+	srv := caseServer(t)
+	c := newSnowClient(srv.URL, "admin", "secret", "incident")
+	rec, status, err := c.getIncidentByID(context.Background(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("getIncidentByID: %v (status %d)", err, status)
+	}
+	if rec["short_description"] != "Suspicious RDP" {
+		t.Errorf("short_description = %v, want 'Suspicious RDP'", rec["short_description"])
+	}
+	if rec["state"] != "In Progress" {
+		t.Errorf("state = %v, want display label 'In Progress'", rec["state"])
+	}
+}
+
+// TestQueryIncidents: the query path returns the full list with case fields.
+func TestQueryIncidents(t *testing.T) {
+	srv := caseServer(t)
+	c := newSnowClient(srv.URL, "admin", "secret", "incident")
+	recs, status, err := c.queryIncidents(context.Background(), "short_descriptionLIKErdp", 50)
+	if err != nil {
+		t.Fatalf("queryIncidents: %v (status %d)", err, status)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("got %d records, want 2", len(recs))
+	}
+	if recs[0]["number"] != "INC0010042" || recs[0]["assignment_group"] != "SOC-Tier3" {
+		t.Errorf("first record = %+v, want number/assignment_group set", recs[0])
+	}
+}
+
+// TestCaseToOcsf: a Table API record shapes into a class-2005 payload the
+// caseNormalizer reads, with the SoR deep-link built from the sys_id.
+func TestCaseToOcsf(t *testing.T) {
+	b := configuredBridge(t, "https://acme.service-now.com")
+	p := b.caseToOcsf(map[string]any{
+		"number": "INC0010042", "sys_id": "sys123", "short_description": "Suspicious RDP",
+		"description": "full body", "state": "In Progress", "priority": "2 - High",
+		"assignment_group": "SOC-Tier3", "opened_at": "2026-04-20 14:32:11",
+	})
+	if p.ClassUID != 2005 {
+		t.Errorf("class_uid = %d, want 2005", p.ClassUID)
+	}
+	fi, _ := p.Raw["finding_info"].(map[string]any)
+	if fi["title"] != "Suspicious RDP" || fi["uid"] != "INC0010042" {
+		t.Errorf("finding_info = %+v, want title/uid set", fi)
+	}
+	if p.Time.IsZero() {
+		t.Error("opened_at did not parse into Time")
+	}
+	um, _ := p.Raw["unmapped"].(map[string]any)
+	if link, _ := um["link"].(string); !strings.Contains(link, "sys_id=sys123") {
+		t.Errorf("unmapped.link = %v, want the sys_id deep-link", um["link"])
+	}
+}
+
+// TestInvokeGetIncident: the invoke routing shapes one case into a class-2005
+// event tagged with the servicenow source_tool.
+func TestInvokeGetIncident(t *testing.T) {
+	srv := caseServer(t)
+	b := configuredBridge(t, srv.URL)
+	raw, _ := json.Marshal(adapterplugin.InvokeParams{
+		Operation: "get_incident", Params: map[string]any{"case_id": "INC0010042"},
+	})
+	res, werr := b.invoke(context.Background(), raw)
+	if werr != nil {
+		t.Fatalf("invoke get_incident: %v", werr)
+	}
+	ir, ok := res.(invokeResult)
+	if !ok {
+		t.Fatalf("invoke result type %T", res)
+	}
+	if ir.SourceTool != "servicenow" || len(ir.Events) != 1 {
+		t.Fatalf("result = %+v, want servicenow/1 event", ir)
+	}
+	if ir.Events[0].ClassUID != 2005 {
+		t.Errorf("event class_uid = %d, want 2005", ir.Events[0].ClassUID)
+	}
+}
+
+// TestInvokeQueryIncidents: the query path returns all matching cases as events.
+func TestInvokeQueryIncidents(t *testing.T) {
+	srv := caseServer(t)
+	b := configuredBridge(t, srv.URL)
+	raw, _ := json.Marshal(adapterplugin.InvokeParams{
+		Operation: "query_incidents", Params: map[string]any{"filter": "rdp", "limit": float64(10)},
+	})
+	res, werr := b.invoke(context.Background(), raw)
+	if werr != nil {
+		t.Fatalf("invoke query_incidents: %v", werr)
+	}
+	ir := res.(invokeResult)
+	if len(ir.Events) != 2 {
+		t.Fatalf("got %d events, want 2", len(ir.Events))
+	}
+}
+
+// TestInvokeUnknownOperation: an unknown read op is FALLTHROUGH, not a crash.
+func TestInvokeUnknownOperation(t *testing.T) {
+	b := configuredBridge(t, "https://acme.service-now.com")
+	raw, _ := json.Marshal(adapterplugin.InvokeParams{Operation: "delete_everything"})
+	_, werr := b.invoke(context.Background(), raw)
+	if werr == nil {
+		t.Fatal("unknown read op should error")
 	}
 }

@@ -1,8 +1,11 @@
 // Command reckon-adapter-servicenow is a NATIVE_API-class reckon adapter
 // (design/11; implementation/adapter-candidates.md — Phase F ticketing) — the
-// write-side bridge to a ServiceNow instance's system of record. It serves the
-// ticketing family (04 §2.2 Handoff; 07 §7.1): ticket.create / ticket.comment /
-// ticket.transition / ticket.close, mapped onto the ServiceNow Table API
+// bridge to a ServiceNow instance's system of record. It serves the ticketing
+// family on the write side (04 §2.2 Handoff; 07 §7.1): ticket.create /
+// ticket.comment / ticket.transition / ticket.close, and the external-case
+// verbs on the read side (03 §2.9): query_external_cases /
+// get_external_case_details, which read the incident table's cases back as
+// class-2005 OCSF Incident Findings. Both map onto the ServiceNow Table API
 // (/api/now/table/incident). Like reckon-adapter-crowdstrike-response it is a
 // static Go binary — no runtime block, no child process — speaking the reckon
 // plugin protocol on stdin/stdout with a hand-rolled Basic-auth HTTPS client.

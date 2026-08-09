@@ -212,6 +212,12 @@ Fetch full content for one case in the SoR, including comments,
 attachments metadata, and linked entity references. Used as a follow-up
 after `query_external_cases` returns hits worth deep-diving.
 
+**Implemented (v0):** ServiceNow, via the native adapter's read surface —
+each incident is shaped as an OCSF Incident Finding (class_uid 2005) and
+normalized to an `ObservedData` carrying the case metadata in its
+extensions; entity extraction from case bodies is deferred (SNOW incidents
+carry no structured entity fields).
+
 These verbs are the read-side of the "have we seen this before in our
 SoR?" question; the internal-similarity counterpart lives in the knowledge
 service (06-knowledge-service.md §4). The two surfaces are deliberately

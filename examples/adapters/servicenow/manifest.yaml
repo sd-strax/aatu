@@ -6,7 +6,9 @@
 # hand-rolled Basic-auth + HTTPS client to the ServiceNow Table API
 # (/api/now/table/incident). It serves the ticketing family — the
 # operational-handoff vehicle (04 §2.2 Handoff; 07 §7.1): ticket.create /
-# ticket.comment / ticket.transition / ticket.close.
+# ticket.comment / ticket.transition / ticket.close — plus the Phase F read
+# verbs (03 §2.9): query_external_cases / get_external_case_details, which read
+# the case system of record back as class-2005 Incident Findings.
 #
 # Install layout: copy this file and the built binary into the adapters dir:
 #   mkdir -p <data>/adapters/servicenow
@@ -29,6 +31,7 @@ exec: ["./reckon-adapter-servicenow"]
 # no runtime: — native static binary (12 §2)
 summary: # CLAIMED — the describe handshake is the authority (11 §3)
   action_types: [ticket.create, ticket.comment, ticket.transition, ticket.close]
+  verbs: [query_external_cases, get_external_case_details] # read side, 03 §2.9
 config_schema:
   type: object
   required: [instance_url, username, password]

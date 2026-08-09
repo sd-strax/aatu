@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/sd-strax/reckon/action"
 	"github.com/sd-strax/reckon/capability"
@@ -23,10 +26,11 @@ const stateClosed = "Closed"
 // close business rule requires a code + notes; this keeps a bare close valid.
 const defaultCloseCode = "Closed/Resolved by Caller"
 
-// bridge holds the instance config and the native ServiceNow client. Write-only:
-// invoke is rejected (this adapter acts, it does not observe — ticketing has no
-// read surface here; incident enrichment/query verbs are Phase F+ per
-// implementation/adapter-candidates.md).
+// bridge holds the instance config and the native ServiceNow client. It serves
+// both surfaces: the write-side ticketing family (dispatch) and, since Phase F,
+// the read-side external-case verbs (invoke — query_external_cases /
+// get_external_case_details, 03 §2.9), which read the incident table's cases
+// back as class-2005 OCSF Incident Findings.
 type bridge struct {
 	mu     sync.Mutex
 	client *snowClient
@@ -50,7 +54,7 @@ func (b *bridge) handle(ctx context.Context, method string, params []byte) (any,
 	case "health":
 		return b.health(), nil
 	case "invoke":
-		return nil, classErr(-32602, "servicenow is write-only (ticketing has no read surface here)", string(capability.ErrFallthrough))
+		return b.invoke(ctx, params)
 	default:
 		return nil, &wireError{Code: -32601, Message: "unknown method " + method}
 	}
@@ -77,6 +81,174 @@ func (b *bridge) configure(params []byte) (any, *wireError) {
 	b.client = newSnowClient(instanceURL, username, password, table)
 	b.mu.Unlock()
 	return map[string]any{"ok": true}, nil
+}
+
+// invoke performs one read operation against the incident table (03 §2.9). Each
+// incident is shaped into a class-2005 OCSF Incident Finding the engine-side
+// caseNormalizer turns into an ObservedData. Read failures map onto the 03 §6.2
+// taxonomy via classErr (a not-found case is FALLTHROUGH, a down instance is
+// UNHEALTHY).
+func (b *bridge) invoke(ctx context.Context, params []byte) (any, *wireError) {
+	var p adapterplugin.InvokeParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, classErr(-32602, "invoke params: "+err.Error(), string(capability.ErrFallthrough))
+	}
+
+	b.mu.Lock()
+	client := b.client
+	b.mu.Unlock()
+	if client == nil {
+		return nil, classErr(-32000, "adapter not configured", string(capability.ErrUnhealthy))
+	}
+
+	switch p.Operation {
+	case "get_incident":
+		return b.getIncident(ctx, client, p.Params)
+	case "query_incidents":
+		return b.queryIncidents(ctx, client, p.Params)
+	default:
+		return nil, classErr(-32602, "unknown read operation "+p.Operation, string(capability.ErrFallthrough))
+	}
+}
+
+// getIncident serves get_external_case_details: resolve one case by id/number
+// and return its single class-2005 event.
+func (b *bridge) getIncident(ctx context.Context, client *snowClient, params map[string]any) (any, *wireError) {
+	id, _ := params["case_id"].(string)
+	if id == "" {
+		return nil, classErr(-32602, "get_incident requires case_id", string(capability.ErrFallthrough))
+	}
+	rec, status, err := client.getIncidentByID(ctx, id)
+	if err != nil {
+		return nil, classErr(-32000, err.Error(), readClass(status))
+	}
+	if rec == nil {
+		return nil, classErr(-32602, "no case matches "+id, string(capability.ErrFallthrough))
+	}
+	return invokeResult{
+		SourceTool: "servicenow",
+		Events:     []ocsfEvent{toWire(b.caseToOcsf(rec))},
+	}, nil
+}
+
+// queryIncidents serves query_external_cases: translate the free-text filter and
+// status into a ServiceNow encoded query, fetch the matching cases, and shape
+// each into a class-2005 event. An empty result set is a valid (empty) response
+// — evidence of absence, not an error.
+func (b *bridge) queryIncidents(ctx context.Context, client *snowClient, params map[string]any) (any, *wireError) {
+	var clauses []string
+	if filter, _ := params["filter"].(string); filter != "" {
+		clauses = append(clauses, "short_descriptionLIKE"+filter)
+	}
+	if status, _ := params["status"].(string); status != "" {
+		clauses = append(clauses, "state="+status)
+	}
+	encoded := strings.Join(clauses, "^")
+
+	limit := 50
+	if v, ok := readInt(params["limit"]); ok && v > 0 {
+		limit = v
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	recs, status, err := client.queryIncidents(ctx, encoded, limit)
+	if err != nil {
+		return nil, classErr(-32000, err.Error(), readClass(status))
+	}
+	events := make([]ocsfEvent, 0, len(recs))
+	for _, rec := range recs {
+		events = append(events, toWire(b.caseToOcsf(rec)))
+	}
+	return invokeResult{SourceTool: "servicenow", Events: events}, nil
+}
+
+// caseToOcsf shapes a Table API incident record into the class-2005 payload the
+// engine-side caseNormalizer reads (finding_info.uid/title/desc, status,
+// priority, assignment_group, unmapped.link/sor). With the caseFields column set
+// the display values come back as plain strings, so a `.(string)` coercion is
+// safe (empty on any surprise reference object).
+func (b *bridge) caseToOcsf(rec map[string]any) capability.OcsfPayload {
+	s := func(k string) string { v, _ := rec[k].(string); return v }
+	link := ""
+	if b.client != nil && s("sys_id") != "" {
+		link = b.client.baseURL + "/nav_to.do?uri=incident.do?sys_id=" + s("sys_id")
+	}
+	raw := map[string]any{
+		"class_uid":        2005,
+		"status":           s("state"),
+		"priority":         s("priority"),
+		"assignment_group": s("assignment_group"),
+		"finding_info": map[string]any{
+			"uid":   s("number"),
+			"title": s("short_description"),
+			"desc":  s("description"),
+		},
+		"unmapped": map[string]any{"link": link, "sor": "servicenow", "sys_id": s("sys_id")},
+	}
+	return capability.OcsfPayload{ClassUID: 2005, ClassName: "Incident Finding", Time: parseSnowTime(s("opened_at")), Raw: raw}
+}
+
+// readClass maps an HTTP status from a read call onto the 03 §6.2 taxonomy: a
+// transport failure (0), 429, or 5xx is retryable; a definitive 4xx falls
+// through so the resolver can try another binding.
+func readClass(status int) string {
+	if status == 0 || status == 429 || status >= 500 {
+		return string(capability.ErrRetry)
+	}
+	return string(capability.ErrFallthrough)
+}
+
+// readInt coerces a templated limit param (JSON numbers decode to float64;
+// strings may arrive from a text-only template render).
+func readInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0, false
+		}
+		return i, true
+	default:
+		return 0, false
+	}
+}
+
+// parseSnowTime parses a ServiceNow display datetime ("2006-01-02 15:04:05",
+// UTC). On any parse failure it returns the zero time.
+func parseSnowTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.UTC)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// invokeResult is the reckon-plugin invoke result wire shape (matches the host's
+// decoder in internal/adapterplugin). capability.OcsfPayload has no JSON tags of
+// its own, so the events are re-shaped onto ocsfEvent for the wire.
+type invokeResult struct {
+	SourceTool string      `json:"source_tool"`
+	Events     []ocsfEvent `json:"events"`
+}
+
+type ocsfEvent struct {
+	ClassUID  int            `json:"class_uid"`
+	ClassName string         `json:"class_name"`
+	Time      time.Time      `json:"time"`
+	Raw       map[string]any `json:"raw"`
+}
+
+func toWire(p capability.OcsfPayload) ocsfEvent {
+	return ocsfEvent{ClassUID: p.ClassUID, ClassName: p.ClassName, Time: p.Time, Raw: p.Raw}
 }
 
 // dispatch performs one ticketing operation against the incident table. The

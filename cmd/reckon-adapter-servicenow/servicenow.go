@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -75,6 +76,14 @@ func (c *snowClient) tableURL(suffix string) string {
 // empty (never an error), so a mistyped group degrades to an unrouted incident,
 // not a failed dispatch.
 const writeQuery = "?sysparm_input_display_value=true"
+
+// caseFields is the field set the read verbs fetch back — the case metadata the
+// class-2005 normalizer wraps (number/title/status/summary/link). The read path
+// requests sysparm_display_value=true so reference/choice fields (state,
+// priority, assignment_group) resolve to their human-readable labels, mirroring
+// writeQuery's input-display-value (the agent reads "In Progress", not a numeric
+// state code).
+const caseFields = "number,sys_id,short_description,description,state,priority,assignment_group,opened_at,sys_updated_on"
 
 // do issues one authenticated Table API request and returns the raw body and
 // status. A transport-level failure (no HTTP response) returns a non-nil error;
@@ -183,6 +192,73 @@ func (c *snowClient) resolveSysID(ctx context.Context, identifier string) (strin
 		return "", status, nil
 	}
 	return rec.SysID, status, nil
+}
+
+// getIncidentByID fetches one incident's full case record by identifier (sys_id
+// or display number), resolving reference/choice fields to display labels. A
+// missing record returns (nil, status, nil); a 4xx/5xx returns (nil, status,
+// apiError). The record is returned as a raw map so the caller can shape every
+// caseFields column into the class-2005 OCSF payload.
+func (c *snowClient) getIncidentByID(ctx context.Context, identifier string) (map[string]any, int, error) {
+	sysID, status, err := c.resolveSysID(ctx, identifier)
+	if err != nil {
+		return nil, status, err
+	}
+	if sysID == "" {
+		return nil, status, nil
+	}
+	q := url.Values{
+		"sysparm_display_value": {"true"},
+		"sysparm_fields":        {caseFields},
+	}
+	raw, status, err := c.do(ctx, http.MethodGet, c.tableURL("/"+url.PathEscape(sysID))+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, status, err
+	}
+	if status == http.StatusNotFound {
+		return nil, status, nil
+	}
+	if status < 200 || status >= 300 {
+		return nil, status, apiError(raw, status)
+	}
+	var wrap struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &wrap); err != nil {
+		return nil, status, fmt.Errorf("unparseable record response (HTTP %d): %s", status, truncate(raw, 200))
+	}
+	if len(wrap.Result) == 0 {
+		return nil, status, nil
+	}
+	return wrap.Result, status, nil
+}
+
+// queryIncidents runs an encoded-query GET over the incident table and returns
+// the matching case records (display values, caseFields column set). An empty
+// result is (nil, status, nil) — evidence of absence, not an error.
+func (c *snowClient) queryIncidents(ctx context.Context, encodedQuery string, limit int) ([]map[string]any, int, error) {
+	q := url.Values{
+		"sysparm_display_value": {"true"},
+		"sysparm_fields":        {caseFields},
+		"sysparm_limit":         {strconv.Itoa(limit)},
+	}
+	if encodedQuery != "" {
+		q.Set("sysparm_query", encodedQuery)
+	}
+	raw, status, err := c.do(ctx, http.MethodGet, c.tableURL("")+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, status, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, status, apiError(raw, status)
+	}
+	var wrap struct {
+		Result []map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &wrap); err != nil {
+		return nil, status, fmt.Errorf("unparseable query response (HTTP %d): %s", status, truncate(raw, 200))
+	}
+	return wrap.Result, status, nil
 }
 
 func decodeSingle(raw []byte) (*snowRecord, int, error) {

@@ -5,9 +5,11 @@
 # after installing the adapter under <data>/adapters/servicenow/ (see manifest.yaml)
 # and running `reckon adapter setup servicenow`.
 #
-# ServiceNow is a write-only surface here — the ticketing family closes the
-# investigation→action loop (04 §2.2 Handoff), so the adapter appears only in the
-# action sections. Incident enrichment/query verbs (a read surface) are Phase F+.
+# ServiceNow serves both surfaces: the ticketing family closes the
+# investigation→action loop (04 §2.2 Handoff) via the action sections below, and
+# the Phase F read verbs (query_external_cases / get_external_case_details,
+# 03 §2.9) read the case system of record back as class-2005 Incident Findings
+# via the read (capability) sections.
 #
 # password is an x-secret reference (11 §4.3) resolved to plaintext before
 # configure. This is a single-instance setup; for a multi-organization
@@ -15,6 +17,47 @@
 # (03 §3.5), exactly as the CrowdStrike example does.
 
 tenant: demo
+
+# --- read side (03 §3.2 / §2.9) ---
+# Point the backend at this file with
+#   capability: {config_path: examples/adapters/servicenow/tenant-config.yaml}
+# alongside the action config_path below. The read verbs shape each incident
+# into a class-2005 Incident Finding (ObservedData) carrying the case metadata
+# (number/title/status/summary/link) — DIRECT derivation, no entity extraction in
+# v0 (03 §2.9).
+adapters:
+  servicenow:
+    class: native_api
+    enabled: true
+    adapter: servicenow
+    config:
+      instance_url: https://YOUR-INSTANCE.service-now.com
+      username: YOUR_SNOW_USER
+      password: "keychain://reckon/servicenow-password"
+      table: incident
+    reads: # per-op allowlist, NO wildcard (11 §5)
+      - get_incident
+      - query_incidents
+
+bindings:
+  # The ${...} right side is the engine's read-call input (CallInput.Extra keys),
+  # the left side the adapter operation's param name (03 §3.3). Optional inputs
+  # are marked `?` so a missing one omits the param instead of rejecting the
+  # binding (§3.3.4).
+  get_external_case_details:
+    - adapter: servicenow
+      operation: get_incident
+      priority: 200
+      params:
+        case_id: "${case_id}"
+  query_external_cases:
+    - adapter: servicenow
+      operation: query_incidents
+      priority: 200
+      params:
+        filter: "${filter?}"
+        status: "${status?}"
+        limit: "${limit?}"
 
 # --- write side (08 §4) ---
 action_adapters:

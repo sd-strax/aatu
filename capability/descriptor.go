@@ -107,6 +107,18 @@ func DefaultCatalog() *Catalog {
 			Output: "list<observed_data>",
 		},
 		{
+			Verb:   "query_external_cases",
+			Intent: "Search the case management system of record (ServiceNow, Jira SOC, TheHive) for cases matching a filter — the read side of 'have we seen this before?'.",
+			Inputs: []InputParam{{Name: "filter", Type: "string", Required: false, Desc: "free-text query over case title/summary"}, {Name: "status", Type: "string", Required: false, Desc: "case status filter, e.g. 'In Progress'"}, windowInput(), {Name: "limit", Type: "int", Required: false, Desc: "max cases to return (default 50)"}},
+			Output: "list<observed_data>",
+		},
+		{
+			Verb:   "get_external_case_details",
+			Intent: "Fetch full content for one case in the SoR (title, status, summary, link) — a follow-up after query_external_cases returns hits worth deep-diving.",
+			Inputs: []InputParam{{Name: "case_id", Type: "string", Required: true, Desc: "the case id/number, e.g. INC0010042 or a sys_id"}},
+			Output: "observed_data",
+		},
+		{
 			Verb:   "list_capabilities",
 			Intent: "List the verbs resolvable in this tenant and their current availability.",
 			Inputs: nil,
