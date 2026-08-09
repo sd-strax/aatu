@@ -122,9 +122,10 @@ func TestBuildRequestCommand(t *testing.T) {
 	now := time.Date(2026, 4, 20, 14, 0, 0, 0, time.UTC)
 
 	cmd, err := BuildRequestCommand(catalog, ActionRequest{
-		ActionType: "host.isolate",
-		Targets:    []aggregate.TargetSpec{target("WIN-A")},
-		Rationale:  "contain",
+		ActionType:   "host.isolate",
+		Targets:      []aggregate.TargetSpec{target("WIN-A")},
+		EvidenceRefs: []string{"observed-data--od1"},
+		Rationale:    "contain",
 	}, now)
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -155,9 +156,10 @@ func TestBlastRadiusEscalator(t *testing.T) {
 		many[i] = target("host-" + string(rune('a'+i)))
 	}
 	cmd, err := BuildRequestCommand(catalog, ActionRequest{
-		ActionType: "host.isolate", // T2 by default
-		Targets:    many,
-		Rationale:  "mass containment",
+		ActionType:   "host.isolate", // T2 by default
+		Targets:      many,
+		EvidenceRefs: []string{"observed-data--od1"},
+		Rationale:    "mass containment",
 	}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +184,7 @@ func TestBlastRadiusEscalator(t *testing.T) {
 		dupes[i] = target("same-host")
 	}
 	cmd, err = BuildRequestCommand(catalog, ActionRequest{
-		ActionType: "host.isolate", Targets: dupes, Rationale: "dup",
+		ActionType: "host.isolate", Targets: dupes, EvidenceRefs: []string{"observed-data--od1"}, Rationale: "dup",
 	}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +202,9 @@ func TestBuildRequestCommandRejections(t *testing.T) {
 		"no targets":     {ActionType: "host.isolate", Rationale: "r"},
 		"no rationale":   {ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("x")}},
 		"unresolved tgt": {ActionType: "host.isolate", Targets: []aggregate.TargetSpec{{EntityRef: "x-host--1"}}, Rationale: "r"},
+		// Grounding is enforced (09 §3): a forward action with no evidence_refs is
+		// rejected — the ungrounded containment a live opus run produced 1-in-3.
+		"no evidence_refs": {ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("x")}, Rationale: "r"},
 		// Parameter-schema validation (08 §3: Inputs is the schema for
 		// request_action.parameters). Both found by the eval harness: the model
 		// invented {"title","body"} for ticket.create instead of the declared
@@ -237,14 +242,23 @@ func TestBuildRequestCommandRejections(t *testing.T) {
 	// declared input is an entity accepts empty parameters, and an action with
 	// optional string inputs accepts their absence.
 	for _, ok := range []ActionRequest{
-		{ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("WIN-A")}, Rationale: "r"},
-		{ActionType: "ticket.close", Targets: []aggregate.TargetSpec{target("IT-1")}, Rationale: "r"}, // resolution is optional
+		{ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("WIN-A")}, EvidenceRefs: []string{"observed-data--od1"}, Rationale: "r"},
+		{ActionType: "ticket.close", Targets: []aggregate.TargetSpec{target("IT-1")}, EvidenceRefs: []string{"observed-data--od1"}, Rationale: "r"}, // resolution is optional
 		{ActionType: "ticket.create", Targets: []aggregate.TargetSpec{target("IT-OPS")},
-			Parameters: []byte(`{"summary":"handoff"}`), Rationale: "r"},
+			EvidenceRefs: []string{"observed-data--od1"}, Parameters: []byte(`{"summary":"handoff"}`), Rationale: "r"},
 	} {
 		if _, err := BuildRequestCommand(catalog, ok, now); err != nil {
 			t.Errorf("%s: unexpected rejection: %v", ok.ActionType, err)
 		}
+	}
+
+	// A reversal (reversal_of_ref set) is EXEMPT from the evidence requirement:
+	// its grounding is the original action, the same carve-out G1 makes
+	// (design/10). Retries are not exempt — they restate their grounding.
+	reversal := ActionRequest{ActionType: "host.isolate", Targets: []aggregate.TargetSpec{target("WIN-A")},
+		Rationale: "revert the isolation", ReversalOfRef: uuid.New()}
+	if _, err := BuildRequestCommand(catalog, reversal, now); err != nil {
+		t.Errorf("reversal with no evidence_refs should be exempt (grounded by reversal_of_ref); got %v", err)
 	}
 }
 

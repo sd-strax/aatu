@@ -171,11 +171,16 @@ func intrinsicTools(actionTypes []ActionType) []ToolDef {
 					}, "entity_ref", "resolved_identifier"),
 					"description": "the distinct targets; blast radius drives the trust tier",
 				},
-				"parameters":    parametersSchema(actionTypes),
-				"evidence_refs": strList("refs grounding this action"),
-				"rationale":     str("why this action, now"),
-				"retry_of":      str("when re-requesting a FAILED or EXPIRED action: that action's id (records the retry lineage)"),
-			}, "action_type", "targets", "rationale"),
+				"parameters": parametersSchema(actionTypes),
+				"evidence_refs": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"minItems":    1,
+					"description": "REQUIRED: the STIX/OCSF refs that ground this action — the observed_data_refs / entity_refs / x-hypothesis ids you observed. A containment or remediation with no cited evidence is invalid and the engine rejects it.",
+				},
+				"rationale": str("why this action, now"),
+				"retry_of":  str("when re-requesting a FAILED or EXPIRED action: that action's id (records the retry lineage)"),
+			}, "action_type", "targets", "rationale", "evidence_refs"),
 		},
 		{
 			Name:        ToolListActions,
@@ -191,7 +196,7 @@ func intrinsicTools(actionTypes []ActionType) []ToolDef {
 // dispatchability. This is what stops the model guessing action_type strings
 // (ip.block, firewall.block_ip, …) — it can read the actual vocabulary.
 func requestActionDescription(actionTypes []ActionType) string {
-	base := "Propose a state-changing action (containment, remediation). It goes through authorization policy — you can propose, never approve; most proposals await the analyst's explicit approval. Cite evidence."
+	base := "Propose a state-changing action (containment, remediation). It goes through authorization policy — you can propose, never approve; most proposals await the analyst's explicit approval. Every request MUST cite evidence_refs — the STIX/OCSF refs that ground it; an ungrounded action is rejected."
 	if len(actionTypes) == 0 {
 		return base
 	}

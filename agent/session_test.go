@@ -1117,3 +1117,34 @@ func TestSession_RehydrateHonorsResetMarker(t *testing.T) {
 		t.Errorf("post-reset turn should replay: %q", joined)
 	}
 }
+
+// TestRequestActionRequiresEvidence guards the schema nudge (09 §3; the H6
+// lesson that the tool schema SHAPE drives model behavior). evidence_refs being
+// optional is exactly what let a live opus run omit it on a containment request;
+// the required + minItems:1 shape is load-bearing and must not silently revert.
+func TestRequestActionRequiresEvidence(t *testing.T) {
+	var schema map[string]any
+	for _, td := range intrinsicTools(nil) {
+		if td.Name == ToolRequestAction {
+			schema = td.InputSchema
+		}
+	}
+	if schema == nil {
+		t.Fatal("request_action tool not found")
+	}
+	required, _ := schema["required"].([]string)
+	found := false
+	for _, r := range required {
+		if r == "evidence_refs" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("evidence_refs must be REQUIRED on request_action; required=%v", required)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	ev, _ := props["evidence_refs"].(map[string]any)
+	if mi, ok := ev["minItems"].(int); !ok || mi != 1 {
+		t.Errorf("evidence_refs must set minItems:1; got %v", ev["minItems"])
+	}
+}

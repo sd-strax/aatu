@@ -65,6 +65,16 @@ func BuildRequestCommand(catalog *ActionCatalog, req ActionRequest, now time.Tim
 	if err := validateParameters(d, req.Parameters); err != nil {
 		return aggregate.RequestAction{}, err
 	}
+	// Grounding is a mechanism, not a prompt convention (09 §3): a forward action
+	// must cite the evidence that justifies it, or the engine rejects it — an
+	// ungrounded containment must never reach the approval queue (a live opus run
+	// requested account.disable with no evidence_refs 1-in-3, the archetype 09 §2
+	// anticipated). Reversals are exempt: their grounding is the original action
+	// (reversal_of_ref), the same carve-out G1 makes (design/10). Retries are NOT
+	// exempt — a re-request is a fresh proposal and restates its grounding.
+	if req.ReversalOfRef == uuid.Nil && len(req.EvidenceRefs) == 0 {
+		return aggregate.RequestAction{}, fmt.Errorf("action_type %q: at least one evidence_ref required — a containment must cite the evidence that grounds it (reversals excepted)", req.ActionType)
+	}
 
 	ttl := req.TTL
 	if ttl == 0 {

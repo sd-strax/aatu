@@ -39,9 +39,10 @@ func TestShippedActionScenario(t *testing.T) {
 	// ioc.block dispatches end-to-end against the C2 indicator — the containment
 	// the agent could not complete before the catalog was frozen + surfaced.
 	blockCmd, err := BuildRequestCommand(catalog, ActionRequest{
-		ActionType: "ioc.block",
-		Targets:    []aggregate.TargetSpec{{EntityRef: "ipv4-addr--1", ResolvedIdentifier: "185.220.101.5"}},
-		Rationale:  "block the C2 channel",
+		ActionType:   "ioc.block",
+		Targets:      []aggregate.TargetSpec{{EntityRef: "ipv4-addr--1", ResolvedIdentifier: "185.220.101.5"}},
+		EvidenceRefs: []string{"observed-data--c2"},
+		Rationale:    "block the C2 channel",
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("build ioc.block request: %v", err)
@@ -61,9 +62,10 @@ func TestShippedActionScenario(t *testing.T) {
 	// ioc.unblock dispatches as a standalone action — not a tracked reversal of
 	// the block (04 §7): no reversal_of_ref, and the block record stays SUCCEEDED.
 	unblockCmd, err := BuildRequestCommand(catalog, ActionRequest{
-		ActionType: "ioc.unblock",
-		Targets:    []aggregate.TargetSpec{{EntityRef: "ipv4-addr--1", ResolvedIdentifier: "185.220.101.5"}},
-		Rationale:  "shared CDN edge — legit traffic breaking; analyst judged removal safe",
+		ActionType:   "ioc.unblock",
+		Targets:      []aggregate.TargetSpec{{EntityRef: "ipv4-addr--1", ResolvedIdentifier: "185.220.101.5"}},
+		EvidenceRefs: []string{"observed-data--c2"},
+		Rationale:    "shared CDN edge — legit traffic breaking; analyst judged removal safe",
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("build ioc.unblock request: %v", err)
@@ -111,9 +113,10 @@ func TestShippedActionScenario(t *testing.T) {
 	// Build a request_action for host.isolate (T2, single target), then dispatch
 	// it through the resolver into the fixture write adapter.
 	cmd, err := BuildRequestCommand(catalog, ActionRequest{
-		ActionType: "host.isolate",
-		Targets:    []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-FILE01"}},
-		Rationale:  "contain the RDP lateral movement",
+		ActionType:   "host.isolate",
+		Targets:      []aggregate.TargetSpec{{EntityRef: "x-host--1", ResolvedIdentifier: "WIN-FILE01"}},
+		EvidenceRefs: []string{"observed-data--rdp"},
+		Rationale:    "contain the RDP lateral movement",
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("build request: %v", err)

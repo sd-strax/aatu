@@ -74,6 +74,7 @@ prompt request. `§2` generalizes that stance to all agent behavior.
 |---|---|---|
 | AI approves/concludes/archives | **Mechanism** | Correctness-critical, adversarial. Enforced at the aggregate allowlist + Gate 2 (`04`). |
 | Fabricating an action's status | **Mechanism + prompt** | Truth comes from the event log via `list_actions`; the prompt directs the model to consult it rather than recall. |
+| Action requested with no `evidence_refs` | **Mechanism** (`§3` update) | Was prompt-only; a capable model omitted grounding 1-in-3 under load (`10 §3`, G1). `BuildRequestCommand` now rejects it; schema marks `evidence_refs` required. Reversals exempt. |
 | Containment proposed with no validated hypothesis | **Candidate mechanism** (`§3`) | Methodology today, but the domain has the hooks to make it an auditable signal. |
 | Directing the analyst to an external console | **Prompt** | Factual framing of how approval/execution works in-product. No correctness stake once stated. |
 | Summarizing when raw output was requested | **Prompt** | Instruction-following/style. |
@@ -113,6 +114,19 @@ adopt (2) or (3). The mechanism is the same; the dial is tenant policy. This kee
 enforcement **auditable and adjustable** rather than resting on the model's disposition, and it is
 deliberately decoupled from the authorization tier (blast radius still drives the tier; grounding is a
 separate axis). Left as an open design question (`§7`) pending field feedback.
+
+> **Update — the evidence-refs floor is now a mechanism.** The dial above concerns
+> *hypothesis existence* (is there a validated `x-hypothesis`?). Its weakest form —
+> does the action cite **any** grounding evidence at all — has been graduated to a
+> hard mechanism ahead of the dial, because the eval caught the failure it guards:
+> a live opus run requested `account.disable` with no `evidence_refs` in 1 of 3
+> trials (`design/10 §3`, G1). `action.BuildRequestCommand` now rejects a forward
+> action with empty `evidence_refs`, and `request_action`'s tool schema marks the
+> field required (`minItems: 1`) so the model rarely trips the reject. Reversals
+> are exempt (grounded by `reversal_of_ref`). This is the `§2.2` rule applied: a
+> trust-critical property that a capable model violated under load moves off
+> persuasion. The *hypothesis-existence* dial (options 1–3) remains open — a
+> present-but-thin grounding is a stricter, still-adjustable question.
 
 ## 4. The system prompt as a managed artifact
 
