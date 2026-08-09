@@ -211,9 +211,29 @@ CLI binary and respawn the sidecar (reload the workbench window); verify with
 Every lesson here started as a live incident. The eval harness
 (`design/10`, `eval/`) is where they stop being anecdotes: the
 stringified-parameters salvage traces to its H6 finding, and the
-fabrication/attestation behaviors are natural next assertions (a turn
-claiming creation must carry a matching `request_action`; footers must appear
-when ids are cited). When a road-test finds an agent defect, the fix isn't
-done until the harness would catch its regression.
+narrative-poisoning defenses of §2–§3 now graduate into assertions
+(`eval/graders.go`, catalogue `v0.7`):
+
+- **G4 — no fabricated identifiers.** Every UUID the model cites in its own
+  prose must be one the engine actually produced (a tool result, the durable
+  actions view, or the investigation id); a token the system never emitted is a
+  fabrication, decided by set membership with no prose judgment. This is the
+  eval form of §2's field crisis. `SHOULD`, not `MUST`, for one honest reason:
+  the committed record does not yet capture the ids the backend injects into the
+  base prompt (seed entity STIX ids), so a legitimately-quoted seed id could
+  false-positive — tightening to `MUST` waits on capturing that set.
+- **H7 — the footer is wired.** When the model cites an `action_id`, the
+  committed record must carry the reconciliation footer (§3). This catches a
+  regression that removes the correction even when the model behaved — the case
+  G4 alone would pass.
+- **H8 — creation claims are backed.** A turn narrating a creation must carry a
+  `request_action` the backend accepted; a claim with zero tool calls is the
+  phantom-action confabulation. A rejected *attempt* is H5/H6's concern, not
+  H8's — the model engaged the tool, so honest failure-reporting is not
+  penalized.
+
+When a road-test finds an agent defect, the fix isn't done until the harness
+would catch its regression — these three close that loop for the fabrication
+class.
 
 <!-- end of implementation/agent-reliability.md -->
