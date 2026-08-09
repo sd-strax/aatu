@@ -261,11 +261,17 @@ created, modified, created_by_ref (STIX standard)
 
 ### Extension 1 — Seed
 
-Immutable, set at creation. One of three shapes:
+Immutable, set at creation. One of four shapes:
 
 - **AlertSeed** — `alert_id`, `source`, optional `detection_finding_ref`
 - **EntitySeed** — `entity_ref` (STIX SCO id)
 - **QuestionSeed** — `hypothesis_statement` (string)
+- **CaseSeed** — `case_id`, `source`, optional `case_ref` (a class-2005 case
+  `ObservedData`, `03 §2.9`). An investigation rooted on a system-of-record case
+  (a ServiceNow incident, a Jira issue). Deliberately distinct from AlertSeed:
+  *cases are investigated, tickets are acted upon* — and `source` alone cannot
+  discriminate the two (the same tool can be both an alert feed and a case
+  store). The flow and rationale are `14-case-seed.md`.
 
 All three shapes carry an optional **`source_scope`** (string): the
 independently administered organization this investigation is rooted in, when

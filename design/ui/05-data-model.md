@@ -13,7 +13,7 @@ verdict: malicious           # pending|benign|suspicious|malicious
 rationale: "lateral movement via compromised identity…"
 verdict_at: 2026-04-25T15:01:00Z
 seed:
-  type: alert                # alert|ioc|hypothesis
+  type: alert                # alert|ioc|hypothesis|case
   source: crowdstrike-edr
   id: EDR-ALERT-7741
 created_at: 2026-04-25T14:32:00Z

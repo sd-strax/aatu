@@ -549,8 +549,9 @@ rule:
 - **Investigations carry a scope.** The Seed (01, Extension 1) gains an
   optional `source_scope`, set at creation — for an AlertSeed, derived from the
   aggregation platform's organization tag on the seeding alert; for
-  Entity/Question seeds, supplied by the caller. Immutable, like the rest of
-  the seed.
+  Entity/Question/Case seeds, supplied by the caller (`14-case-seed.md §3`:
+  a case seed's read runs at the caller-supplied scope). Immutable, like the
+  rest of the seed.
 - **The matching rule (fail-closed).** An *unscoped instance* is applicable to
   any investigation (the single-organization case and genuinely shared tools —
   a threat-intel adapter serves every scope). A *scoped instance* is applicable

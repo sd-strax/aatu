@@ -158,8 +158,8 @@ InvestigationSummary
   conclusion_at       timestamp (when the source investigation concluded)
   summary_text        string (LLM-generated narrative summary; bounded ~2000 chars)
   structured          {
-                        seed_kind          "alert" | "entity" | "question"
-                        seed_value         string (alert id, entity ref, hypothesis statement)
+                        seed_kind          "alert" | "entity" | "question" | "case"
+                        seed_value         string (alert id, entity ref, hypothesis statement, case id)
                         primary_entities   list<{entity_ref, type, role}>
                         techniques         list<string>   # MITRE ATT&CK technique IDs
                         primary_indicators list<{indicator_ref, value, type}>

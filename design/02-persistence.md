@@ -109,7 +109,7 @@ EventEnvelope
 ### v0 event types
 
 Lifecycle (each event is recorded in the same aggregate transaction as its corresponding `InterpretationRecorded` of type "lifecycle"; shared `correlation_id` ties them):
-- `InvestigationCreated` — payload: seed (one of AlertSeed | EntitySeed | QuestionSeed), name, description, context ("investigation" | "hunt")
+- `InvestigationCreated` — payload: seed (one of AlertSeed | EntitySeed | QuestionSeed | CaseSeed), name, description, context ("investigation" | "hunt")
 - `InvestigationStatusChanged` — payload: from, to, reason, lifecycle_interpretation_ref
 - `InvestigationConcluded` — payload: report_ref, summary. The Report itself is created in the STIX object store (CRUD layer) **in the same Postgres transaction** as this event; the Report row write, the event append, and the lifecycle Interpretation all succeed or abort together. Eliminates the dual-write failure mode that would otherwise leave a CONCLUDED investigation pointing at a non-existent Report.
 - `InvestigationReopened` — payload: reason. Clears conclusion_ref. Prior Report stays referenced from the thread.

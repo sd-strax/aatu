@@ -228,9 +228,11 @@ confirmation showing exactly what gets locked.
 
 ## 2.7 Entry points
 
-**New Investigation** (`⌘⇧I`) — a two-step palette. Step 2 is the seed picker: three cards
-(Alert ID / IOC / Hypothesis), a mono input with a type prefix (`alert:`, `ioc:`), and a footer
-showing the exact file that will be created:
+**New Investigation** (`⌘⇧I`) — a two-step palette. Step 2 is the seed picker: four cards
+(Alert ID / IOC / Hypothesis / Case), a mono input with a type prefix (`alert:`, `ioc:`, `case:`),
+and a footer showing the exact file that will be created. The Case card resolves the case id
+through the SoR before creating (fail-closed, `14-case-seed.md §2`); "Seed from case…" also offers
+a filter → pick flow over `query_external_cases` (`14 §4.1`):
 *"Creates `investigations/2026-04-25_EDR-ALERT-7741.inv.md` and opens the panel."*
 
 **Never** let the analyst start from an empty chat. Entity-rooted entry is load-bearing —
