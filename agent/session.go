@@ -75,6 +75,13 @@ type Session struct {
 	// the authoritative action record (countering narrative drift in long
 	// conversations). ResetContext sets it to fire immediately.
 	turnsSinceAnchor int
+	// seenIDs is the set of full-UUID tokens the engine has produced this session
+	// (observed-data refs from read verbs, entity ids, ids embedded in external
+	// data a tool returned, the investigation id). The ground-truth footer uses
+	// it to avoid flagging a legitimately-cited non-action id as "NOT ON RECORD":
+	// an id the engine itself produced is not a fabrication (agent-reliability.md
+	// §3; the runtime counterpart of the eval's G4 ground truth).
+	seenIDs map[string]bool
 }
 
 // TurnResult is what one analyst turn produced.
@@ -118,6 +125,9 @@ func NewSession(ctx context.Context, cfg Config) (*Session, error) {
 		maxRounds:       cfg.MaxToolRounds,
 		maxTokens:       cfg.MaxTokens,
 		hooks:           cfg.Hooks,
+		// The investigation id is always a legit engine id — never a fabrication
+		// even when the model quotes it back (e.g. from a ticket body).
+		seenIDs: map[string]bool{strings.ToLower(cfg.InvestigationID): true},
 	}
 	if s.maxRounds <= 0 {
 		s.maxRounds = defaultMaxToolRounds
@@ -410,6 +420,9 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 			}
 
 			content, isErr := s.dispatchTool(ctx, tu.ToolName, tu.Input)
+			if !isErr {
+				s.rememberIDs(content)
+			}
 			if tu.ToolName == ToolRecallSOPs && !isErr {
 				s.trackConsulted(content)
 			}
@@ -434,7 +447,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	// fabricated id or narrated-but-never-made call is corrected IN PLACE:
 	// visible to the analyst, committed to the transcript, and folded into the
 	// assistant message so the correction is in the model's own history.
-	if gt := s.turnFooter(ctx, finalText.String(), len(s.pendingActions)); gt != "" {
+	if gt := s.turnFooter(ctx, finalText.String(), len(s.pendingActions), s.seenIDs); gt != "" {
 		fmt.Fprintf(&transcript, "[assistant] %s\n", sanitizeTranscript(gt))
 		finalText.WriteString("\n\n")
 		finalText.WriteString(gt)

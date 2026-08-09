@@ -1018,6 +1018,63 @@ func TestSession_NoActionAttestation(t *testing.T) {
 	}
 }
 
+// TestSession_ReconcileSuppressesEngineIDs: the read verbs surfaced a false
+// alarm — the footer flagged a legit observed-data ref and an investigation id
+// quoted from a ticket body as "NOT ON RECORD". A cited id the engine itself
+// produced is not a fabrication; only genuinely-unknown ids are flagged. Mirrors
+// the live INC0010001 read.
+func TestSession_ReconcileSuppressesEngineIDs(t *testing.T) {
+	const invID = "c8d98c1e-d17b-4bdf-8afd-f187ad438815"      // the investigation id, quoted from the ticket body
+	const realAction = "dd4352b1-4924-4e6d-a448-94005141264a" // a real action, FAILED
+	const obsRef = "580d8b58-ecf8-5bf4-ab61-e5b386719ca6"     // an observed-data ref a read verb returned
+	const fakeID = "7c3e0f9b-4d2a-4e1c-9a6f-2b8d1e5a0c34"     // fabricated, unknown to the engine
+	f := newFakeBackend(t)
+	f.actions = []ActionStatus{{ActionID: realAction, ActionType: "ticket.create", Tier: "T2", Status: "FAILED"}}
+	s, err := NewSession(context.Background(), Config{Backend: f.client(), LLM: &scriptedLLM{}, InvestigationID: invID})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	// A read verb returned the observed-data ref; the loop remembered it.
+	s.rememberIDs(`{"observed_data":"observed-data--` + obsRef + `"}`)
+
+	text := "Case (ref observed-data--" + obsRef + ", part of investigation " + invID +
+		"); action " + realAction + " and " + fakeID + " noted."
+	footer := s.reconcileActionClaims(context.Background(), text, s.seenIDs)
+
+	if !strings.Contains(footer, "dd4352b1=FAILED") {
+		t.Errorf("real action not corrected to its status: %q", footer)
+	}
+	if !strings.Contains(footer, "7c3e0f9b=NOT ON RECORD") {
+		t.Errorf("genuinely-unknown id not flagged: %q", footer)
+	}
+	if strings.Contains(footer, "580d8b58") {
+		t.Errorf("observed-data ref (legit engine id) should be suppressed: %q", footer)
+	}
+	if strings.Contains(footer, "c8d98c1e") {
+		t.Errorf("investigation id (legit engine id) should be suppressed: %q", footer)
+	}
+
+	// When every cited id is a known engine id, there is nothing to correct — no
+	// footer at all (not an empty "[engine record …]").
+	if got := s.reconcileActionClaims(context.Background(), "See observed-data--"+obsRef+" and investigation "+invID+".", s.seenIDs); got != "" {
+		t.Errorf("footer should be empty when all cited ids are known: %q", got)
+	}
+}
+
+// TestSession_AttestationIgnoresQuotedData: creation verbs inside a quoted
+// ticket body a read verb returned are not the model's own claim, so they must
+// not trip the no-action attestation on a benign read turn.
+func TestSession_AttestationIgnoresQuotedData(t *testing.T) {
+	quoted := `INC0010001. Description: "Reimage request for WIN-FILE01. Reference incident ticket 8abab2df." Nothing to action here.`
+	if at := noActionAttestation(quoted, 0); at != "" {
+		t.Errorf("attestation fired on quoted external data (benign read turn): %q", at)
+	}
+	// The model's OWN unquoted creation claim still triggers it.
+	if at := noActionAttestation("Created the ticket and it is queued for your approval.", 0); at == "" {
+		t.Error("attestation should still fire on the model's own creation claim")
+	}
+}
+
 // TestSession_ResetContextAndAnchor: ResetContext drops the working messages,
 // records the durable thread marker, and forces the engine-state anchor onto
 // the next turn's user message — the model's first post-reset context is

@@ -58,14 +58,27 @@ wrong:
 - **Cited-id reconciliation** (`agent/reconcile.go` `reconcileActionClaims`):
   every action id the final text mentions gets its real status appended —
   `[engine record — authoritative…: dd4352b1=FAILED, 7c3e0f9b=NOT ON RECORD]`.
-  No NLP; just a lookup per id.
+  No NLP; just a lookup per id. *Don't cry wolf:* a cited full-UUID that the
+  engine itself produced — an observed-data ref from a read verb, an entity id,
+  the investigation id quoted from a ticket body — is **not** flagged; the guard
+  suppresses ids in the session's seen set (`Session.seenIDs`, fed by
+  `rememberIDs` from every tool result + the investigation id) and speaks only
+  for real action ids and genuinely-unknown tokens. The read verbs surfaced this:
+  before them the model rarely printed non-action UUIDs, so the blunt "any UUID
+  not in the action log → NOT ON RECORD" read as fabrication on legit refs — the
+  runtime counterpart of the eval's G4 ground-truth (`design/10 §3`), which
+  already checked *all* engine-produced ids.
 - **No-action attestation** (`noActionAttestation`): prose claims a creation
   on a turn with zero successful `request_action` calls → append
   `[engine record: NO action was requested this turn]`. The trigger regex is
   deliberately generous — safe, because the appended sentence is true by the
   loop's own bookkeeping regardless of a false-positive match. *Design rule:
   when a guard's output is always-true, generous triggering is free; when it
-  would judge, don't build it.*
+  would judge, don't build it.* One refinement the read verbs forced: **quoted
+  external data is stripped before the check** (`quotedSpan`) — a ticket body a
+  read verb returned (`Description: "reimage request … incident ticket"`) is not
+  the model's own creation claim, so relaying it must not trip the attestation on
+  a benign read turn.
 - **The correction must enter the model's own history** (`agent/session.go`,
   end of `Turn`): the footer is folded into the assistant message, not just
   shown to the analyst — otherwise the next turn compounds the uncorrected
