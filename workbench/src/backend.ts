@@ -254,6 +254,7 @@ export interface ThreadEntry {
   hasTranscript: boolean;
   superseded: boolean;
   consultedSops: { sopId: string; title?: string; used: boolean }[];
+  consultedSimilar: { investigationRef: string; title?: string; band?: string; used: boolean }[];
 }
 
 /** One row of the durable action queue (mirrors server.ActionView). */
@@ -691,6 +692,7 @@ export class BackendClient {
       has_transcript?: boolean;
       superseded?: boolean;
       consulted_sops?: { sop_id?: string; title?: string; used?: boolean }[];
+      consulted_similar_investigations?: { investigation_ref?: string; title?: string; band?: string; used?: boolean }[];
     }
     const body = await this.authedGet<{ thread?: Raw[] }>(
       `/api/investigations/${encodeURIComponent(id)}/thread`,
@@ -714,6 +716,9 @@ export class BackendClient {
       superseded: e.superseded ?? false,
       consultedSops: (e.consulted_sops ?? []).map((c) => ({
         sopId: c.sop_id ?? "", title: c.title, used: c.used ?? false,
+      })),
+      consultedSimilar: (e.consulted_similar_investigations ?? []).map((c) => ({
+        investigationRef: c.investigation_ref ?? "", title: c.title, band: c.band, used: c.used ?? false,
       })),
     }));
   }

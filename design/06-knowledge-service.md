@@ -314,11 +314,19 @@ Specifically, the prompt instructs the LLM to:
 Per the companion edits in 05 §14.1, the Interpretation event payload (02-persistence.md §6) gains optional fields:
 
 ```
-consulted_sops                       list<{sop_id, version, retrieval_score, used: bool}>
-consulted_similar_investigations     list<{summary_id, version, retrieval_score, used: bool}>
+consulted_sops                       list<{sop_id, title, retrieval_score, used: bool}>
+consulted_similar_investigations     list<{investigation_ref, title, retrieval_score, band, used: bool}>
 ```
 
-The `used` flag distinguishes SOPs/summaries the LLM merely retrieved from those it cited in its rationale. Retrieved-but-not-used items are still recorded — they show what context the LLM had access to when deciding.
+> **Amended (K4).** The similar-investigation entry keys on `investigation_ref`
+> (the prior case's grouping ref) rather than `summary_id`: the agent cites the
+> *case* it drew on, which is the meaningful audit handle, and the ref is what a
+> similarity recall hit carries (via the summary's source tag; recall results
+> carry no summary meta). It also records the substrate similarity `band`
+> (NEAR_DUPLICATE/RELATED/DISTINCT). Content-hash attestation (Layer B) rides on
+> the summary's substrate `content_hash`, which the recall hit does carry.
+
+The `used` flag distinguishes SOPs/summaries the LLM merely retrieved from those it cited in its rationale. Retrieved-but-not-used items are still recorded — they show what context the LLM had access to when deciding. `used` is decided conservatively — only when the turn's own final text references the SOP/case by title or ref — so an overclaimed "followed the SOP" is never fabricated provenance.
 
 These fields are queryable. "Show me every Interpretation that cited SOP-RANSOMWARE-CONTAINMENT v3.2" is a single SQL query against the projection. "Show me cases where the LLM had access to SOP X but chose not to cite it" is similarly direct.
 

@@ -82,6 +82,17 @@ type ConsultedSOP struct {
 	Used           bool    `json:"used"`
 }
 
+// ConsultedSimilarInvestigation is one concluded-investigation summary surfaced
+// by recall_similar_investigations during the turn (06 §6) — the case-knowledge
+// counterpart of ConsultedSOP.
+type ConsultedSimilarInvestigation struct {
+	InvestigationRef string  `json:"investigation_ref"`
+	Title            string  `json:"title,omitempty"`
+	RetrievalScore   float64 `json:"retrieval_score,omitempty"`
+	Band             string  `json:"band,omitempty"`
+	Used             bool    `json:"used"`
+}
+
 // InterpretationRequest is the body of POST /api/interpretations (the loop's
 // write into the reasoning thread).
 type InterpretationRequest struct {
@@ -99,8 +110,9 @@ type InterpretationRequest struct {
 	Prediction         *Prediction    `json:"prediction,omitempty"`
 	PredictionRef      string         `json:"prediction_ref,omitempty"`
 	PredictionStatus   string         `json:"prediction_status,omitempty"`
-	ConsultedSOPs      []ConsultedSOP `json:"consulted_sops,omitempty"`
-	TestResultRefs     []string       `json:"test_result_refs,omitempty"`
+	ConsultedSOPs      []ConsultedSOP                  `json:"consulted_sops,omitempty"`
+	ConsultedSimilar   []ConsultedSimilarInvestigation `json:"consulted_similar_investigations,omitempty"`
+	TestResultRefs     []string                        `json:"test_result_refs,omitempty"`
 }
 
 // Transcript carries a turn's raw transcript bytes for side-store hashing.
@@ -396,6 +408,16 @@ func (c *Client) ListActionTypes(ctx context.Context) ([]ActionType, error) {
 func (c *Client) RecallSOPs(ctx context.Context, body map[string]any) (json.RawMessage, error) {
 	var out json.RawMessage
 	if err := c.do(ctx, http.MethodPost, "/api/knowledge/recall_sops", c.agentSrc, body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RecallSimilar runs similar-investigation retrieval (agent token), returning
+// the raw response.
+func (c *Client) RecallSimilar(ctx context.Context, body map[string]any) (json.RawMessage, error) {
+	var out json.RawMessage
+	if err := c.do(ctx, http.MethodPost, "/api/knowledge/recall_similar_investigations", c.agentSrc, body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

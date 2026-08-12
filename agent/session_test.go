@@ -146,6 +146,12 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		record(r)
 		_, _ = w.Write([]byte(`{"results":[],"coverage":"EMPTY"}`))
 	})
+	mux.HandleFunc("/api/knowledge/recall_similar_investigations", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"results":[
+		  {"investigation_ref":"grouping--prior1","title":"RDP lateral movement","score":0.94,"band":"NEAR_DUPLICATE"}
+		],"coverage":"COMPLETE"}`))
+	})
 
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f.override != nil && f.override(w, r) {
@@ -191,7 +197,7 @@ func TestSession_ToolAssembly(t *testing.T) {
 	for _, d := range s.Tools() {
 		names[d.Name] = true
 	}
-	for _, want := range []string{"enumerate_logons", ToolRecallSOPs, ToolProposeHypothesis,
+	for _, want := range []string{"enumerate_logons", ToolRecallSOPs, ToolRecallSimilar, ToolProposeHypothesis,
 		ToolRecordPrediction, ToolEvaluateHypothesis, ToolRecordPredictionOutcome, ToolRequestAction,
 		ToolListActions} {
 		if !names[want] {
@@ -857,6 +863,46 @@ func TestSession_BudgetExhaustionLeavesValidConversation(t *testing.T) {
 		t.Fatalf("turn 2 must not fail on a dangling tool_use: %v", err)
 	}
 	assertToolUsesAnswered(t, s.messages)
+}
+
+// TestSession_ConsultedSimilarRecorded: a recall_similar_investigations call is
+// captured as consulted_similar_investigations provenance on the committed
+// interpretation, with Used decided conservatively from the final text (K4,
+// 06 §6).
+func TestSession_ConsultedSimilarRecorded(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &scriptedLLM{script: []CompleteResponse{
+		{StopReason: StopToolUse, Content: []ContentBlock{toolUse("t1", ToolRecallSimilar, `{"query":"rdp lateral movement from a file server"}`)}},
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("This closely resembles the prior RDP lateral movement case; isolating the host.")}},
+	}}
+	s, err := NewSession(context.Background(), Config{
+		Backend: f.client(), LLM: llm, InvestigationID: "inv-1", MaxToolRounds: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := s.Turn(context.Background(), "have we seen this before?"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+
+	calls := f.callsTo("/api/interpretations")
+	if len(calls) == 0 {
+		t.Fatal("no interpretation committed")
+	}
+	var body InterpretationRequest
+	if err := json.Unmarshal(calls[len(calls)-1].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.ConsultedSimilar) != 1 {
+		t.Fatalf("consulted_similar not recorded: %+v", body.ConsultedSimilar)
+	}
+	cs := body.ConsultedSimilar[0]
+	if cs.InvestigationRef != "grouping--prior1" || cs.Band != "NEAR_DUPLICATE" {
+		t.Errorf("consulted_similar entry wrong: %+v", cs)
+	}
+	if !cs.Used {
+		t.Error("Used should be true — the final text names the prior case's title")
+	}
 }
 
 // TestSession_MaxTokensStopClosesToolUse: a max_tokens stop that still carried a

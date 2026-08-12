@@ -476,9 +476,12 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 	// analyst's acknowledge/done/snooze on a thread.
 	api.Handle("/comms/", authz.RequireAuth(verifier)(http.HandlerFunc(b.commsRoute)))
 
-	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval.
+	// Knowledge service (Phase C.5): SOP corpus CRUD + keyword retrieval, plus
+	// the K4 similar-investigation similarity recall over the case-summaries
+	// corpus.
 	if b.cfg.Knowledge != nil {
 		api.Handle("/knowledge/recall_sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSOPs)))
+		api.Handle("/knowledge/recall_similar_investigations", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSimilar)))
 		api.Handle("/sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsCollection)))
 		api.Handle("/sops/", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsItem)))
 	}

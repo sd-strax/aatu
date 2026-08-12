@@ -2891,13 +2891,22 @@ export class InvestigationDocuments {
     // followed (solid) vs merely consulted (dashed). Rides under the turn.
     function appendSopChips(box, e) {
       const sops = e.consultedSops || [];
-      if (!sops.length) return;
+      const similar = e.consultedSimilar || [];
+      if (!sops.length && !similar.length) return;
       const row = document.createElement("div");
       row.className = "usage";
       for (const s of sops) {
         const chip = document.createElement("span");
         chip.className = "sopchip" + (s.used ? "" : " consulted");
         chip.textContent = (s.used ? "followed: " : "consulted: ") + (s.title || s.sopId);
+        row.appendChild(chip);
+      }
+      // Similar-investigation provenance (K4, 06 §6): prior cases the turn drew
+      // on. Same solid/dashed used-vs-consulted convention as SOP chips.
+      for (const s of similar) {
+        const chip = document.createElement("span");
+        chip.className = "sopchip" + (s.used ? "" : " consulted");
+        chip.textContent = (s.used ? "drew on case: " : "similar case: ") + (s.title || s.investigationRef);
         row.appendChild(chip);
       }
       box.appendChild(row);

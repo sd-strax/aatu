@@ -97,3 +97,59 @@ func hasTag(tags []string, want string) bool {
 	}
 	return false
 }
+
+// TestRecallSimilar covers the K4 similarity recall over case-summaries: the
+// source investigation ref is recovered from the reserved tag, reserved tags
+// are stripped, and bands ride through (via the vector backend).
+func TestRecallSimilar(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	emb := &stubEmbedder{vec: map[string][]float32{}}
+	s := reset(t, substrate.WithEmbedder(emb))
+	ctx := context.Background()
+
+	// Two prior cases on orthogonal axes; the query aligns with the RDP one.
+	ref1 := "grouping--" + uuid.New().String()
+	ref2 := "grouping--" + uuid.New().String()
+	emb.set("RDP lateral movement\n\nAttacker pivoted via RDP from WIN-FILE01.", 1, 0)
+	emb.set("Phishing payload\n\nUser opened a malicious attachment.", 0, 1)
+	emb.set("host pivoted over remote desktop", 1, 0)
+
+	mk := func(ref, title, body string, techniques ...string) {
+		if _, err := s.WriteSummary(ctx, testTenant, Summary{
+			InvestigationRef: ref, Title: title, SummaryText: body, ExtractorVersion: "1",
+			SeedKind: "entity", Techniques: techniques, VerdictDisposition: "MALICIOUS",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(ref1, "RDP lateral movement", "Attacker pivoted via RDP from WIN-FILE01.", "T1021.001")
+	mk(ref2, "Phishing payload", "User opened a malicious attachment.", "T1566")
+
+	res, err := s.RecallSimilar(ctx, testTenant, SimilarRequest{Query: "host pivoted over remote desktop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Coverage != CoverageComplete || len(res.Results) == 0 {
+		t.Fatalf("expected a similar case, got %+v", res)
+	}
+	top := res.Results[0]
+	if top.InvestigationRef != ref1 {
+		t.Errorf("top match ref = %q; want %q (the RDP case)", top.InvestigationRef, ref1)
+	}
+	if top.Band != string(substrate.BandNearDuplicate) {
+		t.Errorf("aligned query should band NEAR_DUPLICATE, got %q", top.Band)
+	}
+	if top.Backend != "vector-cosine/1/stub-embed" {
+		t.Errorf("backend = %q", top.Backend)
+	}
+	for _, tag := range top.Tags {
+		if len(tag) >= 2 && tag[:2] == "__" {
+			t.Errorf("reserved tag leaked into similar recall: %q", tag)
+		}
+	}
+	if !hasTag(top.Tags, "T1021.001") {
+		t.Errorf("expected technique facet in tags: %v", top.Tags)
+	}
+}

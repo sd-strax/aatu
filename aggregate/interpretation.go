@@ -121,6 +121,20 @@ type ConsultedSOP struct {
 	Used           bool    `json:"used"`
 }
 
+// ConsultedSimilarInvestigation records one concluded-investigation summary
+// surfaced by similarity retrieval during a reasoning act (06 §3, §6): the
+// case-knowledge counterpart of ConsultedSOP. InvestigationRef is the source
+// investigation's grouping ref (from the summary's provenance), Band the
+// substrate similarity band. Used is conservative like ConsultedSOP.Used —
+// only positive evidence the act built on it.
+type ConsultedSimilarInvestigation struct {
+	InvestigationRef string  `json:"investigation_ref"`
+	Title            string  `json:"title,omitempty"`
+	RetrievalScore   float64 `json:"retrieval_score,omitempty"`
+	Band             string  `json:"band,omitempty"`
+	Used             bool    `json:"used"`
+}
+
 // maxConsultedPerInterpretation bounds the consulted lists (refs are ids +
 // scores, not bulk; a runaway retrieval must not bloat the event).
 const maxConsultedPerInterpretation = 20
@@ -163,6 +177,10 @@ type InterpretationRecorded struct {
 	// ConsultedSOPs is the knowledge-retrieval provenance for this act
 	// (01 schema; design/ui 02 §2.11 renders it).
 	ConsultedSOPs []ConsultedSOP `json:"consulted_sops,omitempty"`
+
+	// ConsultedSimilar is the case-knowledge counterpart: concluded-investigation
+	// summaries surfaced by similarity retrieval this act (06 §6).
+	ConsultedSimilar []ConsultedSimilarInvestigation `json:"consulted_similar_investigations,omitempty"`
 }
 
 // interpretationEvent builds an InterpretationRecorded event for env at seqNo,
@@ -262,6 +280,10 @@ type RecordInterpretation struct {
 	// event (01 schema). The caller (the agent loop) supplies what it
 	// retrieved and what it actually built on.
 	ConsultedSOPs []ConsultedSOP `json:"consulted_sops,omitempty"`
+
+	// ConsultedSimilar carries the turn's similar-investigation retrieval
+	// provenance (06 §6), same contract as ConsultedSOPs.
+	ConsultedSimilar []ConsultedSimilarInvestigation `json:"consulted_similar_investigations,omitempty"`
 }
 
 // Kind returns "RecordInterpretation".
@@ -324,6 +346,14 @@ func (c RecordInterpretation) Validate(env Envelope) error {
 			return errors.New("RecordInterpretation: consulted_sops entry has no sop_id")
 		}
 	}
+	if len(c.ConsultedSimilar) > maxConsultedPerInterpretation {
+		return fmt.Errorf("RecordInterpretation: consulted_similar_investigations exceed %d", maxConsultedPerInterpretation)
+	}
+	for _, cs := range c.ConsultedSimilar {
+		if cs.InvestigationRef == "" {
+			return errors.New("RecordInterpretation: consulted_similar_investigations entry has no investigation_ref")
+		}
+	}
 	if err := validateVerdictShape(c); err != nil {
 		return err
 	}
@@ -358,6 +388,7 @@ func applyRecordInterpretation(env Envelope, state aggregateState, c RecordInter
 		OutputRefs:         c.OutputRefs,
 		Confidence:         c.Confidence,
 		ConsultedSOPs:      c.ConsultedSOPs,
+		ConsultedSimilar:   c.ConsultedSimilar,
 	}
 	if c.Transcript != nil {
 		rec.TranscriptRef = &TranscriptRef{

@@ -85,6 +85,25 @@ func TestRecordInterpretation_Validate(t *testing.T) {
 	if err := bulkRef.Validate(env); err == nil {
 		t.Error("over-long ref string accepted")
 	}
+
+	// Consulted lists (SOP + similar) are bounded and each entry needs its id.
+	okSimilar := base
+	okSimilar.ConsultedSimilar = []ConsultedSimilarInvestigation{{InvestigationRef: "grouping--a", Band: "RELATED"}}
+	if err := okSimilar.Validate(env); err != nil {
+		t.Errorf("valid consulted_similar rejected: %v", err)
+	}
+	noRef := base
+	noRef.ConsultedSimilar = []ConsultedSimilarInvestigation{{Title: "some case"}}
+	if err := noRef.Validate(env); err == nil {
+		t.Error("consulted_similar entry without investigation_ref accepted")
+	}
+	manySimilar := base
+	for i := 0; i <= maxConsultedPerInterpretation; i++ {
+		manySimilar.ConsultedSimilar = append(manySimilar.ConsultedSimilar, ConsultedSimilarInvestigation{InvestigationRef: "grouping--x"})
+	}
+	if err := manySimilar.Validate(env); err == nil {
+		t.Error("over-cap consulted_similar accepted")
+	}
 }
 
 // activeInvestigation drives a fresh aggregate to ACTIVE via h and returns its

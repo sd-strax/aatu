@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -105,6 +106,93 @@ func (s *Store) WriteSummary(ctx context.Context, tenantID uuid.UUID, sum Summar
 		return uuid.Nil, fmt.Errorf("write summary: %w", err)
 	}
 	return e.ID, nil
+}
+
+// SimilarRequest is the recall_similar_investigations query (06 §4): a whole
+// document (the current investigation's state/seed) matched by similarity
+// against the case-summaries corpus.
+type SimilarRequest struct {
+	Query          string   `json:"query"`
+	Tags           []string `json:"tags,omitempty"`
+	Limit          int      `json:"limit"`
+	IncludeRetired bool     `json:"include_retired"`
+}
+
+// SimilarMatch is one ranked similar-investigation result. InvestigationRef is
+// the source investigation's grouping ref (recovered from the reserved source
+// tag), so the agent can cite the prior case it learned from.
+type SimilarMatch struct {
+	InvestigationRef string   `json:"investigation_ref"`
+	Title            string   `json:"title"`
+	Excerpt          string   `json:"excerpt"`
+	Score            float64  `json:"score"`
+	Band             string   `json:"band"`
+	MatchRationale   string   `json:"match_rationale"`
+	Tags             []string `json:"tags,omitempty"`
+	ContentHash      string   `json:"content_hash,omitempty"`
+	Backend          string   `json:"backend,omitempty"`
+}
+
+// SimilarResult is the recall_similar_investigations response envelope.
+type SimilarResult struct {
+	Results     []SimilarMatch `json:"results"`
+	Coverage    string         `json:"coverage"`
+	RetrievalAt time.Time      `json:"retrieval_at"`
+}
+
+// RecallSimilar runs SIMILARITY recall over the case-summaries corpus (06 §4):
+// "have we handled something like this before?" The query is the current
+// investigation's state as a document; results carry substrate similarity bands
+// (NEAR_DUPLICATE/RELATED/DISTINCT). Each match's InvestigationRef is recovered
+// from the reserved source tag (recall hits carry no provenance), and reserved
+// tags are stripped from the user-facing view.
+func (s *Store) RecallSimilar(ctx context.Context, tenantID uuid.UUID, req SimilarRequest) (SimilarResult, error) {
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultRecallLimit
+	}
+	res, err := s.sub.Recall(ctx, tenantID.String(), substrate.RecallQuery{
+		Corpus:         CorpusCaseSummaries,
+		Mode:           substrate.ModeSimilarity,
+		Query:          req.Query,
+		Tags:           req.Tags,
+		Limit:          limit,
+		IncludeRetired: req.IncludeRetired,
+	})
+	if err != nil {
+		return SimilarResult{}, fmt.Errorf("recall_similar_investigations: %w", err)
+	}
+	out := SimilarResult{
+		Coverage:    string(res.Coverage),
+		RetrievalAt: res.RetrievalAt,
+		Results:     make([]SimilarMatch, 0, len(res.Results)),
+	}
+	backend := rankerLabel(res.Ranker)
+	for _, h := range res.Results {
+		out.Results = append(out.Results, SimilarMatch{
+			InvestigationRef: sourceRefOf(h.Tags),
+			Title:            h.Title,
+			Excerpt:          h.Excerpt,
+			Score:            h.Score,
+			Band:             string(h.Band),
+			MatchRationale:   h.MatchRationale,
+			Tags:             stripReserved(h.Tags),
+			ContentHash:      string(h.ContentHash),
+			Backend:          backend,
+		})
+	}
+	return out, nil
+}
+
+// sourceRefOf recovers a summary's source investigation ref from its reserved
+// source tag.
+func sourceRefOf(tags []string) string {
+	for _, t := range tags {
+		if rest, ok := strings.CutPrefix(t, summarySourcePrefix); ok {
+			return rest
+		}
+	}
+	return ""
 }
 
 // summaryTags are the hard-filterable facets: techniques, the seed kind, the

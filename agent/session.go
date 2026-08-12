@@ -70,6 +70,9 @@ type Session struct {
 	// consulted accumulates the turn's recall_sops retrievals (by sop_id,
 	// keeping the best score) — the knowledge provenance the commit carries.
 	consulted map[string]ConsultedSOP
+	// consultedSimilar accumulates the turn's recall_similar_investigations
+	// retrievals (by investigation_ref, best score) — case-knowledge provenance.
+	consultedSimilar map[string]ConsultedSimilarInvestigation
 	// turnsSinceAnchor counts turns since the engine-state anchor last rode a
 	// user message; at anchorEveryTurns the next turn re-grounds the model on
 	// the authoritative action record (countering narrative drift in long
@@ -320,6 +323,7 @@ func (s *Session) System() string { return s.system }
 func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error) {
 	s.pendingActions = nil
 	s.consulted = map[string]ConsultedSOP{}
+	s.consultedSimilar = map[string]ConsultedSimilarInvestigation{}
 	turnID := uuid.NewString()
 
 	var transcript strings.Builder
@@ -426,6 +430,9 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 			if tu.ToolName == ToolRecallSOPs && !isErr {
 				s.trackConsulted(content)
 			}
+			if tu.ToolName == ToolRecallSimilar && !isErr {
+				s.trackConsultedSimilar(content)
+			}
 			fmt.Fprintf(&transcript, "[tool_result %s id=%s error=%v] %s\n",
 				sanitizeTranscript(tu.ToolName), sanitizeTranscript(tu.ToolUseID), isErr, sanitizeTranscript(content))
 			if s.hooks.OnToolResult != nil {
@@ -483,6 +490,7 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 		Transcript:         &Transcript{TurnID: turnID, Body: transcript.String()},
 		ToolCalls:          toolLog,
 		ConsultedSOPs:      s.consultedList(finalText.String()),
+		ConsultedSimilar:   s.consultedSimilarList(finalText.String()),
 	})
 	if err != nil {
 		return res, fmt.Errorf("agent: commit turn: %w", err)
@@ -549,6 +557,51 @@ func (s *Session) consultedList(finalText string) []ConsultedSOP {
 	for _, c := range s.consulted {
 		c.Used = (c.Title != "" && strings.Contains(lower, strings.ToLower(c.Title))) ||
 			strings.Contains(lower, strings.ToLower(c.SOPID))
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RetrievalScore > out[j].RetrievalScore })
+	return out
+}
+
+// trackConsultedSimilar accumulates one recall_similar_investigations result's
+// retrievals into the turn's case-knowledge provenance (dedup by
+// investigation_ref, best score kept).
+func (s *Session) trackConsultedSimilar(content string) {
+	var res struct {
+		Results []struct {
+			InvestigationRef string  `json:"investigation_ref"`
+			Title            string  `json:"title"`
+			Score            float64 `json:"score"`
+			Band             string  `json:"band"`
+		} `json:"results"`
+	}
+	if json.Unmarshal([]byte(content), &res) != nil {
+		return
+	}
+	for _, r := range res.Results {
+		if r.InvestigationRef == "" {
+			continue
+		}
+		if prev, ok := s.consultedSimilar[r.InvestigationRef]; !ok || r.Score > prev.RetrievalScore {
+			s.consultedSimilar[r.InvestigationRef] = ConsultedSimilarInvestigation{
+				InvestigationRef: r.InvestigationRef, Title: r.Title, RetrievalScore: r.Score, Band: r.Band,
+			}
+		}
+	}
+}
+
+// consultedSimilarList finalizes the turn's case-knowledge provenance, with the
+// same conservative Used rule as consultedList: only when the model's own final
+// text references the prior investigation (by title or ref).
+func (s *Session) consultedSimilarList(finalText string) []ConsultedSimilarInvestigation {
+	if len(s.consultedSimilar) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(finalText)
+	out := make([]ConsultedSimilarInvestigation, 0, len(s.consultedSimilar))
+	for _, c := range s.consultedSimilar {
+		c.Used = (c.Title != "" && strings.Contains(lower, strings.ToLower(c.Title))) ||
+			strings.Contains(lower, strings.ToLower(c.InvestigationRef))
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].RetrievalScore > out[j].RetrievalScore })

@@ -214,6 +214,17 @@ func (b *Backend) renderInvestigationMarkdown(ctx context.Context, id uuid.UUID)
 				}
 				meta = append(meta, verb+" SOP: "+title)
 			}
+			for _, s := range e.ConsultedSimilar {
+				verb := "consulted"
+				if s.Used {
+					verb = "drew on"
+				}
+				title := s.Title
+				if title == "" {
+					title = s.InvestigationRef
+				}
+				meta = append(meta, verb+" prior case: "+title)
+			}
 			if len(meta) > 0 {
 				fmt.Fprintf(&md, "*%s*\n\n", strings.Join(meta, " · "))
 			}

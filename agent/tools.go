@@ -14,6 +14,7 @@ import (
 // live catalog (05 §3.4 step 2).
 const (
 	ToolRecallSOPs              = "recall_sops"
+	ToolRecallSimilar           = "recall_similar_investigations"
 	ToolProposeHypothesis       = "propose_hypothesis"
 	ToolRecordPrediction        = "record_prediction"
 	ToolEvaluateHypothesis      = "evaluate_hypothesis"
@@ -111,6 +112,14 @@ func intrinsicTools(actionTypes []ActionType) []ToolDef {
 			InputSchema: obj(map[string]any{
 				"query": str("what guidance you are looking for"),
 				"tags":  strList("hard filter on SOP tags, optional"),
+			}, "query"),
+		},
+		{
+			Name:        ToolRecallSimilar,
+			Description: "Recall concluded investigations similar to this one — 'have we handled something like this before?'. Query with the current investigation's situation (seed, entities, techniques). Results carry a similarity band (NEAR_DUPLICATE/RELATED/DISTINCT); EMPTY coverage means no prior similar case, evidence of absence.",
+			InputSchema: obj(map[string]any{
+				"query": str("the current situation to match against past cases (seed, entities, techniques, what you're seeing)"),
+				"tags":  strList("hard filter on summary tags (e.g. a technique id, seed:entity), optional"),
 			}, "query"),
 		},
 		{
@@ -407,6 +416,20 @@ func (s *Session) dispatch(ctx context.Context, name string, input json.RawMessa
 			body["tags"] = in.Tags
 		}
 		return s.backend.RecallSOPs(ctx, body)
+
+	case ToolRecallSimilar:
+		var in struct {
+			Query string   `json:"query"`
+			Tags  []string `json:"tags"`
+		}
+		if err := json.Unmarshal(input, &in); err != nil {
+			return nil, fmt.Errorf("bad recall_similar_investigations input: %w", err)
+		}
+		body := map[string]any{"query": in.Query}
+		if len(in.Tags) > 0 {
+			body["tags"] = in.Tags
+		}
+		return s.backend.RecallSimilar(ctx, body)
 
 	case ToolProposeHypothesis:
 		var in struct {

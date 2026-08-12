@@ -49,6 +49,9 @@ type RecordInterpretationBody struct {
 	// ConsultedSOPs is the turn's knowledge-retrieval provenance (01 schema):
 	// what retrieval surfaced, and what the act actually built on.
 	ConsultedSOPs []ConsultedSOPBody `json:"consulted_sops,omitempty"`
+
+	// ConsultedSimilar is the case-knowledge counterpart (06 §6).
+	ConsultedSimilar []ConsultedSimilarBody `json:"consulted_similar_investigations,omitempty"`
 }
 
 // ConsultedSOPBody mirrors aggregate.ConsultedSOP on the wire.
@@ -57,6 +60,15 @@ type ConsultedSOPBody struct {
 	Title          string  `json:"title,omitempty"`
 	RetrievalScore float64 `json:"retrieval_score,omitempty"`
 	Used           bool    `json:"used"`
+}
+
+// ConsultedSimilarBody mirrors aggregate.ConsultedSimilarInvestigation.
+type ConsultedSimilarBody struct {
+	InvestigationRef string  `json:"investigation_ref"`
+	Title            string  `json:"title,omitempty"`
+	RetrievalScore   float64 `json:"retrieval_score,omitempty"`
+	Band             string  `json:"band,omitempty"`
+	Used             bool    `json:"used"`
 }
 
 // VerdictBody is the client shape of a verdict act.
@@ -174,6 +186,11 @@ func (b *Backend) recordInterpretation(w http.ResponseWriter, r *http.Request) {
 	for _, cs := range body.ConsultedSOPs {
 		cmd.ConsultedSOPs = append(cmd.ConsultedSOPs, aggregate.ConsultedSOP{
 			SOPID: cs.SOPID, Title: cs.Title, RetrievalScore: cs.RetrievalScore, Used: cs.Used,
+		})
+	}
+	for _, cs := range body.ConsultedSimilar {
+		cmd.ConsultedSimilar = append(cmd.ConsultedSimilar, aggregate.ConsultedSimilarInvestigation{
+			InvestigationRef: cs.InvestigationRef, Title: cs.Title, RetrievalScore: cs.RetrievalScore, Band: cs.Band, Used: cs.Used,
 		})
 	}
 	// The AI-verdict dial (01 §Verdict): an AI-delegated verdict is refused

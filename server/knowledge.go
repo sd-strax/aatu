@@ -45,6 +45,31 @@ func (b *Backend) recallSOPs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// recallSimilar handles POST /api/knowledge/recall_similar_investigations
+// (design/06 §4, K4): similarity retrieval over the concluded-investigation
+// summary corpus — "have we handled something like this before?" Any
+// authenticated reader; the agent loop consults it during reasoning.
+func (b *Backend) recallSimilar(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	b.requireRolesOrDeny(w, r, anyReader, func(w http.ResponseWriter, r *http.Request) {
+		var req knowledge.SimilarRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
+			return
+		}
+		res, err := b.cfg.Knowledge.RecallSimilar(r.Context(), module.SingleTenantUUID, req)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "recall_similar_investigations: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+}
+
 // sopsCollection routes /api/sops: POST create (analyst), GET list (reader).
 func (b *Backend) sopsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {

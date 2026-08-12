@@ -55,6 +55,9 @@ type ThreadEntryView struct {
 	// ConsultedSOPs is the act's knowledge-retrieval provenance
 	// (design/ui 02 §2.11 renders the chips).
 	ConsultedSOPs []aggregate.ConsultedSOP `json:"consulted_sops,omitempty"`
+
+	// ConsultedSimilar is the act's similar-investigation provenance (06 §6).
+	ConsultedSimilar []aggregate.ConsultedSimilarInvestigation `json:"consulted_similar_investigations,omitempty"`
 }
 
 // listInvestigationThread serves the thread. Any authenticated reader
@@ -127,6 +130,7 @@ func (b *Backend) loadThread(ctx context.Context, invID uuid.UUID) ([]ThreadEntr
 			HasTranscript:      rec.TranscriptRef != nil,
 			Superseded:         superseded[rec.InterpretationID.String()],
 			ConsultedSOPs:      rec.ConsultedSOPs,
+			ConsultedSimilar:   rec.ConsultedSimilar,
 		})
 	}
 	if err := rows.Err(); err != nil {
