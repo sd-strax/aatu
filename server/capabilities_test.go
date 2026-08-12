@@ -36,7 +36,7 @@ func buildTestCapability(t *testing.T) (*capability.Resolver, *capability.Catalo
 			"enumerate_logons": {{Adapter: "fixture", Operation: "replay", Priority: 100}},
 		},
 	}
-	res, cat, err := capability.BuildResolver(tc, root, uuid.New())
+	res, cat, err := capability.BuildResolver(tc, root, uuid.New(), true)
 	if err != nil {
 		t.Fatalf("BuildResolver: %v", err)
 	}

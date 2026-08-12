@@ -16,7 +16,7 @@ func TestShippedActionScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load shipped action config: %v", err)
 	}
-	resolver, catalog, err := BuildActionResolver(cfg, "../fixtures")
+	resolver, catalog, err := BuildActionResolver(cfg, "../fixtures", true)
 	if err != nil {
 		t.Fatalf("build resolver: %v", err)
 	}

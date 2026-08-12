@@ -12,9 +12,11 @@ the `lateral-movement-via-rdp` fixture scenario; there are no real adapters.
 > Keep this in sync when a surface changes. It doubles as the "does the whole
 > thing still hang together" check before a demo.
 
-**Prereqs:** stack running on the current binary, workbench reloaded, signed in,
-BYOK `ANTHROPIC_API_KEY` set. Start a **fresh** investigation so the arc is
-clean.
+**Prereqs:** stack running on the current binary, **demo world seeded**
+(`reckon demo seed` once, after `start` + `dev-auth`, then restart — a plain
+`init` is fixture-free now, so the demo is opt-in), workbench reloaded, signed
+in, BYOK `ANTHROPIC_API_KEY` set. Start a **fresh** investigation so the arc is
+clean. (`reckon demo reset` wipes it all back afterward.)
 
 ---
 

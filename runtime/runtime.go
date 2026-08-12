@@ -363,6 +363,7 @@ func serve(cfg config.Config) error {
 		// was built from and rebuilds it in place.
 		CapabilityConfigPath:  cfg.Capability.ConfigPath,
 		CapabilityFixtureRoot: cfg.Capability.FixtureRoot,
+		Demo:                  cfg.Demo.Enabled,
 		// The no-restart reload closure: re-run the full plugin build path
 		// (adapter host + out-of-process adapters + catalog reconciliation).
 		// Injected here because only runtime holds adapterHost.
@@ -544,7 +545,7 @@ func buildBackendActionResolver(cfg config.Config, host *adapterplugin.Host) (*a
 	if err != nil {
 		return nil, err
 	}
-	resolver, _, err := action.BuildActionResolverWithAdapters(ac, cfg.Capability.FixtureRoot, plugins)
+	resolver, _, err := action.BuildActionResolverWithAdapters(ac, cfg.Capability.FixtureRoot, plugins, cfg.Demo.Enabled)
 	if err != nil {
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
@@ -586,7 +587,7 @@ func buildActionResolverFromFile(cfg config.Config, host *adapterplugin.Host) (*
 	if err != nil {
 		return nil, err
 	}
-	resolver, _, err := action.BuildActionResolverWithAdapters(ac, cfg.Capability.FixtureRoot, plugins)
+	resolver, _, err := action.BuildActionResolverWithAdapters(ac, cfg.Capability.FixtureRoot, plugins, cfg.Demo.Enabled)
 	if err != nil {
 		return nil, fmt.Errorf("build action resolver: %w", err)
 	}
@@ -627,7 +628,7 @@ func buildCapability(cfg config.Config, host *adapterplugin.Host) (*capability.R
 	if err != nil {
 		return nil, nil, err
 	}
-	resolver, catalog, err := capability.BuildResolverWithAdapters(tc, cfg.Capability.FixtureRoot, ns, plugins)
+	resolver, catalog, err := capability.BuildResolverWithAdapters(tc, cfg.Capability.FixtureRoot, ns, plugins, cfg.Demo.Enabled)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build capability layer: %w", err)
 	}

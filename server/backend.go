@@ -113,6 +113,12 @@ type BackendConfig struct {
 	CapabilityConfigPath  string
 	CapabilityFixtureRoot string
 
+	// Demo mirrors config.Demo.Enabled: this install is the bundled demo
+	// sandbox, so the FIXTURE adapter class is permitted. A hot reload
+	// (rebuildCapabilityFromFile) must carry it so fixtures can't be re-wired
+	// against a real install after a config edit.
+	Demo bool
+
 	// CapabilityRebuild re-reads the tenant capability config from disk and
 	// builds a fresh resolver + catalog through the FULL plugin path (the
 	// adapter host, out-of-process adapters, catalog reconciliation) — the
@@ -493,6 +499,9 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		api.Handle("/sops/import", authz.RequireAuth(verifier)(http.HandlerFunc(b.importSOP)))
 		api.Handle("/sops/import_markdown", authz.RequireAuth(verifier)(http.HandlerFunc(b.importMarkdownSOP)))
 		api.Handle("/sops/", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsItem)))
+		// `reckon demo seed` loads the embedded demo knowledge pack; virginity is
+		// enforced in the handler so it can never contaminate a working install.
+		api.Handle("/admin/demo/seed", authz.RequireAuth(verifier)(http.HandlerFunc(b.seedDemoKnowledge)))
 	}
 
 	// /stream — projection-delta WebSocket. Authenticated at the handshake

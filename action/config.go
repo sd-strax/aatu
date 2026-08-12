@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sd-strax/reckon/capability"
+	"github.com/sd-strax/reckon/internal/branding"
 )
 
 // TenantActionConfig is the write-side tenant config (08 §4): which write
@@ -59,9 +60,10 @@ func LoadActionConfig(path string) (TenantActionConfig, error) {
 
 // BuildActionResolver constructs the action resolver + catalog from a tenant
 // config against the fixture layer only. It is the no-plugins case of
-// BuildActionResolverWithAdapters.
-func BuildActionResolver(cfg TenantActionConfig, fixtureRoot string) (*ActionResolver, *ActionCatalog, error) {
-	return BuildActionResolverWithAdapters(cfg, fixtureRoot, nil)
+// BuildActionResolverWithAdapters. demo gates the FIXTURE class (see
+// BuildActionResolverWithAdapters).
+func BuildActionResolver(cfg TenantActionConfig, fixtureRoot string, demo bool) (*ActionResolver, *ActionCatalog, error) {
+	return BuildActionResolverWithAdapters(cfg, fixtureRoot, nil, demo)
 }
 
 // BuildActionResolverWithAdapters constructs the action resolver + catalog from
@@ -70,7 +72,12 @@ func BuildActionResolver(cfg TenantActionConfig, fixtureRoot string) (*ActionRes
 // instance name (11 §2) — the fixture class is built here, every other class is
 // looked up there. Only enabled adapters are wired; binding templates are
 // validated up front (08 §4).
-func BuildActionResolverWithAdapters(cfg TenantActionConfig, fixtureRoot string, plugins map[string]WriteAdapter) (*ActionResolver, *ActionCatalog, error) {
+//
+// demo gates the FIXTURE adapter class (the write-side twin of the read guard,
+// capability.BuildResolverWithAdapters): a ClassFixture binding on a non-demo
+// install is a hard error, so mock write actions can never fire against a real
+// deployment (config.Demo).
+func BuildActionResolverWithAdapters(cfg TenantActionConfig, fixtureRoot string, plugins map[string]WriteAdapter, demo bool) (*ActionResolver, *ActionCatalog, error) {
 	adapters := make(map[string]WriteAdapter)
 	for name, spec := range cfg.Adapters {
 		if !spec.Enabled {
@@ -78,6 +85,9 @@ func BuildActionResolverWithAdapters(cfg TenantActionConfig, fixtureRoot string,
 		}
 		switch spec.Class {
 		case capability.ClassFixture:
+			if !demo {
+				return nil, nil, fmt.Errorf("write adapter %q: fixture adapters require demo mode (run `%s demo seed`, or remove the binding to run against real adapters)", name, branding.CLI)
+			}
 			adapters[name] = NewFixtureWriteAdapter(fixtureRoot, spec.Scenario)
 		default:
 			p, ok := plugins[name]

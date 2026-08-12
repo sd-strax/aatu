@@ -47,7 +47,7 @@ func TestUpdateAdapterEnablement_RoundTrip(t *testing.T) {
 		t.Error("unrelated adapter stanza was disturbed")
 	}
 
-	res, catalog, err := BuildResolver(cfg, "../fixtures", uuid.New())
+	res, catalog, err := BuildResolver(cfg, "../fixtures", uuid.New(), true)
 	if err != nil {
 		t.Fatalf("rewritten config does not build: %v", err)
 	}

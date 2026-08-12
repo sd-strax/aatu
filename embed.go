@@ -8,13 +8,24 @@ package reckon
 import "embed"
 
 // DemoFS carries the demo fixture scenario (OCSF events + declared write
-// results) and the example tenant capability/action configs. `reckon init`
-// copies these into the install's config directory and points the config at
-// them (see runtime.Init). Kept in the module root so the //go:embed patterns
-// can reach fixtures/ and examples/ (embed cannot traverse `..`).
+// results), the example tenant capability/action configs, and the demo
+// knowledge pack (SOPs + prior-case summaries under demo/knowledge). `reckon
+// demo seed` materializes the fixtures/configs into the install's config
+// directory (see runtime.SeedDemo) and loads the knowledge pack into the
+// knowledge corpus (server seeds it). Kept in the module root so the //go:embed
+// patterns can reach these trees (embed cannot traverse `..`).
 //
-//go:embed fixtures examples
+//go:embed fixtures examples demo
 var DemoFS embed.FS
+
+// DemoKnowledgeSOPs / DemoKnowledgeCases are the embedded knowledge-pack
+// subtrees the demo seed loads: institutional SOPs (markdown + frontmatter) and
+// prior concluded-case summaries (JSON), both scoped to the DemoScenario world
+// so similar-case recall and SOP consultation have real material to surface.
+const (
+	DemoKnowledgeSOPs  = "demo/knowledge/sops"
+	DemoKnowledgeCases = "demo/knowledge/cases"
+)
 
 // DemoScenario is the fixture scenario `reckon init` seeds and wires the demo
 // capability + action config to (03 §9, 08 §9). It names the fixture

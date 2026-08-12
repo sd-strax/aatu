@@ -49,6 +49,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Backend.HTTPPort != 8080 {
 		t.Errorf("default backend port = %d; want 8080", cfg.Backend.HTTPPort)
 	}
+	if cfg.Demo.Enabled {
+		t.Errorf("default demo.enabled = true; want false (demo is opt-in via `reckon demo seed`)")
+	}
 }
 
 func TestUnmarshalDataAndPostgres(t *testing.T) {

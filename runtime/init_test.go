@@ -219,33 +219,44 @@ func TestInit_UniquePerInstall(t *testing.T) {
 	}
 }
 
-// TestInit_SeedsWiredDemo: a fresh init materializes the demo scenario + a
-// merged tenant config, points the config at them, and that config is consumable
-// by BOTH the capability (read) and action (write) loaders — the "runs out of
-// the box" contract. Verified end-to-end: BuildResolver produces available verbs
-// and BuildActionResolver produces write bindings, both against the seeded files.
-func TestInit_SeedsWiredDemo(t *testing.T) {
+// TestInit_FixtureFree: a plain init wires NO capability layer — Capability
+// .ConfigPath stays empty and demo.enabled is false — so a fresh install never
+// runs fixtures. The demo world is opt-in via `reckon demo seed` (SeedDemo).
+func TestInit_FixtureFree(t *testing.T) {
 	withConfigEnv(t)
-	res, err := Init(promptStub())
-	if err != nil {
+	if _, err := Init(promptStub()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if res.SeededScenario == "" || res.CapabilityConfig == "" || res.FixtureRoot == "" {
-		t.Fatalf("seed result incomplete: %+v", res)
-	}
-
-	// The config Load returns points at the seeded files (not the empty default).
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Capability.ConfigPath != res.CapabilityConfig || cfg.Capability.FixtureRoot != res.FixtureRoot {
-		t.Fatalf("config not wired at seed: config_path=%q fixture_root=%q",
-			cfg.Capability.ConfigPath, cfg.Capability.FixtureRoot)
+	if cfg.Capability.ConfigPath != "" {
+		t.Errorf("a plain init wired a capability config_path %q — the demo must be opt-in", cfg.Capability.ConfigPath)
+	}
+	if cfg.Demo.Enabled {
+		t.Error("a plain init set demo.enabled — the demo must be opt-in")
+	}
+}
+
+// TestSeedDemo_WiredDemo: SeedDemo materializes the demo scenario + a merged
+// tenant config that is consumable by BOTH the capability (read) and action
+// (write) loaders — the demo "runs out of the box" contract, now behind
+// `reckon demo seed` rather than init. BuildResolver produces available verbs
+// and BuildActionResolver produces write bindings, both against the seeded files
+// (with demo=true, since the fixture guard requires it).
+func TestSeedDemo_WiredDemo(t *testing.T) {
+	base := t.TempDir()
+	res, err := SeedDemo(base)
+	if err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+	if res.Scenario == "" || res.CapabilityConfig == "" || res.FixtureRoot == "" {
+		t.Fatalf("seed result incomplete: %+v", res)
 	}
 
 	// The fixture scenario JSON landed under the fixture root.
-	if entries, err := os.ReadDir(filepath.Join(res.FixtureRoot, res.SeededScenario)); err != nil || len(entries) == 0 {
+	if entries, err := os.ReadDir(filepath.Join(res.FixtureRoot, res.Scenario)); err != nil || len(entries) == 0 {
 		t.Fatalf("fixture scenario not seeded (%v, %d files)", err, len(entries))
 	}
 
@@ -254,7 +265,7 @@ func TestInit_SeedsWiredDemo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capability.LoadTenantConfig on seeded config: %v", err)
 	}
-	resolver, catalog, err := capability.BuildResolver(tc, res.FixtureRoot, uuid.New())
+	resolver, catalog, err := capability.BuildResolver(tc, res.FixtureRoot, uuid.New(), true)
 	if err != nil {
 		t.Fatalf("BuildResolver on seeded config: %v", err)
 	}
@@ -270,7 +281,16 @@ func TestInit_SeedsWiredDemo(t *testing.T) {
 	if len(ac.Bindings) == 0 {
 		t.Error("seeded merged config carries no action bindings (write path would be dark)")
 	}
-	if _, _, err := action.BuildActionResolver(ac, res.FixtureRoot); err != nil {
+	if _, _, err := action.BuildActionResolver(ac, res.FixtureRoot, true); err != nil {
 		t.Fatalf("BuildActionResolver on seeded config: %v", err)
+	}
+
+	// The fixture guard bites without demo mode: the same seeded config must be
+	// refused when demo=false, so a real install can't run these fixtures.
+	if _, _, err := capability.BuildResolver(tc, res.FixtureRoot, uuid.New(), false); err == nil {
+		t.Error("BuildResolver accepted a fixture binding with demo=false — the guard is not enforced")
+	}
+	if _, _, err := action.BuildActionResolver(ac, res.FixtureRoot, false); err == nil {
+		t.Error("BuildActionResolver accepted a fixture binding with demo=false — the guard is not enforced")
 	}
 }

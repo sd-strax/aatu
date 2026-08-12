@@ -53,7 +53,7 @@ func buildInvokeCapability(t *testing.T) (*capability.Resolver, *capability.Cata
 			}},
 		},
 	}
-	res, cat, err := capability.BuildResolver(tc, root, uuid.New())
+	res, cat, err := capability.BuildResolver(tc, root, uuid.New(), true)
 	if err != nil {
 		t.Fatalf("BuildResolver: %v", err)
 	}

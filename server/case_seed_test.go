@@ -42,7 +42,7 @@ func buildCaseCapability(t *testing.T, bind bool) (*capability.Resolver, *capabi
 			"get_external_case_details": {{Adapter: "fixture", Operation: "replay", Priority: 100}},
 		}
 	}
-	res, cat, err := capability.BuildResolver(tc, root, uuid.New())
+	res, cat, err := capability.BuildResolver(tc, root, uuid.New(), true)
 	if err != nil {
 		t.Fatalf("BuildResolver: %v", err)
 	}

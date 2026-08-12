@@ -89,6 +89,10 @@ func main() {
 		if err := runKnowledge(os.Args[2:]); err != nil {
 			log.Fatalf("%s knowledge: %v", branding.CLI, err)
 		}
+	case "demo":
+		if err := runDemo(os.Args[2:]); err != nil {
+			log.Fatalf("%s demo: %v", branding.CLI, err)
+		}
 	case "adapter":
 		if err := runAdapter(os.Args[2:]); err != nil {
 			log.Fatalf("%s adapter: %v", branding.CLI, err)
@@ -124,6 +128,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (BYOK Anthropic key)")
 	fmt.Fprintln(os.Stderr, "  investigate --stdio  agent-loop sidecar for the workbench (JSON-RPC over stdio; spawned, not typed)")
 	fmt.Fprintln(os.Stderr, "  knowledge import <file-or-dir>...  seed the SOP corpus from markdown (+ YAML frontmatter attribution); re-import revises")
+	fmt.Fprintln(os.Stderr, "  demo seed   populate a fresh install with the bundled demo world (fixtures + knowledge pack); refuses on a non-virgin install")
+	fmt.Fprintln(os.Stderr, "  demo reset  wipe all data back to a clean real install (stack must be stopped; --force for a non-demo install)")
 	fmt.Fprintln(os.Stderr, "  adapter install <name>  install a bundled first-party adapter (okta) into the data dir")
 	fmt.Fprintln(os.Stderr, "  adapter setup <name>  provision an installed adapter's runtime (managed uv + venv) and run its one-time login")
 	fmt.Fprintln(os.Stderr, "  adapter test <dir>  run the plugin conformance handshake against an adapter directory (11 §7)")
@@ -212,15 +218,14 @@ func runInit(args []string) error {
 	fmt.Printf("  config:    %s\n", res.ConfigPath)
 	fmt.Printf("  data dir:  %s\n", res.DataDir)
 	fmt.Printf("  namespace: %s  (this install's immutable identity namespace)\n", res.TenantNamespace)
-	fmt.Printf("  demo:      %s  (fixture scenario, wired live via %s)\n", res.SeededScenario, res.CapabilityConfig)
+	fmt.Printf("  capabilities: none wired — a real install binds its own adapters (Phase E/F), or run `%s demo seed` to try the bundled demo world on fixtures\n", branding.CLI)
 	printKCAdmin()
 	printPostgres()
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Printf("  1. %s start                 — bring up the bundled stack (first run downloads Pg/Temporal/Keycloak)\n", branding.CLI)
 	fmt.Printf("  2. %s dev-auth              — provision a local dev login (the shipped realm carries no credentials)\n", branding.CLI)
-	fmt.Printf("  3. sign in with the principal dev-auth prints, then GET /api/capabilities — the seeded %s scenario's verbs are live\n",
-		res.SeededScenario)
+	fmt.Printf("  3. %s demo seed             — (optional) populate the bundled demo world on fixtures to test-drive; `%s demo reset` wipes it later\n", branding.CLI, branding.CLI)
 	return nil
 }
 

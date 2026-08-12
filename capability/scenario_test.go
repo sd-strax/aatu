@@ -15,7 +15,7 @@ func TestShippedLateralMovementScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load shipped config: %v", err)
 	}
-	res, catalog, err := BuildResolver(cfg, "../fixtures", uuid.New())
+	res, catalog, err := BuildResolver(cfg, "../fixtures", uuid.New(), true)
 	if err != nil {
 		t.Fatalf("build resolver: %v", err)
 	}

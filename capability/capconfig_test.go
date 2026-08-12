@@ -50,7 +50,7 @@ func TestLoadAndBuildResolver(t *testing.T) {
 		t.Errorf("tenant = %q; want acme", cfg.Tenant)
 	}
 
-	res, catalog, err := BuildResolver(cfg, root, uuid.New())
+	res, catalog, err := BuildResolver(cfg, root, uuid.New(), true)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestBuildResolverRejectsUnbackedPlugin(t *testing.T) {
 	cfg := TenantConfig{
 		Adapters: map[string]AdapterSpec{"cs": {Class: ClassNativeAPI, Enabled: true}},
 	}
-	if _, _, err := BuildResolver(cfg, t.TempDir(), uuid.New()); err == nil {
+	if _, _, err := BuildResolver(cfg, t.TempDir(), uuid.New(), true); err == nil {
 		t.Error("BuildResolver accepted a plugin-class adapter with no backing process")
 	}
 }
@@ -92,7 +92,7 @@ func TestBuildResolverWithInjectedPlugin(t *testing.T) {
 		Adapters: map[string]AdapterSpec{"cs": {Class: ClassNativeAPI, Enabled: true, Reads: []string{"op"}}},
 	}
 	plugins := map[string]Adapter{"cs": healthyStub("cs")}
-	if _, _, err := BuildResolverWithAdapters(cfg, t.TempDir(), uuid.New(), plugins); err != nil {
+	if _, _, err := BuildResolverWithAdapters(cfg, t.TempDir(), uuid.New(), plugins, true); err != nil {
 		t.Fatalf("BuildResolverWithAdapters with an injected plugin: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestBuildResolverValidatesTemplates(t *testing.T) {
 			"v": {{Adapter: "fixture", Params: map[string]any{"x": "${entity.a | bogus}"}}},
 		},
 	}
-	if _, _, err := BuildResolver(cfg, t.TempDir(), uuid.New()); err == nil {
+	if _, _, err := BuildResolver(cfg, t.TempDir(), uuid.New(), true); err == nil {
 		t.Error("BuildResolver accepted an unknown transform")
 	}
 }

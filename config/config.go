@@ -24,7 +24,22 @@ type Config struct {
 	Knowledge  Knowledge  `yaml:"knowledge"`
 	Export     Export     `yaml:"export"`
 	Trust      Trust      `yaml:"trust"`
+	Demo       Demo       `yaml:"demo"`
 	Paid       Paid       `yaml:"paid"`
+}
+
+// Demo is the single switch that segregates the bundled demo world from a real
+// install. It gates two things: the FIXTURE adapter class (fixtures may only be
+// wired when Enabled — the hard guard in capability/action resolver builders,
+// so a copied-in or hand-edited config can never silently run fixtures against a
+// real deployment), and the `reckon demo seed`/`reset` lifecycle. A plain
+// `reckon init` yields a fixture-free install (Enabled=false); `reckon demo
+// seed` flips it on and populates the demo world; `reckon demo reset` wipes
+// everything back. It exists so an analyst can test-drive the full product on
+// fixtures, then cleanly graduate to their own day-to-day data.
+type Demo struct {
+	// Enabled marks this install as the disposable demo sandbox. Default false.
+	Enabled bool `yaml:"enabled"`
 }
 
 // Trust holds the tenant trust-posture dials (01-domain-model.md: trust
@@ -351,6 +366,24 @@ func Save(cfg Config, path string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
+// Overwrite writes cfg as YAML to path, replacing any existing file. Unlike
+// Save (which refuses to clobber, a first-run bootstrap guard), this is the
+// deliberate-rewrite path used by `reckon demo seed`/`reset` to flip the demo
+// switch and re-point the capability config on an install that already exists.
+func Overwrite(cfg Config, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}

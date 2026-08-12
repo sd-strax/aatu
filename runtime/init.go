@@ -47,14 +47,6 @@ type InitResult struct {
 	DataDir         string
 	AlreadyExisted  bool // true when a config was already present and left untouched
 
-	// SeededScenario is the demo fixture scenario materialized on a fresh init
-	// (empty when AlreadyExisted, since seeding rides the fresh-config path).
-	// CapabilityConfig is the merged read+write tenant config the config now
-	// points at; FixtureRoot is where the fixture JSON was written.
-	SeededScenario   string
-	CapabilityConfig string
-	FixtureRoot      string
-
 	// KeycloakAdminPassword is the effective master-admin password in the install
 	// secret store after init. KeycloakAdminSetFromInput is true when THIS run set
 	// it from operator input (a --kc-admin-password flag or the interactive
@@ -146,17 +138,13 @@ func Init(opts InitOptions) (InitResult, error) {
 		return InitResult{}, err
 	}
 
-	// Seed the demo content beside the config (filepath.Dir(path) is the install's
-	// config directory, ~/<data>/ in production) and wire the config at it, so the
-	// bundled scenario runs out of the box. Isolated per-install because it lands
-	// next to the resolved config path, which tests point at a temp dir.
-	seed, err := seedDemoContent(filepath.Dir(path))
-	if err != nil {
-		return InitResult{}, fmt.Errorf("seed demo content: %w", err)
-	}
-	cfg.Capability.FixtureRoot = seed.FixtureRoot
-	cfg.Capability.ConfigPath = seed.CapabilityConfig
-
+	// A plain init yields a FIXTURE-FREE install: no scenario is materialized and
+	// Capability.ConfigPath stays empty, so /api/capabilities serves its clean 503
+	// until the operator wires real adapters (Phase E/F). The bundled demo world
+	// is opt-in via `reckon demo seed` — an install shouldn't pretend a mock
+	// tenant is real, least of all this public OSS engine on a fresh clone
+	// (config.Demo). demo.enabled stays false (the default), so the fixture guard
+	// in the resolver builders refuses any fixture binding here.
 	if err := config.Save(cfg, path); err != nil {
 		return InitResult{}, fmt.Errorf("write config: %w", err)
 	}
@@ -165,9 +153,6 @@ func Init(opts InitOptions) (InitResult, error) {
 		ConfigPath:                path,
 		TenantNamespace:           namespace,
 		DataDir:                   cfg.Data.Dir,
-		SeededScenario:            seed.Scenario,
-		CapabilityConfig:          seed.CapabilityConfig,
-		FixtureRoot:               seed.FixtureRoot,
 		KeycloakAdminPassword:     p.kcAdmin,
 		KeycloakAdminSetFromInput: p.kcSetFromInput,
 		KeycloakAdminExternal:     opts.KeycloakAdminExternal,

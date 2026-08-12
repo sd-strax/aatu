@@ -234,7 +234,7 @@ func (b *Backend) rebuildCapabilityFromFile() error {
 	if b.cfg.TenantNamespace != "" {
 		ns, _ = uuid.Parse(b.cfg.TenantNamespace)
 	}
-	resolver, catalog, err := capability.BuildResolver(tc, b.cfg.CapabilityFixtureRoot, ns)
+	resolver, catalog, err := capability.BuildResolver(tc, b.cfg.CapabilityFixtureRoot, ns, b.cfg.Demo)
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sd-strax/reckon/identity"
+	"github.com/sd-strax/reckon/internal/branding"
 )
 
 // TenantConfig is the per-tenant capability configuration (§3.2): which adapters
@@ -72,9 +73,10 @@ func LoadTenantConfig(path string) (TenantConfig, error) {
 
 // BuildResolver constructs a Resolver, its normalizer Registry, and the verb
 // Catalog from a tenant config against the fixture layer only. It is the
-// no-plugins case of BuildResolverWithAdapters.
-func BuildResolver(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID) (*Resolver, *Catalog, error) {
-	return BuildResolverWithAdapters(cfg, fixtureRoot, namespace, nil)
+// no-plugins case of BuildResolverWithAdapters. demo gates the FIXTURE class
+// (see BuildResolverWithAdapters).
+func BuildResolver(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID, demo bool) (*Resolver, *Catalog, error) {
+	return BuildResolverWithAdapters(cfg, fixtureRoot, namespace, nil, demo)
 }
 
 // BuildResolverWithAdapters constructs the read resolver, its normalizer
@@ -84,7 +86,13 @@ func BuildResolver(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID) (*
 // adapter facades keyed by instance name (11 §2) — the fixture class is built
 // here, every other class is looked up there. Only enabled adapters are wired;
 // binding templates are validated up front (§3.3.4).
-func BuildResolverWithAdapters(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID, plugins map[string]Adapter) (*Resolver, *Catalog, error) {
+//
+// demo gates the FIXTURE adapter class: fixtures are the bundled demo world, not
+// a real capability, so a ClassFixture binding on a non-demo install is a hard
+// error rather than a silent wiring. This is the single chokepoint every
+// construction path funnels through, so a copied-in or hand-edited config can
+// never run mock data against a real deployment (config.Demo).
+func BuildResolverWithAdapters(cfg TenantConfig, fixtureRoot string, namespace uuid.UUID, plugins map[string]Adapter, demo bool) (*Resolver, *Catalog, error) {
 	adapters := make(map[string]Adapter)
 	for name, spec := range cfg.Adapters {
 		if !spec.Enabled {
@@ -92,6 +100,9 @@ func BuildResolverWithAdapters(cfg TenantConfig, fixtureRoot string, namespace u
 		}
 		switch spec.Class {
 		case ClassFixture:
+			if !demo {
+				return nil, nil, fmt.Errorf("adapter %q: fixture adapters require demo mode (run `%s demo seed`, or remove the binding to run against real adapters)", name, branding.CLI)
+			}
 			adapters[name] = NewFixtureAdapter(fixtureRoot, spec.Scenario)
 		default:
 			p, ok := plugins[name]
