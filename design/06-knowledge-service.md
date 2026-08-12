@@ -336,17 +336,46 @@ The `producer_version` field (01-domain-model.md PROVENANCE) on Interpretation o
 
 ## 7. Embedding model
 
-### 7.1 Bundled local model
+> **Amended (2026-08).** An earlier draft of this section made a bundled local
+> ONNX model the default and assumed "the LLM provider's embedding endpoint"
+> could reuse the LLM key. Both are corrected below: the embedding surface is
+> one OpenAI-compatible endpoint (hosted or self-hosted, a config choice), and
+> the LLM provider used for reasoning offers no embeddings endpoint — provider
+> embeddings always carry their own key, separate from the LLM key.
 
-The reckon binary ships with a small ONNX embedding model (low hundreds of MB, e.g., a quantized BGE-small or equivalent). Default for solo subscribers. Embedding generation happens in the backend process; no network calls for embedding.
+### 7.1 One endpoint shape, hosted or self-hosted
 
-The bundled model is versioned. Updates ship via the CDN. Tenants pin to specific versions; updating triggers re-embedding of the corpus.
+The OpenAI embeddings API shape is the de-facto wire standard: hosted providers
+(OpenAI, Voyage, Azure) and every serious self-hosted stack (Ollama, vLLM,
+llama.cpp server) speak it. reckon therefore ships exactly one embedding
+client — an OpenAI-compatible `POST {base_url}/embeddings` — and "which
+embedding deployment" is configuration, not code:
 
-### 7.2 BYOK provider embeddings
+- **Hosted provider** (default posture): point `base_url` at OpenAI or Voyage
+  with a provider key. Sharpest retrieval; consistent with the product's data
+  posture (the reasoning loop already sends evidence to an LLM provider, so
+  embedding SOP/summary text is the same category of egress, not a new one).
+- **Self-hosted** (offline / strict-egress tenants): point `base_url` at an
+  in-house Ollama/vLLM/llama.cpp endpoint (e.g. `http://llama.internal:11434/v1`).
+  Fully local, no extra vendor, zero reckon code specific to this case. This
+  replaces the earlier bundled-ONNX-in-process plan — same property (no
+  egress), none of the CGo/binary-bloat cost.
+- **No embedder configured**: retrieval degrades to keyword full-text and says
+  so in its ranker attribution — a degraded mode, not the default.
 
-Tenants can configure embedding to use their LLM provider's embedding endpoint (Anthropic, OpenAI, Cohere, etc.) when higher retrieval quality matters and the BYOK key has access to embeddings. Configured per-tenant; falls back to bundled model if the provider call fails.
+The embedding key is a secret reference (`keychain://` / `env://` / `vault://`)
+resolved by the host at construction; it is **not** the LLM key. The LLM
+provider used for the reasoning loop has no embeddings endpoint (its
+recommended embeddings partner is a separate vendor), so key reuse is not
+merely discouraged — it is impossible.
 
-Provider embeddings are typically larger (1024+ dimensions) and produce sharper retrieval. Cost: small per-document, low-frequency at v0+ scale (~hundreds of SOPs and summaries per tenant).
+### 7.2 The consistency rule
+
+Query and corpus embeddings must come from the same model — vectors from
+different models occupy unrelated spaces. Every embedding row is keyed by the
+model that produced it, and recall embeds the query under the active model.
+This is the only compatibility constraint; the reasoning LLM never sees a
+vector, so the embedding choice is fully independent of the LLM choice.
 
 ### 7.3 Switching models
 

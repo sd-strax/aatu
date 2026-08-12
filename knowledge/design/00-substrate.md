@@ -409,18 +409,34 @@ can do, an embedded consumer can do, and vice versa.
 
 ## 10. Ranking backends and embeddings
 
-- **v0 backend:** Postgres full-text (`ts_rank` over title+body), tag
-  hard-filter, recency tiebreak. SIMILARITY mode functions but bands are
-  coarse.
-- **v1 backend:** pgvector embeddings from a small bundled local ONNX model;
-  optional provider embeddings (BYOK) per deployment for sharper retrieval.
-  Embedding rows are keyed by `(entry_id, revision, model, model_version)`;
-  switching models re-embeds the corpus with old and new rows coexisting
-  through the migration window.
+*(Amended 2026-08: semantic retrieval is the default from the outset, not a
+v1 upgrade; the earlier bundled-ONNX plan is superseded by the
+OpenAI-compatible endpoint below.)*
+
+- **Default backend — `vector-cosine`:** embeddings from a configured
+  OpenAI-compatible endpoint (`POST {base_url}/embeddings` — the de-facto wire
+  standard spoken by hosted providers and by self-hosted stacks alike, so
+  hosted-vs-local is a `base_url` config choice, not a code path). Vectors are
+  stored as float arrays keyed by `(entry_id, model)`; entries are embedded at
+  write time (a write the store cannot index fails loudly), and ranking is
+  exact cosine over the tag-filtered candidate set, in process. Corpora are
+  hundreds-to-thousands of entries by design — brute force at that scale is
+  microseconds; an approximate index (pgvector/HNSW or an external engine)
+  slots in behind the same `Recall` signature only if a corpus ever outgrows
+  it, as a backend swap with a documented re-index. Switching models re-embeds
+  the corpus (`Reindex`), with old and new model rows coexisting through the
+  migration window. A published candidate lacking a vector under the active
+  model is an **error**, never a silent gap (§5.5) — `Reindex` is the remedy.
+- **Degraded backend — `pg-fts`:** Postgres full-text (`ts_rank` over
+  title+body), tag hard-filter, recency tiebreak. Selected only when no
+  embedder is configured, and says so in its attribution. SIMILARITY mode
+  functions but bands are coarse — `RELATED` at best, never `NEAR_DUPLICATE`.
 
 Backends are named and versioned; every `RecallResult` attributes itself to
-`{backend, backend_version}` (§5.2). Band calibration is part of a backend
-version's definition (§5.4).
+`{backend, backend_version}` (§5.2 — the vector backend's version embeds the
+model, e.g. `1/text-embedding-3-small`, because band calibration is
+model-relative). Band calibration is part of a backend version's definition
+(§5.4).
 
 ## 11. Staging
 
@@ -467,8 +483,11 @@ boundary, extraction is a move, not a redesign.
 - **Snapshot storage economics.** Every revision's content is retained
   indefinitely (minus purges). Fine at expected scale; revisit if a derived
   corpus with high re-derivation churn appears.
-- **Bundled embedding model choice.** Same trade as any local-model bundle:
-  binary size vs retrieval quality; deferred to the v1 backend implementation.
+- ~~**Bundled embedding model choice.**~~ Resolved 2026-08: no bundled model.
+  The embedder is an OpenAI-compatible endpoint (§10); offline deployments
+  point it at a self-hosted server (Ollama/vLLM/llama.cpp) instead of the
+  substrate shipping inference. Band cutoffs for the vector backend
+  (`DefaultBands`) are the remaining calibration surface, deployment-tunable.
 - **Multi-signer thresholds in gated governance.** v1 records signers and
   requires ≥1; "N signers for high-severity entries" is consumer policy layered
   on `Transition` calls vs. a substrate-side rule — leaning consumer-side, per
