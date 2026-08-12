@@ -380,6 +380,7 @@ func serve(cfg config.Config) error {
 		ExportAutoOnConclude:    cfg.Export.AutoOnConclude,
 		AllowAIVerdict:          cfg.Trust.AIVerdict,
 		AllowAIReasoning:        cfg.Trust.AIReasoning,
+		KnowledgeInjection:      cfg.Knowledge.InjectionOrDefault(),
 	}
 	if tel.Metrics != nil {
 		backendCfg.MetricsHandler = tel.Metrics.Handler()
@@ -473,6 +474,10 @@ func buildGate2(cfg config.Config) (*action.Gate2, *action.ActionCatalog, error)
 // reading and secret resolution stay host concerns (00-substrate §12). With no
 // embeddings configured the substrate runs its attributed keyword fallback.
 func buildKnowledge(cfg config.Config, db *sql.DB) (*knowledge.Store, error) {
+	if !cfg.Knowledge.ValidInjection() {
+		return nil, fmt.Errorf("knowledge.injection: %q is not a valid posture (want %q or %q)",
+			cfg.Knowledge.Injection, config.KnowledgeInjectionOptIn, config.KnowledgeInjectionAuto)
+	}
 	corpora := []substrate.CorpusDef{
 		{Name: knowledge.CorpusProcedures, Archetype: substrate.Curated, Governance: substrate.Lightweight},
 		{Name: knowledge.CorpusCaseSummaries, Archetype: substrate.Derived},

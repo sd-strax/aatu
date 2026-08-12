@@ -64,10 +64,11 @@ type recordedCall struct {
 // /investigations/{id}/actions sub-resource, mirroring the real durable queue.
 // override, when set, intercepts matching paths before the canned routes.
 type fakeBackend struct {
-	srv      *httptest.Server
-	calls    []recordedCall
-	actions  []ActionStatus
-	override func(w http.ResponseWriter, r *http.Request) bool // handled?
+	srv           *httptest.Server
+	calls         []recordedCall
+	actions       []ActionStatus
+	investigation *Investigation // detail response when set; else a default ACTIVE stub
+	override      func(w http.ResponseWriter, r *http.Request) bool // handled?
 }
 
 func newFakeBackend(t *testing.T) *fakeBackend {
@@ -93,6 +94,10 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		}
 		if strings.HasSuffix(r.URL.Path, "/actions") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"actions": f.actions})
+			return
+		}
+		if f.investigation != nil {
+			_ = json.NewEncoder(w).Encode(*f.investigation)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(Investigation{AggregateID: "inv-1", Title: "INV", Status: "ACTIVE"})

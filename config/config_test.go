@@ -150,3 +150,25 @@ func TestLoadMalformedYAMLErrors(t *testing.T) {
 		t.Errorf("error %q should name the offending file", err)
 	}
 }
+
+func TestKnowledgeInjectionPosture(t *testing.T) {
+	cases := []struct {
+		in    string
+		valid bool
+		eff   string
+	}{
+		{"", true, KnowledgeInjectionOptIn},   // default
+		{"opt_in", true, KnowledgeInjectionOptIn},
+		{"auto", true, KnowledgeInjectionAuto},
+		{"always", false, "always"},
+	}
+	for _, c := range cases {
+		k := Knowledge{Injection: c.in}
+		if k.ValidInjection() != c.valid {
+			t.Errorf("ValidInjection(%q) = %v; want %v", c.in, k.ValidInjection(), c.valid)
+		}
+		if k.InjectionOrDefault() != c.eff {
+			t.Errorf("InjectionOrDefault(%q) = %q; want %q", c.in, k.InjectionOrDefault(), c.eff)
+		}
+	}
+}

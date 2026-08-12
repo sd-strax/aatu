@@ -10,7 +10,7 @@ import (
 // investigation context (05 §3.4 step 4). It is deliberately spec-shaped: the
 // conventions restate the engine's own rules so the model works WITH the
 // guardrails rather than discovering them by rejection.
-func systemPrompt(inv Investigation, caps []Capability, hypotheses json.RawMessage) string {
+func systemPrompt(inv Investigation, caps []Capability, hypotheses json.RawMessage, includedSOPs, includedCases []KnowledgeItem) string {
 	var b strings.Builder
 
 	b.WriteString(`You are reckon's investigation agent: an AI delegate assisting a human SOC analyst (threat hunter / IR responder) inside a live investigation. You act on the analyst's behalf and everything you do is recorded against their name with you as the delegate.
@@ -74,6 +74,10 @@ func systemPrompt(inv Investigation, caps []Capability, hypotheses json.RawMessa
 		fmt.Fprintf(&b, "\n## Degraded capabilities\n\nThese verbs are configured but currently unresolvable (do not attempt them; note the gap if it matters): %s\n",
 			strings.Join(degraded, ", "))
 	}
+
+	// Implicitly-retrieved institutional knowledge the analyst has included
+	// (design/06 §5.1). Empty under opt_in until the analyst pulls something in.
+	renderKnowledgeSections(&b, includedSOPs, includedCases)
 
 	return b.String()
 }

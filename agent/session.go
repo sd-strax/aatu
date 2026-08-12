@@ -67,6 +67,17 @@ type Session struct {
 	tools    []ToolDef
 	messages []Message
 
+	// Context inputs cached so SetIncludedKnowledge can rebuild the system
+	// prompt without re-fetching (refreshContext is the only writer).
+	investigation Investigation
+	caps          []Capability
+	hyps          json.RawMessage
+
+	// Implicit-retrieval state (design/06 §5.1): what was surfaced this session
+	// and the posture dial that set its default inclusion.
+	retrieved []KnowledgeItem
+	injection string
+
 	pendingActions []ActionResponse // actions proposed this turn, for the surface to offer approval
 	// consulted accumulates the turn's recall_sops retrievals (by sop_id,
 	// keeping the best score) — the knowledge provenance the commit carries.
@@ -185,7 +196,14 @@ func (s *Session) refreshContext(ctx context.Context) error {
 	}
 
 	s.tools = buildTools(caps, actionTypes)
-	s.system = systemPrompt(inv, caps, hyps)
+	s.investigation, s.caps, s.hyps = inv, caps, hyps
+	// Implicit retrieval (design/06 §5.1): surface relevant SOPs + similar past
+	// cases with their relevance signals, defaulting inclusion per the posture
+	// dial. The system prompt embeds only what is included (nothing, under
+	// opt_in, until the analyst curates).
+	s.retrieveImplicit(ctx, inv)
+	sops, cases := s.includedKnowledge()
+	s.system = systemPrompt(inv, caps, hyps, sops, cases)
 	return nil
 }
 
@@ -325,6 +343,9 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	s.pendingActions = nil
 	s.consulted = map[string]ConsultedSOP{}
 	s.consultedSimilar = map[string]ConsultedSimilarInvestigation{}
+	// Knowledge the analyst included as context is consulted this turn (§6),
+	// merged with the model's own recalls below.
+	s.knowledgeConsulted()
 	turnID := uuid.NewString()
 
 	var transcript strings.Builder

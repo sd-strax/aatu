@@ -169,6 +169,11 @@ type BackendConfig struct {
 	// a human must Acknowledge it first. When true, the server stamps the
 	// enabling ref so the aggregate permits full AI-driven hypothesis analysis.
 	AllowAIReasoning bool
+
+	// KnowledgeInjection is the effective knowledge-injection posture
+	// (config.Knowledge.Injection: "opt_in" default | "auto"), surfaced to the
+	// agent on the investigation detail view (design/06 §5.1).
+	KnowledgeInjection string
 }
 
 // Backend is the in-process HTTP server.

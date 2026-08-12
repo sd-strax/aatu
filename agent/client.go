@@ -250,6 +250,9 @@ type Investigation struct {
 	// investigations.
 	Seed        *Seed  `json:"seed,omitempty"`
 	SeedSummary string `json:"seed_summary,omitempty"`
+	// KnowledgeInjection is the tenant's knowledge-injection posture (design/06
+	// §5.1): "opt_in" (default) or "auto". Empty is treated as opt_in.
+	KnowledgeInjection string `json:"knowledge_injection,omitempty"`
 }
 
 // Seed is the subset of the investigation's root the prompt renders (the fields

@@ -169,8 +169,9 @@ func newTestBackend(t *testing.T) *Backend {
 	}
 	b := &Backend{
 		cfg: BackendConfig{
-			HTTPPort: 0, // unused for in-process tests
-			Handler:  testHandler,
+			HTTPPort:           0, // unused for in-process tests
+			Handler:            testHandler,
+			KnowledgeInjection: "opt_in", // surfaced on the detail view (06 §5.1)
 		},
 		verifier: v,
 	}
@@ -356,6 +357,11 @@ func TestCreateInvestigation_EndToEnd(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&single)
 	if single.Title != "PHISH-2026-0042" {
 		t.Errorf("get Title = %q", single.Title)
+	}
+	// The knowledge-injection posture is surfaced on the detail view so the
+	// agent loop knows the default inclusion (design/06 §5.1).
+	if single.KnowledgeInjection != "opt_in" {
+		t.Errorf("detail KnowledgeInjection = %q; want opt_in", single.KnowledgeInjection)
 	}
 }
 

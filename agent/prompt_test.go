@@ -12,7 +12,7 @@ import (
 // property for an IR surface. If this test fails, a prompt edit removed the
 // guarantee; restore it rather than deleting the test.
 func TestSystemPrompt_ActionHonesty(t *testing.T) {
-	p := systemPrompt(Investigation{Title: "t"}, nil, nil)
+	p := systemPrompt(Investigation{Title: "t"}, nil, nil, nil, nil)
 	for _, want := range []string{
 		"An action exists ONLY if a request_action call returned an action_id",
 		"do not narrate a ticket",

@@ -36,6 +36,12 @@ type InvestigationView struct {
 	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
 	PendingActions int        `json:"pending_actions,omitempty"`
 	NearestExpiry  *time.Time `json:"nearest_expiry,omitempty"`
+
+	// KnowledgeInjection is the effective knowledge-injection posture (design/06
+	// §5.1, config.Knowledge.Injection) — surfaced on the detail view so the
+	// agent loop knows whether implicitly-retrieved knowledge defaults in
+	// ("auto") or waits for the analyst ("opt_in"). Detail responses only.
+	KnowledgeInjection string `json:"knowledge_injection,omitempty"`
 }
 
 func seedBody(s *aggregate.Seed) *SeedBody {
@@ -171,12 +177,13 @@ func (b *Backend) getInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := InvestigationView{
-		AggregateID:       ic.AggregateID.String(),
-		Title:             ic.Title,
-		Status:            ic.Status,
-		LastEventSequence: ic.LastEventSequence,
-		Seed:              seedBody(ic.Seed),
-		SeedSummary:       ic.SeedSummary,
+		AggregateID:        ic.AggregateID.String(),
+		Title:              ic.Title,
+		Status:             ic.Status,
+		LastEventSequence:  ic.LastEventSequence,
+		Seed:               seedBody(ic.Seed),
+		SeedSummary:        ic.SeedSummary,
+		KnowledgeInjection: b.cfg.KnowledgeInjection,
 	}
 	if ic.VerdictDisposition != "" {
 		view.Verdict = &VerdictView{
