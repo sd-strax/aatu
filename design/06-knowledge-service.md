@@ -313,6 +313,32 @@ A symmetric implicit recall hits `recall_similar_investigations` with the same s
 
 Both implicit retrievals run before the LLM's first inference call on the turn.
 
+> **Amended (relevance gate + posture dial).** Blind injection is wrong:
+> auto-stuffing every retrieved item dilutes attention, invites
+> over-application of tangential SOPs, and removes the analyst's judgment.
+> The implementation therefore (a) **surfaces** retrieval — with the relevance
+> signals the substrate already produces (`score`, similarity `band`,
+> `match_rationale`) — in a knowledge rail rather than silently injecting it,
+> and (b) gates inclusion on a **posture dial**, `config.Knowledge.Injection`,
+> a trust-dial sibling that opens by config, never code:
+>
+> - **`opt_in` (default)** — retrieval runs and is surfaced, but *nothing*
+>   reaches the model until the analyst includes it. The controlled tryout:
+>   the org watches retrieval prove out before letting it touch an inference.
+>   (An analyst who never includes a surfaced item is itself a signal that
+>   the corpus or the ranker is not yet earning its keep — visible before any
+>   inference is affected.)
+> - **`auto`** — strong matches (SOPs; `NEAR_DUPLICATE`/`RELATED` cases) enter
+>   context by default; `DISTINCT` stays surfaced-but-off; the analyst can
+>   still veto any of it.
+>
+> Both postures share one mechanism — the same recall, the same relevance-
+> annotated rail, the same analyst include/exclude gate, and the same audit
+> linkage (included items fold into `consulted_sops` /
+> `consulted_similar_investigations`, §6). The dial only sets each retrieved
+> item's *initial* inclusion. The analyst — not the retriever — decides what
+> the AI reasons over.
+
 ### 5.2 Explicit tool calls
 
 The LLM tool catalog includes:

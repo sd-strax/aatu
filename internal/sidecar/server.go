@@ -216,8 +216,34 @@ type createSessionParams struct {
 }
 
 type createSessionResult struct {
-	SessionID string   `json:"session_id"`
-	Tools     []string `json:"tools"`
+	SessionID string          `json:"session_id"`
+	Tools     []string        `json:"tools"`
+	Knowledge []knowledgeItem `json:"knowledge,omitempty"`
+}
+
+// knowledgeItem mirrors agent.KnowledgeItem for the wire — the implicit-
+// retrieval rail's data (design/06 §5.1): what was surfaced, its relevance
+// signals, and its current inclusion.
+type knowledgeItem struct {
+	Kind      string  `json:"kind"`
+	Ref       string  `json:"ref"`
+	Title     string  `json:"title"`
+	Excerpt   string  `json:"excerpt"`
+	Score     float64 `json:"score"`
+	Band      string  `json:"band,omitempty"`
+	Rationale string  `json:"rationale,omitempty"`
+	Included  bool    `json:"included"`
+}
+
+func toWireKnowledge(items []agent.KnowledgeItem) []knowledgeItem {
+	out := make([]knowledgeItem, 0, len(items))
+	for _, k := range items {
+		out = append(out, knowledgeItem{
+			Kind: k.Kind, Ref: k.Ref, Title: k.Title, Excerpt: k.Excerpt,
+			Score: k.Score, Band: k.Band, Rationale: k.Rationale, Included: k.Included,
+		})
+	}
+	return out
 }
 
 // handleCreateSession assembles one agent.Session over the initialized
@@ -298,7 +324,11 @@ func (s *service) handleCreateSession(ctx context.Context, raw json.RawMessage) 
 		tools = append(tools, t.Name)
 	}
 	s.opts.Logf("session %s over investigation %s (%d tools)", sessionID, p.InvestigationID, len(tools))
-	return createSessionResult{SessionID: sessionID, Tools: tools}, nil
+	return createSessionResult{
+		SessionID: sessionID,
+		Tools:     tools,
+		Knowledge: toWireKnowledge(sess.RetrievedKnowledge()),
+	}, nil
 }
 
 // --- turn -------------------------------------------------------------------
@@ -306,6 +336,11 @@ func (s *service) handleCreateSession(ctx context.Context, raw json.RawMessage) 
 type turnParams struct {
 	SessionID string `json:"session_id"`
 	Text      string `json:"text"`
+	// IncludedKnowledge is the analyst's curated set of implicit-retrieval refs
+	// to carry into this turn's context (design/06 §5.1). Nil leaves the current
+	// inclusion (the dial default, or a prior setKnowledgeInclusion); a non-nil
+	// slice (including empty) is the authoritative set.
+	IncludedKnowledge *[]string `json:"included_knowledge,omitempty"`
 }
 
 // turnResult mirrors agent.TurnResult for the wire, minus the transcript body
@@ -415,6 +450,12 @@ func (s *service) handleTurn(ctx context.Context, raw json.RawMessage) (any, err
 		return nil, fmt.Errorf("a turn is already in progress on session %s", p.SessionID)
 	}
 	defer st.turnMu.Unlock()
+
+	// Apply the analyst's knowledge curation before the turn builds its prompt
+	// (design/06 §5.1) — only what they included reaches the model.
+	if p.IncludedKnowledge != nil {
+		st.sess.SetIncludedKnowledge(*p.IncludedKnowledge)
+	}
 
 	turnCtx, cancel := context.WithCancel(ctx)
 	st.mu.Lock()

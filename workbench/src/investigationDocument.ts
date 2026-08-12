@@ -16,7 +16,7 @@
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
 import { ActionRow, Appearance, BackendClient, Capability, CommsThread, Enablement, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
-import { AgentTransport } from "./agentTransport";
+import { AgentTransport, KnowledgeItem } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
@@ -36,6 +36,10 @@ type RenderMessage =
   // rail renders that honestly instead of an empty list. thread is the
   // chronological reasoning history (13 §4); null when its fetch failed.
   | { type: "data"; investigation: InvestigationDetail; hypotheses: Hypothesis[]; capabilities: Capability[] | null; thread: ThreadEntry[] | null }
+  // The implicit-retrieval knowledge rail (design/06 §5.1): relevant SOPs +
+  // similar past cases with their relevance signals, each with its inclusion
+  // state (the posture dial's default). The analyst curates what enters context.
+  | { type: "knowledge"; items: KnowledgeItem[] }
   // The enablement surface (11 §5.1): gap hints + the schema the form renders
   // from. Null when the layer is off or the fetch failed — hints just absent.
   | { type: "enablement"; data: Enablement | null }
@@ -102,7 +106,7 @@ type InboundMessage =
   // from a picked case — both driven from the draft surface, no quick input.
   | { type: "seed.caseSearch"; filter: string }
   | { type: "seed.case"; caseNumber: string }
-  | { type: "send"; text: string }
+  | { type: "send"; text: string; includedKnowledge?: string[] }
   | { type: "action.approve"; actionId: string; tier: string; actionType: string; challenge?: string }
   | { type: "action.reject"; actionId: string; actionType: string; reason: string }
   | { type: "action.rerequest"; actionId: string; actionType: string; rationale: string }
@@ -300,7 +304,7 @@ export class InvestigationDocuments {
     } else if (msg.type === "seed.case") {
       void this.seedDraft(ref, panel, { value: msg.caseNumber, kind: "case" });
     } else if (msg.type === "send") {
-      void this.runTurn(id, panel, msg.text);
+      void this.runTurn(id, panel, msg.text, undefined, msg.includedKnowledge);
     } else if (msg.type === "action.approve") {
       void this.approve(id, panel, msg);
     } else if (msg.type === "action.reject") {
@@ -451,6 +455,16 @@ export class InvestigationDocuments {
       void this.client.enablement()
         .then((data) => this.post(panel, { type: "enablement", data }))
         .catch(() => this.post(panel, { type: "enablement", data: null }));
+
+      // The implicit-retrieval knowledge rail (design/06 §5.1), only while the
+      // investigation is workable — this spawns the sidecar + runs retrieval, so
+      // it is not worth it for a concluded/archived case. Best-effort: a failure
+      // (knowledge layer off) just leaves the rail absent.
+      if (["DRAFT", "ACTIVE", "PAUSED"].includes(investigation.state)) {
+        void this.transport.getKnowledge(id)
+          .then((items) => this.post(panel, { type: "knowledge", items }))
+          .catch((err: unknown) => this.log.debug(`knowledge rail unavailable: ${errText(err)}`));
+      }
 
     } catch (err) {
       const message = errText(err);
@@ -1092,7 +1106,7 @@ export class InvestigationDocuments {
   }
 
   /** Drive one analyst turn through the transport, streaming progress to the webview. */
-  private async runTurn(id: string, panel: vscode.WebviewPanel, text: string, aside?: { label: string }): Promise<void> {
+  private async runTurn(id: string, panel: vscode.WebviewPanel, text: string, aside?: { label: string }, includedKnowledge?: string[]): Promise<void> {
     if (aside) {
       void this.post(panel, { type: "aside.start", label: aside.label });
     } else {
@@ -1114,7 +1128,7 @@ export class InvestigationDocuments {
         // webview renders that honestly instead of a bogus "? · 0".
         onToolResult: (name, _content, isError, coverage, events, refs) =>
           void this.post(panel, { type: "turn.toolResult", name, isError, coverage, events, refs }),
-      });
+      }, includedKnowledge);
       if (outcome.interpretationId) {
         void this.post(panel, { type: "turn.committed", interpretationId: outcome.interpretationId });
       }
@@ -1405,6 +1419,30 @@ export class InvestigationDocuments {
       color: var(--info); background: var(--info-bg); border-radius: var(--r-pill);
     }
     .sopchip.consulted { border-style: dashed; opacity: 0.6; background: none; }
+    /* Knowledge rail (design/06 §5.1): each surfaced item, its relevance, and
+       the analyst's include toggle. */
+    #knowledgeHead .posture {
+      font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); margin-left: 6px;
+    }
+    .kitem {
+      display: flex; gap: 7px; padding: 6px 2px; border-top: 1px solid var(--border);
+    }
+    .kitem:first-child { border-top: none; }
+    .kitem input { margin-top: 3px; flex: none; cursor: pointer; }
+    .kitem .kbody { min-width: 0; flex: 1; }
+    .kitem .ktitle { font-size: var(--fs-sm); }
+    .kitem .kkind {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--text-3); margin-right: 5px;
+    }
+    .kitem .kband {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.04em; padding: 0 5px;
+      border-radius: var(--r-pill); border: 1px solid var(--info-border); color: var(--info);
+    }
+    .kitem .kband.near { color: var(--ok); border-color: var(--ok-border); }
+    .kitem .kband.distinct { color: var(--text-3); border-color: var(--border); }
+    .kitem .krationale { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
+    .kitem.excluded .kbody { opacity: 0.55; }
     .error { color: var(--bad); margin: 6px 0; max-width: 78ch; }
 
     /* micro-label eyebrow (01 §Scale): 10px, 700, tracked, uppercase */
@@ -1885,6 +1923,14 @@ export class InvestigationDocuments {
     <section>
       <h2>Hypotheses <button id="hypNew" class="railadd" title="Frame your own hypothesis — e.g. the alternate (benign or different-attacker) explanation. Lands OPEN, tested like any other.">+ new…</button></h2>
       <div id="hyps"><div class="empty">None yet</div></div>
+    </section>
+    <!-- Institutional knowledge surfaced by implicit retrieval (design/06 §5.1):
+         relevant SOPs + similar past cases with their relevance signals. YOU
+         decide what the agent reasons over — check to include it in context.
+         Under the opt_in posture nothing is included until you choose. -->
+    <section id="knowledgeSection" style="display:none">
+      <h2 id="knowledgeHead">Institutional knowledge</h2>
+      <div id="knowledgeBox"></div>
     </section>
     <section>
       <h2 id="pinsHead">Pinned evidence</h2>
@@ -3844,7 +3890,57 @@ export class InvestigationDocuments {
       if (!text || sendBtn.disabled) return;
       input.value = "";
       setComposerEnabled(false);
-      vscode.postMessage({ type: "send", text });
+      // Carry the analyst's knowledge curation with the turn (design/06 §5.1).
+      // Only send the set when retrieval surfaced something — otherwise leave
+      // inclusion to the sidecar's dial default (undefined).
+      const inc = knowledgeItems.length
+        ? knowledgeItems.filter((k) => k.included).map((k) => k.ref)
+        : undefined;
+      vscode.postMessage({ type: "send", text, includedKnowledge: inc });
+    }
+
+    // ---- knowledge rail (design/06 §5.1) -----------------------------------
+    // Implicit retrieval surfaces relevant SOPs + similar past cases WITH their
+    // relevance signals; the analyst checks what enters the model's context.
+    let knowledgeItems = [];
+    function renderKnowledge(items) {
+      knowledgeItems = items || [];
+      const section = $("knowledgeSection");
+      const box = $("knowledgeBox");
+      const head = $("knowledgeHead");
+      if (!knowledgeItems.length) { section.style.display = "none"; return; }
+      section.style.display = "";
+      const anyIncluded = knowledgeItems.some((k) => k.included);
+      head.innerHTML = "Institutional knowledge"
+        + '<span class="posture">' + (anyIncluded ? "in context" : "check to include") + "</span>";
+      box.innerHTML = "";
+      knowledgeItems.forEach((k, i) => {
+        const row = document.createElement("div");
+        row.className = "kitem" + (k.included ? "" : " excluded");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!k.included;
+        cb.title = k.included ? "Included in the agent's context" : "Not in context — check to include";
+        cb.addEventListener("change", () => {
+          knowledgeItems[i].included = cb.checked;
+          renderKnowledge(knowledgeItems); // re-render (updates the header + row dim)
+        });
+        const body = document.createElement("div");
+        body.className = "kbody";
+        const kindLabel = k.kind === "sop" ? "SOP" : "PRIOR CASE";
+        let sig = "";
+        if (k.kind === "case" && k.band) {
+          const cls = k.band === "NEAR_DUPLICATE" ? "near" : (k.band === "DISTINCT" ? "distinct" : "");
+          sig = '<span class="kband ' + cls + '">' + esc(k.band) + "</span>";
+        }
+        body.innerHTML =
+          '<div class="ktitle"><span class="kkind">' + kindLabel + "</span>" + esc(k.title || k.ref) + " " + sig + "</div>"
+          + (k.rationale ? '<div class="krationale">' + esc(k.rationale) + "</div>" : "");
+        body.title = k.excerpt || "";
+        row.appendChild(cb);
+        row.appendChild(body);
+        box.appendChild(row);
+      });
     }
     $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
     $("exportBtn").addEventListener("click", () => vscode.postMessage({ type: "export.open" }));
@@ -4309,6 +4405,9 @@ export class InvestigationDocuments {
         }
         case "entity.info":
           renderPopoverApps(msg.ref, msg.appearances);
+          break;
+        case "knowledge":
+          renderKnowledge(msg.items);
           break;
         case "enablement":
           lastEnablement = msg.data;
