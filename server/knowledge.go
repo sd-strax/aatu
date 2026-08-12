@@ -70,6 +70,45 @@ func (b *Backend) recallSimilar(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// SummaryNarrativeBody is the client-side enrichment payload (design/06 §3.2
+// two-tier): the narrative the analyst's own BYOK client wrote at conclusion.
+type SummaryNarrativeBody struct {
+	InvestigationRef string `json:"investigation_ref"`
+	Narrative        string `json:"narrative"`
+	GeneratorModel   string `json:"generator_model,omitempty"`
+}
+
+// summaryNarrative handles POST /api/knowledge/summary_narrative (analyst):
+// the BYOK client enriches the concluded investigation's structured summary
+// with an LLM narrative. The server never holds a model key — the two-tier
+// split is the design (06 §3.2): server writes structure at conclusion,
+// client writes prose. 404 (ErrNoSummary) means the post-conclusion pipeline
+// hasn't written the baseline yet; clients retry briefly.
+func (b *Backend) summaryNarrative(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, func(w http.ResponseWriter, r *http.Request) {
+		var body SummaryNarrativeBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
+			return
+		}
+		id, err := b.cfg.Knowledge.EnrichSummary(r.Context(), module.SingleTenantUUID, body.InvestigationRef, body.Narrative, body.GeneratorModel)
+		if errors.Is(err, knowledge.ErrNoSummary) {
+			writeJSONError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "summary_narrative: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"summary_id": id.String()})
+	})
+}
+
 // sopsCollection routes /api/sops: POST create (analyst), GET list (reader).
 func (b *Backend) sopsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {

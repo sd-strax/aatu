@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -96,6 +97,62 @@ func hasTag(tags []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestEnrichSummary covers the client-side narrative tier (design/06 §3.2):
+// the enrichment revises the structured baseline — body replaced, structured
+// tags/meta carried, generator model stamped — and fails honestly when no
+// baseline exists yet.
+func TestEnrichSummary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	s := reset(t)
+	ctx := context.Background()
+
+	ref := "grouping--" + uuid.New().String()
+	if _, err := s.WriteSummary(ctx, testTenant, Summary{
+		InvestigationRef: ref, Title: "RDP lateral movement",
+		SummaryText: "Deterministic baseline.", ExtractorVersion: "1",
+		SeedKind: "entity", Techniques: []string{"T1021.001"}, ConclusionOutcome: "succeeded",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	narrative := "The analyst confirmed hands-on-keyboard lateral movement over RDP from WIN-FILE01 and isolated the host."
+	id, err := s.EnrichSummary(ctx, testTenant, ref, narrative, "claude-opus-4-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.sub.Get(ctx, testTenant.String(), CorpusCaseSummaries, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != narrative {
+		t.Errorf("body not replaced by the narrative: %q", got.Body)
+	}
+	if got.Revision != 2 {
+		t.Errorf("enrichment should be a revision, got rev %d", got.Revision)
+	}
+	if got.Provenance == nil || got.Provenance.GeneratorModel != "claude-opus-4-8" || got.Provenance.Producer != "case-summarizer" {
+		t.Errorf("provenance stamp wrong: %+v", got.Provenance)
+	}
+	if !hasTag(got.Tags, "T1021.001") || got.Meta["conclusion_outcome"] != "succeeded" {
+		t.Errorf("structured facets must carry over: tags=%v meta=%v", got.Tags, got.Meta)
+	}
+	// Exactly one current summary — the enrichment superseded the baseline.
+	list, err := s.sub.List(ctx, testTenant.String(), CorpusCaseSummaries, substrate.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Errorf("enrichment duplicated the summary: %d current entries", len(list))
+	}
+
+	// No baseline yet → ErrNoSummary (the client's retry-then-give-up signal).
+	if _, err := s.EnrichSummary(ctx, testTenant, "grouping--"+uuid.New().String(), "n", "m"); !errors.Is(err, ErrNoSummary) {
+		t.Errorf("want ErrNoSummary, got %v", err)
+	}
 }
 
 // TestRecallSimilar covers the K4 similarity recall over case-summaries: the

@@ -60,12 +60,13 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, opts Options) error {
 	}
 	s := &service{opts: opts, sessions: map[string]*sessionState{}}
 	s.conn = newConn(w, map[string]handler{
-		"initialize":    s.handleInitialize,
-		"createSession": s.handleCreateSession,
-		"turn":          s.handleTurn,
-		"resetSession":  s.handleResetSession,
-		"cancel":        s.handleCancel,
-		"shutdown":      func(context.Context, json.RawMessage) (any, error) { return struct{}{}, nil },
+		"initialize":         s.handleInitialize,
+		"createSession":      s.handleCreateSession,
+		"turn":               s.handleTurn,
+		"resetSession":       s.handleResetSession,
+		"summarizeConcluded": s.handleSummarizeConcluded,
+		"cancel":             s.handleCancel,
+		"shutdown":           func(context.Context, json.RawMessage) (any, error) { return struct{}{}, nil },
 	})
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -504,6 +505,36 @@ func (s *service) handleResetSession(ctx context.Context, raw json.RawMessage) (
 		return nil, err
 	}
 	return struct{}{}, nil
+}
+
+// summarizeConcludedParams identifies the session whose concluded
+// investigation to summarize for the knowledge index.
+type summarizeConcludedParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// handleSummarizeConcluded runs the client-side tier of the two-tier knowledge
+// summary (design/06 §3.2): one BYOK model completion over the session's own
+// conversation, posted to the backend as the summary narrative. Serialized
+// with turns via turnMu — it reads the conversation a turn would mutate.
+// Failure is the caller's to soften: the narrative is an enhancement; the
+// server's structured baseline stands either way.
+func (s *service) handleSummarizeConcluded(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p summarizeConcludedParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, errInvalidParams("summarizeConcluded: %v", err)
+	}
+	st, err := s.session(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	st.turnMu.Lock()
+	defer st.turnMu.Unlock()
+	narrative, err := st.sess.SummarizeConcluded(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"chars": len(narrative)}, nil
 }
 
 func (s *service) handleCancel(_ context.Context, raw json.RawMessage) (any, error) {

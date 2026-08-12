@@ -899,6 +899,17 @@ export class InvestigationDocuments {
       const res = await this.client.lifecycle(id, body);
       const exportNote = res.exportWorkflowId ? " · export started" : "";
       void vscode.window.showInformationMessage(`reckon: investigation → ${res.status}${exportNote}`);
+      if (msg.transition === "conclude") {
+        // The client-side tier of the two-tier knowledge summary (design/06
+        // §3.2): the sidecar — the only place the BYOK model key lives —
+        // writes the narrative from its own conversation and posts it.
+        // Fire-and-forget: the server's structured baseline stands either
+        // way; a narrative failure must never look like a conclude failure.
+        void this.transport.summarizeConcluded(id).then(
+          () => vscode.window.setStatusBarMessage("reckon: knowledge summary written", 5000),
+          (err: unknown) => console.warn("reckon: knowledge summary narrative failed (baseline stands):", err),
+        );
+      }
     } catch (err) {
       void vscode.window.showErrorMessage(`reckon: ${msg.transition} failed — ${errText(err)}`);
     }

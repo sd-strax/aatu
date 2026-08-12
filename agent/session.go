@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -498,6 +499,78 @@ func (s *Session) Turn(ctx context.Context, userMsg string) (*TurnResult, error)
 	res.InterpretationID = interp.InterpretationID
 	return res, nil
 }
+
+// summarizeInstruction asks the model for the knowledge-base narrative at
+// conclusion (design/06 §3.2, client-side tier). Grounding rules ride in the
+// instruction: the narrative feeds similarity recall in FUTURE investigations,
+// so it must be a faithful digest of the record, not a story.
+const summarizeInstruction = "The investigation has just been concluded. Write a knowledge-base summary " +
+	"narrative of it in 150–250 words of plain prose (no headers, no lists): what was investigated " +
+	"(the seed), what the evidence showed, the verdict and why, the key entities and MITRE techniques, " +
+	"what actions were taken and their outcomes, and anything a future analyst handling a similar case " +
+	"should know. State only what is in the record — no speculation, no embellishment. " +
+	"Respond with the narrative text alone."
+
+// SummarizeConcluded writes the concluded investigation's knowledge-summary
+// narrative — the client-side tier of the two-tier summary (design/06 §3.2):
+// the server wrote the structured baseline deterministically at conclusion;
+// this runs one BYOK model completion over the session's own conversation (the
+// richest available context — the model lived the investigation) and submits
+// the prose, which the server merges as a revision. The model key never
+// leaves this process. The exchange is deliberately NOT appended to the
+// conversation — it is a side product, not a turn. A fresh session (sidecar
+// respawn) rehydrates from the committed thread first. Returns the narrative.
+func (s *Session) SummarizeConcluded(ctx context.Context) (string, error) {
+	if len(s.messages) == 0 {
+		s.rehydrate(ctx)
+	}
+	msgs := append(append([]Message{}, s.messages...),
+		Message{Role: RoleUser, Content: []ContentBlock{TextBlock(summarizeInstruction)}})
+	resp, err := s.llm.Complete(ctx, CompleteRequest{
+		System:    s.system,
+		Messages:  msgs,
+		MaxTokens: s.maxTokens,
+		// No tools: this is a single narrative completion, not an agentic turn.
+	})
+	if err != nil {
+		return "", fmt.Errorf("agent: summarize concluded: %w", err)
+	}
+	var narrative strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == BlockText {
+			narrative.WriteString(blk.Text)
+		}
+	}
+	text := strings.TrimSpace(narrative.String())
+	if text == "" {
+		return "", fmt.Errorf("agent: summarize concluded: the model returned no text")
+	}
+	model := ""
+	if m, ok := s.llm.(interface{ ModelName() string }); ok {
+		model = m.ModelName()
+	}
+	// The structured baseline is written by the post-conclusion pipeline, which
+	// may still be in flight moments after conclude — retry once on not-found
+	// before giving up (the narrative is an enhancement; the baseline stands).
+	err = s.backend.SubmitSummaryNarrative(ctx, s.investigationID, text, model)
+	if err != nil && strings.Contains(err.Error(), "404") {
+		select {
+		case <-time.After(summaryRetryDelay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		err = s.backend.SubmitSummaryNarrative(ctx, s.investigationID, text, model)
+	}
+	if err != nil {
+		return "", fmt.Errorf("agent: submit summary narrative: %w", err)
+	}
+	return text, nil
+}
+
+// summaryRetryDelay is the single not-found retry backoff in
+// SummarizeConcluded — long enough for the post-conclusion pipeline's
+// structured write, short enough not to hang the conclude UX.
+var summaryRetryDelay = 3 * time.Second
 
 // complete runs one model call, streaming when both sides can (the surface
 // registered OnTextDelta and the provider implements StreamingLLM). streamed

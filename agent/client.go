@@ -423,6 +423,18 @@ func (c *Client) RecallSimilar(ctx context.Context, body map[string]any) (json.R
 	return out, nil
 }
 
+// SubmitSummaryNarrative posts the client-authored knowledge-summary narrative
+// for a concluded investigation (agent token; design/06 §3.2 two-tier — the
+// BYOK client writes the prose, the server holds no model key).
+func (c *Client) SubmitSummaryNarrative(ctx context.Context, investigationRef, narrative, generatorModel string) error {
+	body := map[string]any{
+		"investigation_ref": investigationRef,
+		"narrative":         narrative,
+		"generator_model":   generatorModel,
+	}
+	return c.do(ctx, http.MethodPost, "/api/knowledge/summary_narrative", c.agentSrc, body, nil)
+}
+
 // RecordInterpretation appends one reasoning act (agent token).
 func (c *Client) RecordInterpretation(ctx context.Context, body InterpretationRequest) (InterpretationResponse, error) {
 	var out InterpretationResponse

@@ -141,6 +141,15 @@ type anthropicUsage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
+// ModelName reports the effective model id — provenance for artifacts this
+// client generates (e.g. the knowledge-summary narrative's generator_model).
+func (a *Anthropic) ModelName() string {
+	if a.Model == "" {
+		return DefaultAnthropicModel
+	}
+	return a.Model
+}
+
 // Complete runs one non-streaming Messages call.
 func (a *Anthropic) Complete(ctx context.Context, req CompleteRequest) (CompleteResponse, error) {
 	return a.complete(ctx, req, nil)

@@ -190,11 +190,20 @@ Steps:
    - `actions_taken` from `x-action` lifecycle events
    - `conclusion_outcome` from the thread's `conclusion` Interpretation rationale, with LLM disambiguation if not classifiable from structure alone
    - `duration_hours` from seed timestamp to conclusion timestamp
-3. Generate `summary_text` via LLM call: prompt with the structured fields and a curated subset of high-signal Interpretations from the thread; LLM produces the narrative
-4. Compute embeddings on `summary_text + structured` representation
-5. Write the summary row, embeddings, and audit record (which extractor version, which LLM, content hash)
+3. Render a deterministic `summary_text` from the structured fields, compute embeddings, and write the summary + audit record (extractor version, content hash) — **the server-side tier, no LLM, guaranteed at every conclusion**
+4. **Client-side tier**: the analyst's own client — the only place the BYOK model key lives — runs one completion over its session conversation (the richest context available: the model lived the investigation) and posts the narrative to `POST /api/knowledge/summary_narrative`; the server merges it as a *revision* of the baseline (body → narrative, `generator_model` stamped, structured tags/meta carried)
 
-The extraction's LLM call uses the BYOK key for solo, the tenant-configured key for SaaS. If no LLM key is configured, structured-only summaries are produced (no `summary_text`); retrieval quality drops but functionality continues.
+> **Amended (two-tier, 2026-08).** An earlier draft ran the narrative LLM call
+> inside the server-side workflow with "the tenant-configured key for SaaS."
+> That is superseded: **the backend holds no model key at all.** The
+> deterministic baseline (steps 1–3) always lands server-side at conclusion;
+> the narrative (step 4) is the client's BYOK act at conclude-time,
+> best-effort — if the client vanishes before writing it, the structured
+> baseline stands and retrieval continues (coarser prose, same facts). The
+> race between the pipeline's baseline write and the client's narrative POST
+> is handled by a brief client retry on not-found. Server-held tenant LLM
+> credentials remain a possibility only for future *clientless scheduled*
+> work (background hunts), not for anything in the conclusion path.
 
 ### 3.3 In-flight investigation indexing
 

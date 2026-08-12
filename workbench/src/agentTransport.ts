@@ -80,6 +80,8 @@ export interface TurnOutcome {
 export interface AgentTransport {
   turn(investigationId: string, text: string, progress: TurnProgress): Promise<TurnOutcome>;
   cancel(investigationId: string): Promise<void>;
+  /** Client-side knowledge-summary narrative at conclusion (design/06 §3.2). */
+  summarizeConcluded(investigationId: string): Promise<void>;
   dispose(): void;
 }
 
@@ -177,6 +179,20 @@ export class SidecarTransport implements AgentTransport {
     const conn = await this.ensureConnection();
     const sessionId = await this.ensureSession(conn, investigationId);
     await conn.sendRequest("resetSession", { session_id: sessionId });
+  }
+
+  /**
+   * Run the client-side tier of the two-tier knowledge summary (design/06
+   * §3.2): one BYOK model completion in the sidecar over the session's own
+   * conversation, posted to the backend as the concluded investigation's
+   * narrative. The model key never leaves the client plane. A session is
+   * created if none is live (a fresh one rehydrates from the committed
+   * thread, so the narrative still writes from the record).
+   */
+  async summarizeConcluded(investigationId: string): Promise<void> {
+    const conn = await this.ensureConnection();
+    const sessionId = await this.ensureSession(conn, investigationId);
+    await conn.sendRequest("summarizeConcluded", { session_id: sessionId });
   }
 
   dispose(): void {

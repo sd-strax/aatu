@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -193,6 +194,60 @@ func sourceRefOf(tags []string) string {
 		}
 	}
 	return ""
+}
+
+// ErrNoSummary is returned by EnrichSummary when no summary exists yet for the
+// investigation — the client retries briefly (the post-conclusion pipeline may
+// still be writing the structured baseline) and then gives up gracefully.
+var ErrNoSummary = errors.New("no summary exists for this investigation yet")
+
+// maxNarrativeRunes bounds an enrichment narrative (design/06 §3.1 bounds
+// summary_text by design; the narrative is a recallable digest, not a report).
+const maxNarrativeRunes = 4000
+
+// EnrichSummary replaces a summary's recallable body with the client-authored
+// LLM narrative (design/06 §3.2, two-tier): the server wrote the structured
+// baseline deterministically at conclusion; the analyst's own client — the
+// only place the BYOK model key lives — enriches it with prose written from
+// the full conversation context. The structured fields (tags, meta, title)
+// carry over unchanged; only the body and the generator-model stamp move. A
+// second enrichment (re-conclude, retry) revises again — idempotent in effect.
+func (s *Store) EnrichSummary(ctx context.Context, tenantID uuid.UUID, investigationRef, narrative, generatorModel string) (uuid.UUID, error) {
+	narrative = strings.TrimSpace(narrative)
+	if investigationRef == "" || narrative == "" {
+		return uuid.Nil, fmt.Errorf("EnrichSummary: investigation_ref and narrative required")
+	}
+	if r := []rune(narrative); len(r) > maxNarrativeRunes {
+		narrative = string(r[:maxNarrativeRunes])
+	}
+	ns := tenantID.String()
+	prior, err := s.sub.List(ctx, ns, CorpusCaseSummaries, substrate.ListFilter{
+		Tag:            summarySourcePrefix + investigationRef,
+		IncludeRetired: true,
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("resolve summary: %w", err)
+	}
+	if len(prior) == 0 {
+		return uuid.Nil, fmt.Errorf("%w: %s", ErrNoSummary, investigationRef)
+	}
+	p := prior[0]
+	prov := p.Provenance
+	if prov == nil {
+		prov = &substrate.Provenance{Producer: "case-summarizer"}
+	}
+	prov.GeneratorModel = generatorModel
+	e, err := s.sub.Revise(ctx, ns, CorpusCaseSummaries, p.ID, substrate.Revision{
+		Title:      p.Title,
+		Body:       narrative,
+		Tags:       p.Tags,
+		Meta:       p.Meta,
+		Provenance: prov,
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("enrich summary: %w", err)
+	}
+	return e.ID, nil
 }
 
 // summaryTags are the hard-filterable facets: techniques, the seed kind, the

@@ -152,6 +152,10 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		  {"investigation_ref":"grouping--prior1","title":"RDP lateral movement","score":0.94,"band":"NEAR_DUPLICATE"}
 		],"coverage":"COMPLETE"}`))
 	})
+	mux.HandleFunc("/api/knowledge/summary_narrative", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"summary_id":"sum-1"}`))
+	})
 
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f.override != nil && f.override(w, r) {
@@ -863,6 +867,63 @@ func TestSession_BudgetExhaustionLeavesValidConversation(t *testing.T) {
 		t.Fatalf("turn 2 must not fail on a dangling tool_use: %v", err)
 	}
 	assertToolUsesAnswered(t, s.messages)
+}
+
+// TestSession_SummarizeConcluded: the client-side narrative tier (design/06
+// §3.2) — one no-tools completion over the session's conversation, POSTed to
+// the narrative endpoint, without mutating the conversation (it is a side
+// product, not a turn).
+func TestSession_SummarizeConcluded(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &scriptedLLM{script: []CompleteResponse{
+		// The turn that "lived" the investigation.
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("Confirmed RDP lateral movement; host isolated.")}},
+		// The summarize completion.
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("The investigation confirmed RDP lateral movement from WIN-FILE01 and the host was isolated.")}},
+	}}
+	s, err := NewSession(context.Background(), Config{
+		Backend: f.client(), LLM: llm, InvestigationID: "inv-1",
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := s.Turn(context.Background(), "investigate"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	msgsBefore := len(s.messages)
+
+	narrative, err := s.SummarizeConcluded(context.Background())
+	if err != nil {
+		t.Fatalf("SummarizeConcluded: %v", err)
+	}
+	if !strings.Contains(narrative, "RDP lateral movement") {
+		t.Errorf("narrative = %q", narrative)
+	}
+	if len(s.messages) != msgsBefore {
+		t.Errorf("SummarizeConcluded mutated the conversation: %d -> %d messages", msgsBefore, len(s.messages))
+	}
+
+	// The summarize completion must carry no tools (single narrative call).
+	last := llm.requests[len(llm.requests)-1]
+	if len(last.Tools) != 0 {
+		t.Errorf("summarize completion carried %d tools; want none", len(last.Tools))
+	}
+
+	calls := f.callsTo("/api/knowledge/summary_narrative")
+	if len(calls) != 1 {
+		t.Fatalf("narrative not submitted: %d calls", len(calls))
+	}
+	var body struct {
+		InvestigationRef string `json:"investigation_ref"`
+		Narrative        string `json:"narrative"`
+		GeneratorModel   string `json:"generator_model"`
+	}
+	if err := json.Unmarshal(calls[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.InvestigationRef != "inv-1" || body.Narrative != narrative {
+		t.Errorf("submitted body wrong: %+v", body)
+	}
 }
 
 // TestSession_ConsultedSimilarRecorded: a recall_similar_investigations call is
