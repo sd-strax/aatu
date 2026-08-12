@@ -24,9 +24,14 @@ type RenderMessage =
   // The unseeded state (design/ui/02 §2.7): render the "root this investigation"
   // surface instead of a document. "seeded" flips back once the seed persists;
   // "draft.error" reports a failed create without leaving the draft.
-  | { type: "draft" }
+  | { type: "draft"; mode?: "case" }
   | { type: "seeded" }
   | { type: "draft.error"; message: string }
+  // The "from a case" seed surface (13 §3 — operational input lives on the
+  // panel, never the top-of-window quick input): the SoR search results, and a
+  // search failure rendered inline in the case sub-form.
+  | { type: "draft.cases"; cases: { number: string; title: string; status: string }[] }
+  | { type: "draft.caseError"; message: string }
   // capabilities is null when the capability layer is off/unreachable — the
   // rail renders that honestly instead of an empty list. thread is the
   // chronological reasoning history (13 §4); null when its fetch failed.
@@ -93,6 +98,10 @@ type InboundMessage =
   // explicit id + source from the "From an alert…" affordance.
   | { type: "seed.submit"; value: string; kind: string }
   | { type: "seed.alert"; alertId: string; source: string }
+  // The "from a case" path (13 §3): search the case system of record, then seed
+  // from a picked case — both driven from the draft surface, no quick input.
+  | { type: "seed.caseSearch"; filter: string }
+  | { type: "seed.case"; caseNumber: string }
   | { type: "send"; text: string }
   | { type: "action.approve"; actionId: string; tier: string; actionType: string; challenge?: string }
   | { type: "action.reject"; actionId: string; actionType: string; reason: string }
@@ -130,6 +139,9 @@ export class InvestigationDocuments {
   private draftSeq = 0;
   // Draft keys with a create in flight (the host half of the double-submit guard).
   private readonly seeding = new Set<string>();
+  // A draft opened in "from a case" mode (via reckon.seedFromCase) — consumed in
+  // the ready handshake so the panel opens with the case search already expanded.
+  private readonly draftMode = new Map<string, "case">();
   // Investigations whose rename card should pop once their panel goes live
   // (set by beginRename from the tree; consumed in the ready handshake).
   private readonly pendingRename = new Map<string, string>();
@@ -185,8 +197,11 @@ export class InvestigationDocuments {
    * until that first act — which keeps "an investigation always begins from
    * something concrete" honest without a wizard.
    */
-  showDraft(): void {
+  showDraft(mode?: "case"): void {
     const key = `__draft__${++this.draftSeq}`;
+    if (mode) {
+      this.draftMode.set(key, mode);
+    }
     const panel = vscode.window.createWebviewPanel(
       "reckon.investigation",
       "New investigation",
@@ -261,7 +276,9 @@ export class InvestigationDocuments {
     const id = ref.id;
     if (msg.type === "ready" || msg.type === "refresh") {
       if (InvestigationDocuments.isDraft(id)) {
-        void this.post(panel, { type: "draft" });
+        const mode = this.draftMode.get(id);
+        this.draftMode.delete(id);
+        void this.post(panel, { type: "draft", mode });
       } else {
         // A rename invoked from the tree opened this panel; start the in-place
         // edit only AFTER the load has posted its data (so the title field is
@@ -278,6 +295,10 @@ export class InvestigationDocuments {
       void this.seedDraft(ref, panel, { value: msg.value, kind: msg.kind });
     } else if (msg.type === "seed.alert") {
       void this.seedDraft(ref, panel, { alertId: msg.alertId, source: msg.source });
+    } else if (msg.type === "seed.caseSearch") {
+      void this.searchCases(panel, msg.filter);
+    } else if (msg.type === "seed.case") {
+      void this.seedDraft(ref, panel, { value: msg.caseNumber, kind: "case" });
     } else if (msg.type === "send") {
       void this.runTurn(id, panel, msg.text);
     } else if (msg.type === "action.approve") {
@@ -374,6 +395,22 @@ export class InvestigationDocuments {
       void this.post(panel, { type: "draft.error", message: errText(err) });
     } finally {
       this.seeding.delete(draftKey);
+    }
+  }
+
+  /**
+   * Search the case system of record for the draft's "from a case" surface
+   * (14 §4.1): the query and its results live on the panel, never the
+   * top-of-window quick input (13 §3). A read failure surfaces inline in the
+   * sub-form; seeding from a picked case runs the ordinary seedDraft path
+   * (kind "case"), which fails closed server-side on a bad case id.
+   */
+  private async searchCases(panel: vscode.WebviewPanel, filter: string): Promise<void> {
+    try {
+      const cases = await this.client.queryExternalCases(filter.trim() || undefined);
+      void this.post(panel, { type: "draft.cases", cases });
+    } catch (err) {
+      void this.post(panel, { type: "draft.caseError", message: errText(err) });
     }
   }
 
@@ -1760,6 +1797,23 @@ export class InvestigationDocuments {
       border: 1px solid var(--vscode-input-border, var(--border)); border-radius: var(--r-sm); padding: 7px 10px;
     }
     #draftAlertForm button { align-self: flex-start; }
+    #draftCaseForm { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+    .draftCaseSearch { display: flex; gap: 8px; }
+    #draftCaseFilter {
+      flex: 1; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border)); border-radius: var(--r-sm); padding: 7px 10px;
+    }
+    .draftCaseStatus { font-size: 0.9em; color: var(--vscode-descriptionForeground); min-height: 16px; }
+    .draftCaseResults { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+    .caseRow {
+      text-align: left; cursor: pointer; font: inherit; padding: 8px 10px;
+      color: var(--vscode-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border)); border-radius: var(--r-sm);
+    }
+    .caseRow:hover { border-color: var(--vscode-focusBorder); }
+    .caseNum { font-weight: 600; }
+    .caseStatus { color: var(--vscode-descriptionForeground); margin-left: 8px; font-size: 0.85em; }
+    .caseTitle { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); }
     .draftErr { margin-top: 12px; color: var(--vscode-errorForeground); min-height: 18px; }
   </style>
 </head>
@@ -1889,11 +1943,23 @@ export class InvestigationDocuments {
       <div class="draftActions">
         <button class="primary" id="draftStart" disabled>Start investigation</button>
         <button id="draftAlertToggle" class="linklike">From an alert…</button>
+        <button id="draftCaseToggle" class="linklike">From a case…</button>
       </div>
       <div id="draftAlertForm" style="display:none">
         <input id="draftAlertId" type="text" placeholder="alert id in its tool (e.g. EDR-ALERT-7741)">
         <input id="draftAlertSource" type="text" placeholder="which tool raised it (e.g. crowdstrike-edr)">
         <button class="primary" id="draftAlertStart" disabled>Start from alert</button>
+      </div>
+      <!-- From a system-of-record case (14 §4.1): search the SoR and pick, all
+           on this surface — the filter is a real field here, never the
+           top-of-window quick input (13 §3). -->
+      <div id="draftCaseForm" style="display:none">
+        <div class="draftCaseSearch">
+          <input id="draftCaseFilter" type="text" placeholder="filter your case system of record (blank = recent) — e.g. reimage">
+          <button class="primary" id="draftCaseSearchBtn">Search cases</button>
+        </div>
+        <div id="draftCaseStatus" class="draftCaseStatus"></div>
+        <div id="draftCaseResults" class="draftCaseResults"></div>
       </div>
       <div id="draftErr" class="draftErr"></div>
     </div>
@@ -3786,6 +3852,9 @@ export class InvestigationDocuments {
       } else if (seed.type === "alert") {
         const src = seed.source ? esc(seed.source) + ": " : "";
         html = "From alert <b>" + src + esc(seed.alertId || "") + "</b>";
+      } else if (seed.type === "case") {
+        const src = seed.source ? esc(seed.source) + ": " : "";
+        html = "From case <b>" + src + esc(seed.caseId || "") + "</b>";
       }
       el.innerHTML = html;
       el.style.display = html ? "" : "none";
@@ -3836,7 +3905,7 @@ export class InvestigationDocuments {
     // explicit in-flight flag guards both — a double Enter must never mint two
     // investigations. Cleared on error (retry) and on a fresh draft.
     let draftSubmitting = false;
-    function showDraft() {
+    function showDraft(mode) {
       draftOverride = null;
       draftSubmitting = false;
       $("draftView").style.display = "flex";
@@ -3844,8 +3913,13 @@ export class InvestigationDocuments {
       $("draftErr").textContent = "";
       $("draftInterp").innerHTML = "";
       $("draftAlertForm").style.display = "none";
+      $("draftCaseForm").style.display = "none";
+      $("draftCaseFilter").value = "";
+      $("draftCaseResults").innerHTML = "";
+      $("draftCaseStatus").textContent = "";
       $("draftStart").disabled = true;
-      $("draftInput").focus();
+      // reckon.seedFromCase opens the draft straight into the case search.
+      if (mode === "case") { toggleCaseForm(true); } else { $("draftInput").focus(); }
     }
     function hideDraft() { $("draftView").style.display = "none"; }
     function submitDraft() {
@@ -3864,7 +3938,7 @@ export class InvestigationDocuments {
     $("draftAlertToggle").addEventListener("click", () => {
       const f = $("draftAlertForm");
       f.style.display = f.style.display === "none" ? "flex" : "none";
-      if (f.style.display === "flex") $("draftAlertId").focus();
+      if (f.style.display === "flex") { $("draftCaseForm").style.display = "none"; $("draftAlertId").focus(); }
     });
     function alertReady() {
       $("draftAlertStart").disabled = !($("draftAlertId").value.trim() && $("draftAlertSource").value.trim());
@@ -3877,6 +3951,51 @@ export class InvestigationDocuments {
       draftSubmitting = true;
       $("draftAlertStart").disabled = true;
       vscode.postMessage({ type: "seed.alert", alertId, source });
+    });
+
+    // ---- the "from a case" path (14 §4.1): search the case system of record
+    // and pick, all on this surface — the filter is a field here, never the
+    // top-of-window quick input (workbench discipline, 13 §3). The pick fails
+    // closed server-side, so a bad case never seeds a half-loaded investigation.
+    function toggleCaseForm(force) {
+      const f = $("draftCaseForm");
+      const show = force !== undefined ? force : f.style.display === "none";
+      f.style.display = show ? "flex" : "none";
+      if (show) { $("draftAlertForm").style.display = "none"; $("draftCaseFilter").focus(); }
+    }
+    function submitCaseSearch() {
+      $("draftCaseStatus").textContent = "Searching the case system of record…";
+      $("draftCaseResults").innerHTML = "";
+      vscode.postMessage({ type: "seed.caseSearch", filter: $("draftCaseFilter").value });
+    }
+    function renderCases(cases) {
+      const box = $("draftCaseResults");
+      box.innerHTML = "";
+      if (!cases.length) {
+        $("draftCaseStatus").textContent = "No matching cases in the system of record.";
+        return;
+      }
+      $("draftCaseStatus").textContent =
+        cases.length + " case" + (cases.length === 1 ? "" : "s") + " — pick one to investigate.";
+      for (const c of cases) {
+        const row = document.createElement("button");
+        row.className = "caseRow";
+        row.innerHTML = '<span class="caseNum">' + esc(c.number) + "</span>"
+          + '<span class="caseStatus">' + esc(c.status || "") + "</span>"
+          + '<span class="caseTitle">' + esc(c.title || "") + "</span>";
+        row.addEventListener("click", () => {
+          if (draftSubmitting) return;
+          draftSubmitting = true;
+          $("draftCaseStatus").textContent = "Seeding from " + c.number + "…";
+          vscode.postMessage({ type: "seed.case", caseNumber: c.number });
+        });
+        box.appendChild(row);
+      }
+    }
+    $("draftCaseToggle").addEventListener("click", () => toggleCaseForm());
+    $("draftCaseSearchBtn").addEventListener("click", submitCaseSearch);
+    $("draftCaseFilter").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submitCaseSearch(); }
     });
 
     // ---- resizable rail ----------------------------------------------------
@@ -4093,10 +4212,17 @@ export class InvestigationDocuments {
           document.body.classList.add("loading");
           break;
         case "draft":
-          showDraft();
+          showDraft(msg.mode);
           break;
         case "seeded":
           hideDraft();
+          break;
+        case "draft.cases":
+          renderCases(msg.cases);
+          break;
+        case "draft.caseError":
+          draftSubmitting = false;
+          $("draftCaseStatus").textContent = msg.message;
           break;
         case "draft.error":
           draftSubmitting = false;
