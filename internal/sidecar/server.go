@@ -65,6 +65,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, opts Options) error {
 		"turn":               s.handleTurn,
 		"resetSession":       s.handleResetSession,
 		"summarizeConcluded": s.handleSummarizeConcluded,
+		"proposeSOP":         s.handleProposeSOP,
 		"cancel":             s.handleCancel,
 		"shutdown":           func(context.Context, json.RawMessage) (any, error) { return struct{}{}, nil },
 	})
@@ -576,6 +577,37 @@ func (s *service) handleSummarizeConcluded(ctx context.Context, raw json.RawMess
 		return nil, err
 	}
 	return map[string]any{"chars": len(narrative)}, nil
+}
+
+// proposeSOPParams identifies the session whose concluded investigation to
+// generalize into a candidate SOP.
+type proposeSOPParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// handleProposeSOP runs the client tier of candidate-SOP generation: one BYOK
+// model completion over the session's own conversation, returning a candidate
+// SOP generalized from the concluded investigation (the compounding loop). The
+// candidate is NOT persisted — it goes back to the workbench for the analyst to
+// accept or discard. Serialized with turns via turnMu (it reads the
+// conversation a turn would mutate). Best-effort: the caller softens failure,
+// and warranted=false is a valid, non-error "no new SOP worth it" answer.
+func (s *service) handleProposeSOP(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p proposeSOPParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, errInvalidParams("proposeSOP: %v", err)
+	}
+	st, err := s.session(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	st.turnMu.Lock()
+	defer st.turnMu.Unlock()
+	cand, err := st.sess.ProposeSOP(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return cand, nil
 }
 
 func (s *service) handleCancel(_ context.Context, raw json.RawMessage) (any, error) {

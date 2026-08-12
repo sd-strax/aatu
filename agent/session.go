@@ -593,6 +593,90 @@ func (s *Session) SummarizeConcluded(ctx context.Context) (string, error) {
 // structured write, short enough not to hang the conclude UX.
 var summaryRetryDelay = 3 * time.Second
 
+// SOPCandidate is a draft standing procedure the model proposes from a concluded
+// investigation — a GENERALIZATION over this case plus the SOPs and similar past
+// cases the session consulted, not a retelling of the one investigation. It is
+// NOT persisted here: the analyst reviews it in the workbench and decides to add
+// it to the SOP library or discard it (the compounding loop, closed by a human).
+// Warranted=false means the model judged no new procedure worth capturing (e.g.
+// an existing SOP already covers it); Rationale says why either way.
+type SOPCandidate struct {
+	Warranted      bool     `json:"warranted"`
+	Title          string   `json:"title"`
+	Body           string   `json:"body"` // markdown runbook prose
+	Tags           []string `json:"tags"`
+	Recommendation string   `json:"recommendation"`
+	Rationale      string   `json:"rationale"`
+}
+
+// proposeSOPInstruction asks for one structured candidate SOP. It leans on the
+// SOPs + similar past cases already in the session context (the system prompt
+// carries the included set) so the model generalizes rather than duplicates.
+const proposeSOPInstruction = "The investigation has just been concluded. Consider whether it yields a " +
+	"REUSABLE procedure worth capturing as a standing SOP — a generalization a future analyst could " +
+	"follow on a similar case, not a retelling of this one. Draw on the SOPs and similar past " +
+	"investigations already in your context: if an existing SOP already covers this, do NOT propose a " +
+	"duplicate. Only propose when there is a genuine, generalizable procedure. " +
+	"Respond with a SINGLE JSON object and nothing else: " +
+	`{"warranted": bool, "title": string, "body": string (a markdown runbook: scope, triage, response, ` +
+	`do-not), "tags": [string] (lowercase, include any MITRE technique ids), "recommendation": string ` +
+	`(one short imperative, e.g. "isolate"), "rationale": string (why this generalizes, or if not ` +
+	`warranted, why not)}. If warranted is false, leave title/body/tags/recommendation empty and explain ` +
+	"in rationale."
+
+// ProposeSOP runs one BYOK model completion over the session's own conversation
+// and returns a candidate SOP generalized from the concluded investigation — the
+// client tier of candidate-SOP generation (design/06: the compounding loop). It
+// is the twin of SummarizeConcluded: no tools, the model key never leaves this
+// process, the exchange is NOT appended to the conversation (a side product, not
+// a turn), and a fresh session (sidecar respawn) rehydrates from the committed
+// thread first. Unlike the summary, nothing is written here — the candidate goes
+// back to the workbench for the analyst to accept (create the SOP) or discard.
+func (s *Session) ProposeSOP(ctx context.Context) (SOPCandidate, error) {
+	if len(s.messages) == 0 {
+		s.rehydrate(ctx)
+	}
+	msgs := append(append([]Message{}, s.messages...),
+		Message{Role: RoleUser, Content: []ContentBlock{TextBlock(proposeSOPInstruction)}})
+	resp, err := s.llm.Complete(ctx, CompleteRequest{
+		System:    s.system,
+		Messages:  msgs,
+		MaxTokens: s.maxTokens,
+		// No tools: a single structured completion, not an agentic turn.
+	})
+	if err != nil {
+		return SOPCandidate{}, fmt.Errorf("agent: propose sop: %w", err)
+	}
+	var out strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == BlockText {
+			out.WriteString(blk.Text)
+		}
+	}
+	cand, err := parseSOPCandidate(out.String())
+	if err != nil {
+		return SOPCandidate{}, fmt.Errorf("agent: propose sop: %w", err)
+	}
+	return cand, nil
+}
+
+// parseSOPCandidate extracts the JSON object from the model's reply, tolerating
+// surrounding prose or ```json fences by taking the first '{' through the last
+// '}'. A body that isn't valid JSON is an error the caller softens (candidate
+// generation is best-effort, like the summary narrative).
+func parseSOPCandidate(text string) (SOPCandidate, error) {
+	start := strings.IndexByte(text, '{')
+	end := strings.LastIndexByte(text, '}')
+	if start < 0 || end < start {
+		return SOPCandidate{}, fmt.Errorf("no JSON object in model reply")
+	}
+	var cand SOPCandidate
+	if err := json.Unmarshal([]byte(text[start:end+1]), &cand); err != nil {
+		return SOPCandidate{}, fmt.Errorf("parse candidate JSON: %w", err)
+	}
+	return cand, nil
+}
+
 // complete runs one model call, streaming when both sides can (the surface
 // registered OnTextDelta and the provider implements StreamingLLM). streamed
 // reports whether deltas carried the text, so the caller skips OnText for it.

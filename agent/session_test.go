@@ -931,6 +931,54 @@ func TestSession_SummarizeConcluded(t *testing.T) {
 	}
 }
 
+// TestSession_ProposeSOP: candidate-SOP generalization (design/06: the
+// compounding loop) — one no-tools completion returning a structured candidate,
+// parsed from JSON (tolerating ```json fences), without mutating the
+// conversation and without persisting anything (the analyst decides).
+func TestSession_ProposeSOP(t *testing.T) {
+	f := newFakeBackend(t)
+	llm := &scriptedLLM{script: []CompleteResponse{
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock("Confirmed RDP lateral movement; host isolated.")}},
+		// The propose-SOP completion, fenced to exercise the extractor.
+		{StopReason: StopEndTurn, Content: []ContentBlock{TextBlock(
+			"```json\n{\"warranted\": true, \"title\": \"RDP Lateral Movement Containment\", " +
+				"\"body\": \"## Scope\\nInteractive RDP...\", \"tags\": [\"lateral-movement\", \"t1021.001\"], " +
+				"\"recommendation\": \"isolate\", \"rationale\": \"Generalizes across RDP pivot cases.\"}\n```")}},
+	}}
+	s, err := NewSession(context.Background(), Config{
+		Backend: f.client(), LLM: llm, InvestigationID: "inv-1",
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := s.Turn(context.Background(), "investigate"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	msgsBefore := len(s.messages)
+
+	cand, err := s.ProposeSOP(context.Background())
+	if err != nil {
+		t.Fatalf("ProposeSOP: %v", err)
+	}
+	if !cand.Warranted || cand.Title != "RDP Lateral Movement Containment" {
+		t.Errorf("candidate wrong: %+v", cand)
+	}
+	if len(cand.Tags) != 2 || cand.Recommendation != "isolate" {
+		t.Errorf("candidate fields wrong: %+v", cand)
+	}
+	if len(s.messages) != msgsBefore {
+		t.Errorf("ProposeSOP mutated the conversation: %d -> %d messages", msgsBefore, len(s.messages))
+	}
+	// No tools on the propose completion; nothing persisted server-side.
+	last := llm.requests[len(llm.requests)-1]
+	if len(last.Tools) != 0 {
+		t.Errorf("propose completion carried %d tools; want none", len(last.Tools))
+	}
+	if calls := f.callsTo("/api/sops/import"); len(calls) != 0 {
+		t.Errorf("ProposeSOP persisted a SOP (%d calls); it must not — the analyst decides", len(calls))
+	}
+}
+
 // TestSession_ConsultedSimilarRecorded: a recall_similar_investigations call is
 // captured as consulted_similar_investigations provenance on the committed
 // interpretation, with Used decided conservatively from the final text (K4,

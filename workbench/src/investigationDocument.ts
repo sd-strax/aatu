@@ -16,7 +16,7 @@
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
 import { ActionRow, Appearance, BackendClient, Capability, CommsThread, Enablement, EvidenceDoc, Hypothesis, InvestigationDetail, PinRow, ThreadEntry } from "./backend";
-import { AgentTransport, KnowledgeItem } from "./agentTransport";
+import { AgentTransport, KnowledgeItem, SOPCandidate } from "./agentTransport";
 
 /** What the extension host posts to the webview to render. */
 type RenderMessage =
@@ -923,12 +923,65 @@ export class InvestigationDocuments {
           () => vscode.window.setStatusBarMessage("reckon: knowledge summary written", 5000),
           (err: unknown) => console.warn("reckon: knowledge summary narrative failed (baseline stands):", err),
         );
+        // Candidate-SOP generalization (design/06: the compounding loop) — the
+        // model drafts a reusable SOP from this case + the SOPs and similar past
+        // cases it consulted; the analyst reviews and accepts or discards it.
+        // Fire-and-forget, like the summary: a failed draft never touches the
+        // conclude UX.
+        void this.proposeCandidateSOP(id);
       }
     } catch (err) {
       void vscode.window.showErrorMessage(`reckon: ${msg.transition} failed — ${errText(err)}`);
     }
     await this.load(id, panel);
     await this.postPending(id, panel);
+  }
+
+  /**
+   * Generalize a candidate SOP from the concluded investigation and let the
+   * analyst accept or discard it (design/06: the compounding loop). The draft
+   * opens as an editable markdown document — the review surface — so the analyst
+   * can refine it before accepting; "Add to SOP library" imports the CURRENT
+   * editor content through the same markdown path as `Import SOPs…`, so edits are
+   * honored and the source URL keys the SOP to this investigation (re-accepting
+   * revises rather than duplicates). Discarding leaves nothing behind. The whole
+   * thing is best-effort — a failed or unwarranted draft is silent.
+   */
+  private async proposeCandidateSOP(id: string): Promise<void> {
+    let candidate: SOPCandidate;
+    try {
+      candidate = await this.transport.proposeSOP(id);
+    } catch (err) {
+      console.warn("reckon: candidate SOP generation failed:", err);
+      return;
+    }
+    if (!candidate?.warranted || !candidate.title.trim() || !candidate.body.trim()) {
+      // The model judged no new procedure worth capturing (an existing SOP
+      // already covers it, or the case was too specific). Nothing to surface.
+      return;
+    }
+
+    const markdown = candidateSOPMarkdown(candidate, id);
+    const doc = await vscode.workspace.openTextDocument({ content: markdown, language: "markdown" });
+    await vscode.window.showTextDocument(doc, { preview: false });
+    const choice = await vscode.window.showInformationMessage(
+      `reckon: drafted a candidate SOP from this investigation — “${candidate.title.trim()}”. Review it, then add it to the library or discard.`,
+      "Add to SOP library",
+      "Discard",
+    );
+    if (choice !== "Add to SOP library") {
+      return; // discarded or dismissed — leave the untitled doc for the analyst to close
+    }
+    try {
+      const content = doc.getText(); // honor any edits the analyst made while reviewing
+      const filename = slugifyTitle(candidate.title) + ".md";
+      const res = await this.client.importSOPMarkdown(filename, content);
+      void vscode.window.showInformationMessage(
+        `reckon: SOP “${res.title}” ${res.outcome === "revised" ? "updated" : "added"} — consultable in future investigations.`,
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(`reckon: adding the SOP failed — ${errText(err)}`);
+    }
   }
 
   /**
@@ -4534,6 +4587,48 @@ function makeNonce(): string {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Render a candidate SOP as markdown + YAML frontmatter — the exact shape the
+ * server's markdown import parses (design/06 §2.4). The source URL keys the SOP
+ * to its originating investigation, so re-accepting a re-drafted candidate
+ * revises the same SOP rather than creating a duplicate.
+ */
+function candidateSOPMarkdown(c: SOPCandidate, investigationId: string): string {
+  const tags = (c.tags ?? []).map((t) => t.trim()).filter(Boolean);
+  const lines = [
+    "---",
+    `title: ${yamlScalar(c.title.trim())}`,
+    `tags: [${tags.map(yamlScalar).join(", ")}]`,
+  ];
+  if (c.recommendation?.trim()) {
+    lines.push(`recommendation: ${yamlScalar(c.recommendation.trim())}`);
+  }
+  lines.push(
+    "source:",
+    "  system: reckon",
+    `  url: reckon://investigation/${investigationId}`,
+    "---",
+    "",
+    c.body.trim(),
+    "",
+  );
+  return lines.join("\n");
+}
+
+/** Minimal YAML scalar quoting — quote when the value could be misread. */
+function yamlScalar(s: string): string {
+  return /^[\w .\-/]+$/.test(s) ? s : JSON.stringify(s);
+}
+
+/** A filesystem-safe slug from a SOP title, for the import filename. */
+function slugifyTitle(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "candidate-sop";
 }
 
 /**

@@ -88,6 +88,19 @@ export interface KnowledgeItem {
   included: boolean;
 }
 
+/** A candidate SOP the model generalized from a concluded investigation
+ * (design/06: the compounding loop). Not persisted — the analyst reviews it and
+ * decides to add it to the library or discard. warranted=false means the model
+ * judged no new procedure worth capturing (rationale says why). */
+export interface SOPCandidate {
+  warranted: boolean;
+  title: string;
+  body: string;
+  tags: string[];
+  recommendation: string;
+  rationale: string;
+}
+
 export interface AgentTransport {
   turn(investigationId: string, text: string, progress: TurnProgress, includedKnowledge?: string[]): Promise<TurnOutcome>;
   cancel(investigationId: string): Promise<void>;
@@ -96,6 +109,9 @@ export interface AgentTransport {
   getKnowledge(investigationId: string): Promise<KnowledgeItem[]>;
   /** Client-side knowledge-summary narrative at conclusion (design/06 §3.2). */
   summarizeConcluded(investigationId: string): Promise<void>;
+  /** Client-side candidate-SOP generalization at conclusion (design/06: the
+   * compounding loop). Returns a draft for the analyst to accept or discard. */
+  proposeSOP(investigationId: string): Promise<SOPCandidate>;
   dispose(): void;
 }
 
@@ -213,6 +229,18 @@ export class SidecarTransport implements AgentTransport {
     const conn = await this.ensureConnection();
     const sessionId = await this.ensureSession(conn, investigationId);
     await conn.sendRequest("summarizeConcluded", { session_id: sessionId });
+  }
+
+  /**
+   * Generalize a candidate SOP from the concluded investigation (design/06: the
+   * compounding loop). One BYOK completion in the sidecar over the session's own
+   * conversation, informed by the SOPs + similar past cases it consulted. The
+   * candidate is returned, not persisted — the analyst accepts or discards it.
+   */
+  async proposeSOP(investigationId: string): Promise<SOPCandidate> {
+    const conn = await this.ensureConnection();
+    const sessionId = await this.ensureSession(conn, investigationId);
+    return (await conn.sendRequest("proposeSOP", { session_id: sessionId })) as SOPCandidate;
   }
 
   dispose(): void {
