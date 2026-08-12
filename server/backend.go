@@ -489,8 +489,9 @@ func (b *Backend) buildRouter(verifier *authz.Verifier) http.Handler {
 		api.Handle("/knowledge/recall_similar_investigations", authz.RequireAuth(verifier)(http.HandlerFunc(b.recallSimilar)))
 		api.Handle("/knowledge/summary_narrative", authz.RequireAuth(verifier)(http.HandlerFunc(b.summaryNarrative)))
 		api.Handle("/sops", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsCollection)))
-		// Exact pattern beats the /sops/ prefix, so "import" never parses as an id.
+		// Exact patterns beat the /sops/ prefix, so "import" never parses as an id.
 		api.Handle("/sops/import", authz.RequireAuth(verifier)(http.HandlerFunc(b.importSOP)))
+		api.Handle("/sops/import_markdown", authz.RequireAuth(verifier)(http.HandlerFunc(b.importMarkdownSOP)))
 		api.Handle("/sops/", authz.RequireAuth(verifier)(http.HandlerFunc(b.sopsItem)))
 	}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sd-strax/reckon/authz"
+	"github.com/sd-strax/reckon/internal/sopdoc"
 	"github.com/sd-strax/reckon/knowledge"
 	"github.com/sd-strax/reckon/module"
 )
@@ -165,6 +166,71 @@ func (b *Backend) importSOP(w http.ResponseWriter, r *http.Request) {
 			outcome = "created"
 		}
 		writeJSON(w, status, map[string]string{"id": id.String(), "outcome": outcome})
+	})
+}
+
+// SOPMarkdownBody is the workbench import payload (design/06 §2.4): a raw
+// markdown file's bytes plus its name. The server parses frontmatter + body
+// with the shared parser — the workbench never reimplements it, and richer
+// formats are converted to markdown at the edge (pandoc) before arriving here.
+type SOPMarkdownBody struct {
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
+}
+
+// importMarkdownSOP handles POST /api/sops/import_markdown (analyst): parse one
+// markdown document and upsert it. The importer is the authenticated principal
+// (recorded server-side, never client-supplied); the source pointer defaults to
+// file:<filename> when the frontmatter omits it — the re-import lineage key.
+func (b *Backend) importMarkdownSOP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, func(w http.ResponseWriter, r *http.Request) {
+		var body SOPMarkdownBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
+			return
+		}
+		name := body.Filename
+		if name == "" {
+			name = "untitled.md"
+		}
+		doc, err := sopdoc.Parse([]byte(body.Content), sopdoc.TitleStem(name))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "parse sop document: "+err.Error())
+			return
+		}
+		if doc.SourceURL == "" {
+			doc.SourceSystem = "file"
+			doc.SourceURL = "file:" + name
+		}
+		claims, _ := authz.FromContext(r.Context())
+		importer := claims.PreferredUsername
+		if importer == "" {
+			importer = claims.Subject
+		}
+		id, created, err := b.cfg.Knowledge.Import(r.Context(), knowledge.SOP{
+			TenantID: module.SingleTenantUUID,
+			Title:    doc.Title, Body: doc.Body, Tags: doc.Tags,
+			Recommendation: doc.Recommendation,
+			AuthorID:       doc.Author,
+			ImportedBy:     importer,
+			Source: &knowledge.SOPSource{
+				System: doc.SourceSystem, URL: doc.SourceURL, Version: doc.SourceVersion,
+			},
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "import sop: "+err.Error())
+			return
+		}
+		status, outcome := http.StatusOK, "revised"
+		if created {
+			status, outcome = http.StatusCreated, "created"
+		}
+		writeJSON(w, status, map[string]string{"id": id.String(), "outcome": outcome, "title": doc.Title})
 	})
 }
 

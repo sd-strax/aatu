@@ -1103,6 +1103,20 @@ export class BackendClient {
   }
 
   /**
+   * Import one institutional-knowledge document into the SOP corpus (design/06
+   * §2.4): the raw markdown + its filename go to the server, which parses
+   * frontmatter and upserts (re-import of the same source revises in place).
+   * Parsing stays server-side — one robust parser, never a TS reimplementation.
+   */
+  async importSOPMarkdown(filename: string, content: string): Promise<{ title: string; outcome: string }> {
+    const r = await this.authedPost<{ title?: string; outcome?: string }>(
+      "/api/sops/import_markdown",
+      { filename, content },
+    );
+    return { title: r.title ?? filename, outcome: r.outcome ?? "ok" };
+  }
+
+  /**
    * Query the case system of record for the seed picker (14-case-seed.md §4.1):
    * runs query_external_cases and pulls each case's metadata out of the
    * class-2005 ObservedData extensions the case normalizer wrote (03 §2.9).

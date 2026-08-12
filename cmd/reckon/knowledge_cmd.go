@@ -14,11 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/sd-strax/reckon/agent"
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/internal/sopdoc"
 )
 
 // runKnowledge dispatches the `knowledge` subcommands.
@@ -138,60 +137,17 @@ func collectImportFiles(paths []string) ([]string, error) {
 	return out, nil
 }
 
-// sopDocument is one parsed import file: the frontmatter attribution plus the
-// prose body.
-type sopDocument struct {
-	Title          string
-	Author         string
-	Tags           []string
-	Recommendation string
-	SourceSystem   string
-	SourceURL      string
-	SourceVersion  string
-	Body           string
-}
-
-// sopFrontmatter is the YAML block an import file may open with.
-type sopFrontmatter struct {
-	Title          string   `yaml:"title"`
-	Author         string   `yaml:"author"`
-	Tags           []string `yaml:"tags"`
-	Recommendation string   `yaml:"recommendation"`
-	Source         struct {
-		System  string `yaml:"system"`
-		URL     string `yaml:"url"`
-		Version string `yaml:"version"`
-	} `yaml:"source"`
-}
-
-// parseSOPDocument reads one markdown/text file: optional `---` YAML
-// frontmatter, then prose. Fallbacks keep plain files importable: the title
-// comes from the first `# ` heading or the filename, and the source URL —
-// the re-import lineage key — defaults to file:<path>.
-func parseSOPDocument(path string) (sopDocument, error) {
+// parseSOPDocument reads one markdown/text file via the shared parser, then
+// defaults the source pointer — the re-import lineage key — to file:<path>
+// when the frontmatter omitted it (only the CLI knows the local path).
+func parseSOPDocument(path string) (sopdoc.Doc, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return sopDocument{}, err
+		return sopdoc.Doc{}, err
 	}
-	fm, body, err := splitFrontmatter(raw)
+	doc, err := sopdoc.Parse(raw, sopdoc.TitleStem(path))
 	if err != nil {
-		return sopDocument{}, err
-	}
-	doc := sopDocument{
-		Title:          fm.Title,
-		Author:         fm.Author,
-		Tags:           fm.Tags,
-		Recommendation: fm.Recommendation,
-		SourceSystem:   fm.Source.System,
-		SourceURL:      fm.Source.URL,
-		SourceVersion:  fm.Source.Version,
-		Body:           strings.TrimSpace(body),
-	}
-	if doc.Body == "" {
-		return sopDocument{}, fmt.Errorf("empty body")
-	}
-	if doc.Title == "" {
-		doc.Title = headingOrStem(doc.Body, path)
+		return sopdoc.Doc{}, err
 	}
 	if doc.SourceURL == "" {
 		doc.SourceSystem = "file"
@@ -200,44 +156,8 @@ func parseSOPDocument(path string) (sopDocument, error) {
 	return doc, nil
 }
 
-// splitFrontmatter separates an optional leading `---` YAML block from the
-// prose. No frontmatter is fine — the whole content is body.
-func splitFrontmatter(raw []byte) (sopFrontmatter, string, error) {
-	var fm sopFrontmatter
-	content := strings.ReplaceAll(string(bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))), "\r\n", "\n")
-	if !strings.HasPrefix(content, "---\n") {
-		return fm, content, nil
-	}
-	rest := content[len("---\n"):]
-	end := strings.Index(rest, "\n---\n")
-	if end < 0 {
-		if trimmed, ok := strings.CutSuffix(rest, "\n---"); ok {
-			end = len(trimmed)
-			rest = trimmed + "\n---\n"
-		} else {
-			return fm, "", fmt.Errorf("unterminated frontmatter (opening --- without closing ---)")
-		}
-	}
-	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
-		return fm, "", fmt.Errorf("frontmatter: %w", err)
-	}
-	return fm, rest[end+len("\n---\n"):], nil
-}
-
-// headingOrStem derives a title from the first `# ` heading, else the
-// filename stem.
-func headingOrStem(body, path string) string {
-	for _, line := range strings.Split(body, "\n") {
-		if h, ok := strings.CutPrefix(strings.TrimSpace(line), "# "); ok && strings.TrimSpace(h) != "" {
-			return strings.TrimSpace(h)
-		}
-	}
-	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	return strings.ReplaceAll(stem, "-", " ")
-}
-
 // postSOPImport submits one document to POST /api/sops/import.
-func postSOPImport(ctx context.Context, cred *agent.Credential, backendURL string, doc sopDocument) (string, error) {
+func postSOPImport(ctx context.Context, cred *agent.Credential, backendURL string, doc sopdoc.Doc) (string, error) {
 	payload := map[string]any{
 		"title": doc.Title, "body": doc.Body, "tags": doc.Tags,
 		"recommendation": doc.Recommendation,

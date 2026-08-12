@@ -103,6 +103,52 @@ export function activate(context: vscode.ExtensionContext): void {
       documents.showDraft("case");
     }),
 
+    // Import institutional knowledge into the SOP corpus (design/06 §2.4). SOPs
+    // are consultative — the agent surfaces them (the knowledge rail); import is
+    // an occasional populate act, so it is a COMMAND (workbench discipline, 13
+    // §3), not a management view. The only input is a file PICKER — a native
+    // select, never the top-of-window quick input. Attribution comes from each
+    // file's YAML frontmatter (author, tags, source), parsed server-side.
+    vscode.commands.registerCommand("reckon.importSOP", async () => {
+      if (!session.signedIn) {
+        void vscode.window.showWarningMessage("reckon: sign in before importing SOPs");
+        return;
+      }
+      const uris = await vscode.window.showOpenDialog({
+        title: "Import SOPs",
+        canSelectMany: true,
+        openLabel: "Import",
+        filters: { "Markdown / text": ["md", "markdown", "txt"] },
+      });
+      if (!uris || uris.length === 0) {
+        return; // cancelled
+      }
+      let ok = 0;
+      const failures: string[] = [];
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "reckon: importing SOPs…" },
+        async () => {
+          for (const uri of uris) {
+            const name = uri.path.split("/").pop() || "untitled.md";
+            try {
+              const bytes = await vscode.workspace.fs.readFile(uri);
+              const content = Buffer.from(bytes).toString("utf8");
+              const res = await client.importSOPMarkdown(name, content);
+              ok++;
+              log.info(`imported SOP ${res.outcome}: ${res.title} (${name})`);
+            } catch (err) {
+              failures.push(`${name}: ${errText(err)}`);
+            }
+          }
+        },
+      );
+      if (failures.length === 0) {
+        void vscode.window.showInformationMessage(`reckon: imported ${ok} SOP${ok === 1 ? "" : "s"} — now consultable during investigations.`);
+      } else {
+        void vscode.window.showWarningMessage(`reckon: imported ${ok}, ${failures.length} failed — ${failures[0]}`);
+      }
+    }),
+
     // Rename an investigation from the tree's context menu (human curation — the
     // aggregate bars an AI delegate). Renaming happens ON the document: this
     // reveals the panel and pops its in-document rename card, so the input is

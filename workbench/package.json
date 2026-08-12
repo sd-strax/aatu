@@ -75,6 +75,11 @@
         "title": "Seed Investigation from Case…"
       },
       {
+        "command": "reckon.importSOP",
+        "category": "reckon",
+        "title": "Import SOPs…"
+      },
+      {
         "command": "reckon.openInvestigation",
         "category": "reckon",
         "title": "Open Investigation"
@@ -152,6 +157,10 @@
         },
         {
           "command": "reckon.seedFromCase",
+          "when": "reckon.signedIn"
+        },
+        {
+          "command": "reckon.importSOP",
           "when": "reckon.signedIn"
         },
         {
