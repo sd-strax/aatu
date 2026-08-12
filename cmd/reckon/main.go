@@ -85,6 +85,10 @@ func main() {
 		if err := runDevAuth(os.Args[2:]); err != nil {
 			log.Fatalf("%s dev-auth: %v", branding.CLI, err)
 		}
+	case "knowledge":
+		if err := runKnowledge(os.Args[2:]); err != nil {
+			log.Fatalf("%s knowledge: %v", branding.CLI, err)
+		}
 	case "adapter":
 		if err := runAdapter(os.Args[2:]); err != nil {
 			log.Fatalf("%s adapter: %v", branding.CLI, err)
@@ -119,6 +123,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  status     report supervisor health (queries a running %s instance)\n", branding.CLI)
 	fmt.Fprintln(os.Stderr, "  investigate <id>  interactive agent loop over an investigation (BYOK Anthropic key)")
 	fmt.Fprintln(os.Stderr, "  investigate --stdio  agent-loop sidecar for the workbench (JSON-RPC over stdio; spawned, not typed)")
+	fmt.Fprintln(os.Stderr, "  knowledge import <file-or-dir>...  seed the SOP corpus from markdown (+ YAML frontmatter attribution); re-import revises")
 	fmt.Fprintln(os.Stderr, "  adapter install <name>  install a bundled first-party adapter (okta) into the data dir")
 	fmt.Fprintln(os.Stderr, "  adapter setup <name>  provision an installed adapter's runtime (managed uv + venv) and run its one-time login")
 	fmt.Fprintln(os.Stderr, "  adapter test <dir>  run the plugin conformance handshake against an adapter directory (11 §7)")

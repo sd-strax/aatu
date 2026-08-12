@@ -21,6 +21,19 @@ type SOPBody struct {
 	Recommendation string   `json:"recommendation,omitempty"`
 }
 
+// SOPImportBody is the import payload (design/06 §2.4): SOPBody plus the
+// original author and the source pointer. source.url keys the re-import
+// lineage — importing the same URL revises the existing SOP.
+type SOPImportBody struct {
+	SOPBody
+	Author string `json:"author,omitempty"` // the ORIGINAL document author, from the doc
+	Source struct {
+		System  string `json:"system,omitempty"`
+		URL     string `json:"url"`
+		Version string `json:"version,omitempty"`
+	} `json:"source"`
+}
+
 // recallSOPs handles POST /api/knowledge/recall_sops (design/06 §4): keyword
 // retrieval over the SOP corpus. Any authenticated reader — the agent loop
 // consults it during reasoning.
@@ -106,6 +119,52 @@ func (b *Backend) summaryNarrative(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"summary_id": id.String()})
+	})
+}
+
+// importSOP handles POST /api/sops/import (analyst): upsert institutional
+// knowledge from an external source (design/06 §2.4). Attribution keeps three
+// facts distinct: the document's original author (from the payload), the
+// source pointer (the re-import lineage key), and the importer (the
+// authenticated principal — recorded here, never client-supplied).
+func (b *Backend) importSOP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	b.requireRolesOrDeny(w, r, []string{authz.RoleAnalyst}, func(w http.ResponseWriter, r *http.Request) {
+		var body SOPImportBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad request body: "+err.Error())
+			return
+		}
+		claims, _ := authz.FromContext(r.Context())
+		importer := claims.PreferredUsername
+		if importer == "" {
+			importer = claims.Subject
+		}
+		id, created, err := b.cfg.Knowledge.Import(r.Context(), knowledge.SOP{
+			TenantID: module.SingleTenantUUID,
+			Title:    body.Title, Body: body.Body, Tags: body.Tags,
+			Recommendation: body.Recommendation,
+			AuthorID:       body.Author,
+			ImportedBy:     importer,
+			Source: &knowledge.SOPSource{
+				System: body.Source.System, URL: body.Source.URL, Version: body.Source.Version,
+			},
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "import sop: "+err.Error())
+			return
+		}
+		status := http.StatusOK
+		outcome := "revised"
+		if created {
+			status = http.StatusCreated
+			outcome = "created"
+		}
+		writeJSON(w, status, map[string]string{"id": id.String(), "outcome": outcome})
 	})
 }
 

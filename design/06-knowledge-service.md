@@ -139,6 +139,28 @@ Editing happens through the SOP editor in the VS Code extension or, when the gov
 
 Tenants in `gated` mode may configure a "quick path" exception where `sop_author` and `sop_signer` collapse to the same user for low-risk SOPs (e.g., `severity_min ≤ MEDIUM`). Higher-risk SOPs require distinct author and signer.
 
+**Bulk import — seeding existing institutional knowledge.** Organizations
+arrive with doctrine already written (Confluence, wikis, Word, PDF). The
+import path is `reckon knowledge import <files/dirs>` → `POST
+/api/sops/import`: markdown with optional YAML frontmatter carrying
+attribution (`title`, `author`, `tags`, `recommendation`,
+`source{system,url,version}`). Three properties are load-bearing:
+
+- **Conversion stays client-side.** The CLI accepts markdown/text; richer
+  formats are converted at the edge (pandoc). The backend receives only
+  clean prose + structured attribution — no format zoo in the engine.
+- **Attribution keeps three facts distinct, never collapsed:** the
+  document's *original author* (frontmatter), the *source pointer*
+  (`system`/`url`/`version` — what recall cites, e.g. "from the Ransomware
+  Runbook, Confluence RUNBOOK-42 v3.2"), and the *importer + time* (the
+  authenticated principal, recorded server-side, never client-supplied).
+- **Re-import is a revision.** `source.url` keys the lineage: importing an
+  updated document revises the SOP in place — same external id, prior
+  version still hash-addressable. Living institutional docs stay one SOP,
+  not an accumulation of near-duplicates. (Frontmatter-less files default
+  their source to `file:<path>`, so re-running an import directory is
+  idempotent too.)
+
 ### 2.5 OSS single-tenant installs
 
 In an OSS single-tenant install (typically `governance_mode: lightweight` by default), the install owner holds every role; SOPs PUBLISH immediately on save. When the install lifts to a paid multi-tenant deployment (05 §9) and the target tenant runs `governance_mode: gated`, the SOPs may need re-review before they're considered PUBLISHED in the new context — the `LiftSolo` workflow surfaces this to the user as a per-SOP review queue rather than auto-publishing.

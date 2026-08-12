@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
@@ -172,6 +173,80 @@ func TestSOP_CRUD(t *testing.T) {
 	// A retired SOP can't be updated.
 	if err := s.Update(ctx, testTenant, id, "x", "y", nil, ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("update of retired SOP: err=%v; want ErrNotFound", err)
+	}
+}
+
+// TestImportSOP covers the institutional-knowledge seeding path (design/06
+// §2.4): attribution round-trips, and re-importing the same source URL revises
+// the existing SOP instead of duplicating.
+func TestImportSOP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in short mode")
+	}
+	s := reset(t)
+	ctx := context.Background()
+
+	doc := SOP{
+		TenantID: testTenant,
+		Title:    "Ransomware Containment Runbook",
+		Body:     "Isolate first, preserve volatile evidence.",
+		Tags:     []string{"ransomware", "T1486"},
+		AuthorID: "Jane Okoro", // the ORIGINAL author, from the document
+		Source: &SOPSource{
+			System: "confluence", URL: "https://wiki.example.com/RUNBOOK-42", Version: "3.2",
+		},
+		ImportedBy: "sam",
+	}
+	id, created, err := s.Import(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Error("first import should create")
+	}
+	got, err := s.Get(ctx, testTenant, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AuthorID != "Jane Okoro" || got.ImportedBy != "sam" || got.ImportedAt == nil {
+		t.Errorf("attribution not round-tripped: %+v", got)
+	}
+	if got.Source == nil || got.Source.URL != doc.Source.URL || got.Source.System != "confluence" || got.Source.Version != "3.2" {
+		t.Errorf("source not round-tripped: %+v", got.Source)
+	}
+
+	// Re-import of the SAME source URL is a revision — same id, no duplicate.
+	doc.Body = "Isolate first, preserve volatile evidence, and notify legal."
+	doc.Source.Version = "3.3"
+	id2, created, err := s.Import(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || id2 != id {
+		t.Errorf("re-import should revise the same SOP: created=%v id %s vs %s", created, id2, id)
+	}
+	got, _ = s.Get(ctx, testTenant, id)
+	if !strings.Contains(got.Body, "notify legal") || got.Source.Version != "3.3" {
+		t.Errorf("re-import content not applied: %+v", got)
+	}
+	list, _ := s.List(ctx, testTenant, false)
+	if len(list) != 1 {
+		t.Errorf("re-import duplicated the SOP: %d entries", len(list))
+	}
+
+	// A DIFFERENT source URL is a distinct SOP.
+	other := doc
+	other.Title = "BEC Response"
+	other.Source = &SOPSource{URL: "https://wiki.example.com/RUNBOOK-77"}
+	if _, created, err := s.Import(ctx, other); err != nil || !created {
+		t.Errorf("distinct source should create: created=%v err=%v", created, err)
+	}
+
+	// Missing source.url is refused — it is the lineage key.
+	bad := doc
+	bad.Source = nil
+	if _, _, err := s.Import(ctx, bad); err == nil {
+		t.Error("import without source.url accepted")
 	}
 }
 

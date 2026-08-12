@@ -49,6 +49,16 @@ const (
 	StatusRetired   = "retired"
 )
 
+// SOPSource points at the system of origin for imported institutional
+// knowledge (a Confluence page, a wiki doc, a file). URL is the lineage key
+// for re-imports: importing the same URL again revises the SOP in place, the
+// prior version staying hash-addressable.
+type SOPSource struct {
+	System  string `json:"system,omitempty"`  // e.g. confluence, sharepoint, file
+	URL     string `json:"url"`               // the stable pointer; the re-import lineage key
+	Version string `json:"version,omitempty"` // the origin system's own version label
+}
+
 // SOP is one runbook entry — procedural guidance the LLM consults during
 // reasoning (design/06 §2). The body is unparsed prose; the system never
 // executes it. Identity is a tenant-scoped random UUID (SOPs are documents, not
@@ -67,6 +77,14 @@ type SOP struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 	PublishedAt    *time.Time `json:"published_at,omitempty"`
 	RetiredAt      *time.Time `json:"retired_at,omitempty"`
+
+	// Import attribution (design/06 §2.4): three distinct facts, never
+	// collapsed — the ORIGINAL author (AuthorID above, from the document),
+	// the source pointer (where it came from), and the importer + time
+	// (provenance of the ingest, not the content).
+	Source     *SOPSource `json:"source,omitempty"`
+	ImportedBy string     `json:"imported_by,omitempty"`
+	ImportedAt *time.Time `json:"imported_at,omitempty"`
 }
 
 // Store is the SOP corpus, backed by the memory substrate.
@@ -100,11 +118,82 @@ func (s *Store) Create(ctx context.Context, sop SOP) (uuid.UUID, error) {
 		Tags:       withLineage(sop.Tags, lineage),
 		Advice:     sop.Recommendation,
 		AuthoredBy: sop.AuthorID,
+		Meta:       sopMeta(sop),
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create sop: %w", err)
 	}
 	return lineage, nil
+}
+
+// Import upserts institutional knowledge from an external source (design/06
+// §2.4): keyed on Source.URL, importing the same document again becomes a
+// revision of the existing SOP (its lineage id stable, the prior version
+// hash-addressable) instead of a duplicate. Returns the SOP id and whether a
+// new SOP was created (false = revised).
+func (s *Store) Import(ctx context.Context, sop SOP) (uuid.UUID, bool, error) {
+	if sop.TenantID == uuid.Nil {
+		return uuid.Nil, false, fmt.Errorf("Import: tenant_id required")
+	}
+	if sop.Title == "" || sop.Body == "" {
+		return uuid.Nil, false, fmt.Errorf("Import: title and body required")
+	}
+	if sop.Source == nil || sop.Source.URL == "" {
+		return uuid.Nil, false, fmt.Errorf("Import: source.url required (the re-import lineage key)")
+	}
+	existing, err := s.findBySourceURL(ctx, sop.TenantID, sop.Source.URL)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if existing == nil {
+		id, err := s.Create(ctx, sop)
+		return id, true, err
+	}
+	lineage, _ := lineageOf(existing.Tags)
+	if _, err := s.sub.Revise(ctx, sop.TenantID.String(), CorpusProcedures, existing.ID, substrate.Revision{
+		Title:      sop.Title,
+		Body:       sop.Body,
+		Tags:       withLineage(sop.Tags, lineage),
+		Advice:     sop.Recommendation,
+		AuthoredBy: sop.AuthorID,
+		Meta:       sopMeta(sop),
+	}); err != nil {
+		return uuid.Nil, false, fmt.Errorf("re-import sop: %w", err)
+	}
+	return lineage, false, nil
+}
+
+// findBySourceURL locates the current SOP entry whose source pointer matches —
+// the re-import lineage lookup. Nil when none exists.
+func (s *Store) findBySourceURL(ctx context.Context, tenantID uuid.UUID, url string) (*substrate.Entry, error) {
+	entries, err := s.sub.List(ctx, tenantID.String(), CorpusProcedures, substrate.ListFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("resolve import source: %w", err)
+	}
+	for i := range entries {
+		src, _ := entries[i].Meta["source"].(map[string]any)
+		if src != nil && src["url"] == url {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// sopMeta builds the entry's attribution metadata. Nil when there is nothing
+// to attribute (plain in-product authoring).
+func sopMeta(sop SOP) map[string]any {
+	if sop.Source == nil && sop.ImportedBy == "" {
+		return nil
+	}
+	m := map[string]any{}
+	if sop.Source != nil {
+		m["source"] = map[string]any{"system": sop.Source.System, "url": sop.Source.URL, "version": sop.Source.Version}
+	}
+	if sop.ImportedBy != "" {
+		m["imported_by"] = sop.ImportedBy
+	}
+	m["imported_at"] = time.Now().UTC().Format(time.RFC3339)
+	return m
 }
 
 // Get returns the current revision of one SOP by its lineage id.
@@ -250,5 +339,22 @@ func toSOP(e substrate.Entry, tenantID, lineage uuid.UUID) SOP {
 	if len(e.SignedOffBy) > 0 {
 		sop.SignerID = e.SignedOffBy[0]
 	}
+	if src, ok := e.Meta["source"].(map[string]any); ok {
+		sop.Source = &SOPSource{
+			System:  str(src["system"]),
+			URL:     str(src["url"]),
+			Version: str(src["version"]),
+		}
+	}
+	sop.ImportedBy = str(e.Meta["imported_by"])
+	if at, err := time.Parse(time.RFC3339, str(e.Meta["imported_at"])); err == nil {
+		sop.ImportedAt = &at
+	}
 	return sop
+}
+
+// str extracts a string from decoded-JSON meta, "" for absent/non-string.
+func str(v any) string {
+	s, _ := v.(string)
+	return s
 }
