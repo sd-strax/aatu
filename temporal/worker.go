@@ -40,6 +40,7 @@ type Worker struct {
 
 	activities        *Activities        // action-lifecycle activities; nil = workflows-only worker
 	archiveActivities *ArchiveActivities // post-conclusion export activities; nil = archive workflows inert
+	summaryActivities *SummaryActivities // post-conclusion summary activities; nil = SummarizeForKnowledgeIndex inert
 
 	mu      sync.Mutex // guards client/worker/started; Health runs concurrently with watcher Stop/Start
 	client  client.Client
@@ -61,6 +62,15 @@ func (w *Worker) WithActivities(a *Activities) *Worker {
 // PostConclusionPipeline. Nil leaves those workflows registered but inert.
 func (w *Worker) WithArchiveActivities(a *ArchiveActivities) *Worker {
 	w.archiveActivities = a
+	return w
+}
+
+// WithSummaryActivities injects the post-conclusion summary activities (handler
+// + knowledge writer) so the worker can run SummarizeForKnowledgeIndex. Nil
+// leaves the workflow registered but inert — the pipeline records step 2 as a
+// non-fatal failure rather than summarizing.
+func (w *Worker) WithSummaryActivities(a *SummaryActivities) *Worker {
+	w.summaryActivities = a
 	return w
 }
 
@@ -104,6 +114,9 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 	if w.archiveActivities != nil {
 		wk.RegisterActivity(w.archiveActivities)
+	}
+	if w.summaryActivities != nil {
+		wk.RegisterActivity(w.summaryActivities)
 	}
 
 	if err := wk.Start(); err != nil {

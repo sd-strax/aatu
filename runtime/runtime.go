@@ -306,6 +306,9 @@ func serve(cfg config.Config) error {
 		return err
 	}
 	worker.WithArchiveActivities(archiveActivities)
+	// K3: the post-conclusion summarizer writes into the knowledge substrate's
+	// DERIVED case-summaries corpus (the same store SOPs use).
+	worker.WithSummaryActivities(temporal.NewSummaryActivities(handler, knowledgeStore))
 
 	sup := supervisor.New()
 	sup.Register(pg, supervisor.FatalOnExit)

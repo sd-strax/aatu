@@ -35,11 +35,10 @@ func TestPingWorkflow(t *testing.T) {
 // with a non-retryable Unimplemented ApplicationError until Phase C fills it —
 // a premature call must not look like success.
 func TestSkeletonWorkflowsUnimplemented(t *testing.T) {
-	// ArchiveInvestigation + PostConclusionPipeline have real bodies now (D.5);
-	// only RenormalizePass and SummarizeForKnowledgeIndex remain skeletons.
+	// SummarizeForKnowledgeIndex has a real body now (K3); RenormalizePass is
+	// the last remaining skeleton.
 	skeletons := map[string]func(workflow.Context) error{
-		WorkflowRenormalizePass:            RenormalizePass,
-		WorkflowSummarizeForKnowledgeIndex: SummarizeForKnowledgeIndex,
+		WorkflowRenormalizePass: RenormalizePass,
 	}
 	for name, wf := range skeletons {
 		t.Run(name, func(t *testing.T) {

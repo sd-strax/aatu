@@ -68,10 +68,4 @@ func unimplemented(ctx workflow.Context, name string) error {
 func RenormalizePass(ctx workflow.Context) error { return unimplemented(ctx, WorkflowRenormalizePass) }
 
 // ArchiveInvestigation and PostConclusionPipeline have their real bodies in
-// archive.go (Phase D.5).
-
-// SummarizeForKnowledgeIndex summarizes a concluded investigation for the
-// knowledge index and embeddings. (Phase G.)
-func SummarizeForKnowledgeIndex(ctx workflow.Context) error {
-	return unimplemented(ctx, WorkflowSummarizeForKnowledgeIndex)
-}
+// archive.go (Phase D.5); SummarizeForKnowledgeIndex in summary.go (K3).

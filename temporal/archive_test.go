@@ -2,6 +2,7 @@ package temporal
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -53,15 +54,17 @@ func TestArchiveBundle_RejectsTraversalNamespace(t *testing.T) {
 	}
 }
 
-// TestPostConclusionPipeline_RunsArchive: the v0 pipeline's single step is the
-// export bundle — it runs ArchiveInvestigation as a child and surfaces its
-// result. (IOC/SOP steps are v1, 07 §10.)
-func TestPostConclusionPipeline_RunsArchive(t *testing.T) {
+// TestPostConclusionPipeline_RunsSteps: the v0 pipeline runs the export bundle
+// (step 1) and the knowledge summary (step 2) as children and surfaces both.
+func TestPostConclusionPipeline_RunsSteps(t *testing.T) {
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
 
 	env.OnWorkflow(ArchiveInvestigation, mock.Anything, mock.Anything).Return(ArchiveResult{
 		Path: "/archive/ns/x.tar.gz", Filename: "x.tar.gz", ContentHash: "cafe", SizeBytes: 512,
+	}, nil)
+	env.OnWorkflow(SummarizeForKnowledgeIndex, mock.Anything, mock.Anything).Return(SummarizeOutput{
+		SummaryID: "sum-1", SeedKind: "entity", Outcome: "succeeded", ActionsLen: 2,
 	}, nil)
 
 	env.ExecuteWorkflow(PostConclusionPipeline, ArchiveInvestigationInput{
@@ -76,6 +79,41 @@ func TestPostConclusionPipeline_RunsArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Archive.ContentHash != "cafe" {
-		t.Errorf("pipeline result = %+v; want the archive child's result", res)
+		t.Errorf("archive result = %+v", res.Archive)
+	}
+	if res.Summary.SummaryID != "sum-1" || res.SummaryErr != "" {
+		t.Errorf("summary result = %+v, err=%q", res.Summary, res.SummaryErr)
+	}
+}
+
+// TestPostConclusionPipeline_SummaryBestEffort: a step-2 failure is recorded on
+// the result but never fails the conclusion (07 §9.1) — the signed bundle
+// (step 1) still succeeds.
+func TestPostConclusionPipeline_SummaryBestEffort(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	env.OnWorkflow(ArchiveInvestigation, mock.Anything, mock.Anything).Return(ArchiveResult{
+		ContentHash: "cafe",
+	}, nil)
+	env.OnWorkflow(SummarizeForKnowledgeIndex, mock.Anything, mock.Anything).Return(
+		SummarizeOutput{}, errors.New("substrate unreachable"))
+
+	env.ExecuteWorkflow(PostConclusionPipeline, ArchiveInvestigationInput{
+		GroupingID: "g-3", TenantID: "t-1", TenantNamespace: "ns",
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("a summary failure must not fail the pipeline: %v", env.GetWorkflowError())
+	}
+	var res PostConclusionResult
+	if err := env.GetWorkflowResult(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Archive.ContentHash != "cafe" {
+		t.Errorf("archive step should still succeed: %+v", res.Archive)
+	}
+	if res.SummaryErr == "" {
+		t.Error("summary failure was not recorded on the result")
 	}
 }
