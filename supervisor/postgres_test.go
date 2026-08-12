@@ -10,6 +10,7 @@ import (
 
 	"github.com/sd-strax/reckon/aggregate"
 	"github.com/sd-strax/reckon/knowledge"
+	"github.com/sd-strax/reckon/knowledge/substrate"
 )
 
 // freePort asks the kernel for an unused TCP port. The lifecycle tests must
@@ -169,7 +170,13 @@ func TestPostgresMigrations(t *testing.T) {
 		Port:     port,
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
-			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
+			{
+				Name:       "reckon_knowledge",
+				Migrations: knowledge.Migrations(),
+				ExtraMigrations: []ExtraMigrationSet{
+					{FS: substrate.Migrations(), Table: "substrate_schema_migrations"},
+				},
+			},
 		},
 	})
 
@@ -214,7 +221,9 @@ func TestPostgresMigrations(t *testing.T) {
 	}
 	defer knowDB.Close()
 
-	for _, table := range []string{"sops", "investigation_summaries"} {
+	// reckon_knowledge carries BOTH migration sets: the host's knowledge tables
+	// and the substrate's own, each under its own tracking table.
+	for _, table := range []string{"sops", "investigation_summaries", "substrate_entries", "substrate_embeddings", "substrate_schema_migrations"} {
 		var exists bool
 		err := knowDB.QueryRowContext(ctx,
 			`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
@@ -225,8 +234,20 @@ func TestPostgresMigrations(t *testing.T) {
 			continue
 		}
 		if !exists {
-			t.Errorf("reckon_knowledge: table %s was not created by knowledge migrations", table)
+			t.Errorf("reckon_knowledge: table %s was not created", table)
 		}
+	}
+
+	// The two sets version independently — the substrate's tracking table
+	// records its own version, unaffected by the host set on schema_migrations.
+	var subVersion int
+	if err := knowDB.QueryRowContext(ctx,
+		"SELECT version FROM substrate_schema_migrations",
+	).Scan(&subVersion); err != nil {
+		t.Errorf("substrate_schema_migrations: %v", err)
+	}
+	if want := countUpMigrations(t, substrate.Migrations()); subVersion != want {
+		t.Errorf("substrate version = %d; want %d (substrate up-migrations)", subVersion, want)
 	}
 
 	// Verify schema_migrations records the right version in each database.
@@ -261,7 +282,13 @@ func TestPostgresMigrations(t *testing.T) {
 		Port:     port, // same port as the first boot, never the 5435 default
 		Databases: []DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
-			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
+			{
+				Name:       "reckon_knowledge",
+				Migrations: knowledge.Migrations(),
+				ExtraMigrations: []ExtraMigrationSet{
+					{FS: substrate.Migrations(), Table: "substrate_schema_migrations"},
+				},
+			},
 		},
 	})
 	if err := pg2.Start(ctx); err != nil {

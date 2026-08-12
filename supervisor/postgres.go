@@ -62,6 +62,19 @@ type DatabaseSpec struct {
 	// SQL files (NNNN_label.up.sql + NNNN_label.down.sql). nil means no
 	// migrations — the database is just created and left empty.
 	Migrations fs.FS
+
+	// ExtraMigrations are additional, independently-versioned migration sets
+	// applied to the SAME database after Migrations, each tracked under its own
+	// table — so an embedded component that owns its schema (the memory
+	// substrate) can share a host database without version-number collisions.
+	ExtraMigrations []ExtraMigrationSet
+}
+
+// ExtraMigrationSet is a secondary migration set on a database, tracked under
+// its own golang-migrate table.
+type ExtraMigrationSet struct {
+	FS    fs.FS
+	Table string // must be distinct from the default schema_migrations and from siblings
 }
 
 // Postgres is a Component wrapping fergusstrange/embedded-postgres.
@@ -238,15 +251,22 @@ func (p *Postgres) ensureDatabases(ctx context.Context) error {
 	// tracks applied versions in schema_migrations inside each database;
 	// re-running `reckon start` is idempotent.
 	for _, spec := range p.cfg.Databases {
-		if spec.Migrations == nil {
+		if spec.Migrations == nil && len(spec.ExtraMigrations) == 0 {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		log.Printf("postgres: applying migrations to %s", spec.Name)
-		if err := pgmigrate.Run(p.DSN(spec.Name), spec.Migrations, spec.Name); err != nil {
-			return fmt.Errorf("migrate %s: %w", spec.Name, err)
+		if spec.Migrations != nil {
+			if err := pgmigrate.Run(p.DSN(spec.Name), spec.Migrations, spec.Name); err != nil {
+				return fmt.Errorf("migrate %s: %w", spec.Name, err)
+			}
+		}
+		for _, extra := range spec.ExtraMigrations {
+			if err := pgmigrate.RunWithTable(p.DSN(spec.Name), extra.FS, spec.Name+":"+extra.Table, extra.Table); err != nil {
+				return fmt.Errorf("migrate %s [%s]: %w", spec.Name, extra.Table, err)
+			}
 		}
 	}
 	return nil

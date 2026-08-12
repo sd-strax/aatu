@@ -21,6 +21,7 @@ type Config struct {
 	Backend    Backend    `yaml:"backend"`
 	Telemetry  Telemetry  `yaml:"telemetry"`
 	Capability Capability `yaml:"capability"`
+	Knowledge  Knowledge  `yaml:"knowledge"`
 	Export     Export     `yaml:"export"`
 	Trust      Trust      `yaml:"trust"`
 	Paid       Paid       `yaml:"paid"`
@@ -184,6 +185,35 @@ type Capability struct {
 	// design/04 §4). Empty means baseline-only (the non-deletable AI-no-T3 DENY
 	// still applies; every other action falls through to manual approval).
 	PolicyDir string `yaml:"policy_dir"`
+}
+
+// Knowledge configures the institutional-memory service (design/06) over the
+// memory substrate (knowledge/design/00-substrate.md). Optional: with no
+// embeddings configured, recall runs the substrate's keyword fallback and says
+// so in its attribution — a degraded mode, not a broken one.
+type Knowledge struct {
+	Embeddings Embeddings `yaml:"embeddings"`
+}
+
+// Embeddings selects the semantic-recall backend. reckon ships one client — an
+// OpenAI-compatible POST {base_url}/embeddings — because that shape is the
+// de-facto standard spoken by hosted providers (OpenAI, Voyage) and by
+// self-hosted stacks (Ollama, vLLM, llama.cpp server) alike; hosted-vs-local
+// is a base_url choice, not a code path. The key is this endpoint's own key,
+// never the LLM key (the reasoning LLM offers no embeddings endpoint), and
+// query and corpus embeddings must come from the same Model.
+type Embeddings struct {
+	// BaseURL is the API prefix up to (not including) /embeddings, e.g.
+	// https://api.openai.com/v1, https://api.voyageai.com/v1, or a self-hosted
+	// http://llama.internal:11434/v1. Empty disables embeddings (keyword mode).
+	BaseURL string `yaml:"base_url"`
+	// APIKey is a secret REFERENCE (keychain:// / env:// / vault://), never a
+	// literal — resolved out-of-band at the composition root. Empty sends no
+	// Authorization header, for self-hosted endpoints that need none.
+	APIKey string `yaml:"api_key"`
+	// Model names the embedding space, e.g. text-embedding-3-small, voyage-3,
+	// nomic-embed-text. Required when BaseURL is set.
+	Model string `yaml:"model"`
 }
 
 // Paid groups the activation flags for paid modules. Ignored when the

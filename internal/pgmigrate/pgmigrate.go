@@ -30,13 +30,22 @@ import (
 // swallowed — re-running reckon start should be a no-op for already-applied
 // schemas).
 func Run(dsn string, migrationsFS fs.FS, instanceName string) error {
+	return RunWithTable(dsn, migrationsFS, instanceName, "")
+}
+
+// RunWithTable is Run with an explicit golang-migrate tracking table. An empty
+// table uses the default (schema_migrations); a distinct table lets two
+// independently-versioned migration sets share one database without their
+// version numbers colliding (e.g. an embedded component's own migrations
+// alongside the host's — the memory substrate on reckon_knowledge).
+func RunWithTable(dsn string, migrationsFS fs.FS, instanceName, migrationsTable string) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return fmt.Errorf("open postgres: %w", err)
 	}
 	defer db.Close()
 
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	driver, err := postgres.WithInstance(db, &postgres.Config{MigrationsTable: migrationsTable})
 	if err != nil {
 		return fmt.Errorf("postgres driver: %w", err)
 	}

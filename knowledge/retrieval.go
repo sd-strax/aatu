@@ -2,31 +2,26 @@ package knowledge
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
+
+	"github.com/sd-strax/reckon/knowledge/substrate"
 )
 
 // Coverage is retrieval's coarse outcome (design/06 §4.3), mirroring the
-// capability-layer convention. EMPTY is meaningful evidence-of-absence: "we have
-// no institutional procedure for this."
+// substrate's verdict. EMPTY is meaningful evidence-of-absence: "we have no
+// institutional procedure for this."
 const (
-	CoverageComplete = "COMPLETE" // executed and returned ≥1 result
-	CoverageEmpty    = "EMPTY"    // executed over the indexed corpus, zero matches
+	CoverageComplete = "COMPLETE"
+	CoverageEmpty    = "EMPTY"
 )
 
-// excerptRunes bounds a SOP excerpt. v0 uses a rune budget as a stand-in for the
-// spec's 4000-token budget (§4.2); sub-document embedding for section extraction
-// is Phase G.
-const excerptRunes = 2000
-
-// RecallRequest is the recall_sops query (design/06 §4). In v0 the scope is a
-// tag hard-filter (techniques/entity-types collapse to tags until applies_to and
-// embeddings arrive); query drives Postgres full-text ranking.
+// RecallRequest is the recall_sops query (design/06 §4). A present query drives
+// semantic (or, on the degraded backend, keyword) ranking; tags hard-filter
+// before ranking; an empty query browses by tag, newest first.
 type RecallRequest struct {
 	Query          string   `json:"query"`
 	Tags           []string `json:"tags,omitempty"`
@@ -44,6 +39,10 @@ type SOPMatch struct {
 	Tags           []string  `json:"tags,omitempty"`
 	Recommendation string    `json:"recommendation,omitempty"`
 	Status         string    `json:"status"`
+	// Backend attributes the ranker that produced this result (substrate §5.2)
+	// — "vector-cosine/<model>" or the degraded "pg-fts", so a consumer can tell
+	// semantic recall from the keyword fallback.
+	Backend string `json:"backend,omitempty"`
 }
 
 // RecallResult is the recall_sops response envelope.
@@ -55,67 +54,84 @@ type RecallResult struct {
 
 const defaultRecallLimit = 5
 
-// RecallSOPs ranks the tenant's SOPs against the request (design/06 §4). v0
-// ranking: a tag hard-filter (overlap) then Postgres full-text ts_rank over
-// title+body when a query is present, else recency. Vector similarity, recency
-// boost, and signoff weight are Phase G refinements over this same API shape.
+// RecallSOPs ranks the tenant's SOPs against the request (design/06 §4) by
+// delegating to the substrate's semantic recall over the `procedures` corpus,
+// then mapping entries back to the SOP shape. An empty query is not a substrate
+// recall (which requires one) — it browses by tag, newest first.
 func (s *Store) RecallSOPs(ctx context.Context, tenantID uuid.UUID, req RecallRequest) (RecallResult, error) {
 	limit := req.Limit
 	if limit <= 0 {
 		limit = defaultRecallLimit
 	}
+	if strings.TrimSpace(req.Query) == "" {
+		return s.browseByTag(ctx, tenantID, req, limit)
+	}
 
-	// Build the query. $1 tenant, $2 tags (NULL = no filter), $3 query text,
-	// $4 limit. Every parameter is always referenced (with a ::type cast where a
-	// clause is conditional) so Postgres can determine its type. A blank query
-	// ranks by recency; a present query full-text ranks.
-	var b strings.Builder
-	b.WriteString(`
-		SELECT id, title, body, tags, recommendation, status,
-		       CASE WHEN $3 = '' THEN 0::real
-		            ELSE ts_rank(to_tsvector('english', title || ' ' || body),
-		                         plainto_tsquery('english', $3))
-		       END AS score
-		FROM sops
-		WHERE tenant_id = $1
-		  AND ($2::text[] IS NULL OR tags && $2::text[])
-	`)
-	if !req.IncludeRetired {
-		b.WriteString(" AND status <> '" + StatusRetired + "'")
-	}
-	if req.Query != "" {
-		b.WriteString(" AND to_tsvector('english', title || ' ' || body) @@ plainto_tsquery('english', $3)")
-	}
-	b.WriteString(" ORDER BY score DESC, updated_at DESC LIMIT $4")
-
-	// NULL tags = no filter; a non-empty set = overlap filter.
-	var tagsArg any
-	if len(req.Tags) > 0 {
-		tagsArg = pq.Array(req.Tags)
-	}
-	rows, err := s.db.QueryContext(ctx, b.String(), tenantID, tagsArg, req.Query, limit)
+	res, err := s.sub.Recall(ctx, tenantID.String(), substrate.RecallQuery{
+		Corpus:         CorpusProcedures,
+		Mode:           substrate.ModeRank,
+		Query:          req.Query,
+		Tags:           req.Tags,
+		Limit:          limit,
+		IncludeRetired: req.IncludeRetired,
+	})
 	if err != nil {
 		return RecallResult{}, fmt.Errorf("recall_sops: %w", err)
 	}
-	defer rows.Close()
-
-	res := RecallResult{Coverage: CoverageEmpty, RetrievalAt: time.Now().UTC()}
-	for rows.Next() {
-		var (
-			m    SOPMatch
-			body string
-			rec  sql.NullString
-		)
-		if err := rows.Scan(&m.SOPID, &m.Title, &body, pq.Array(&m.Tags), &rec, &m.Status, &m.Score); err != nil {
-			return RecallResult{}, err
-		}
-		m.Excerpt = excerpt(body)
-		m.Recommendation = rec.String
-		m.MatchRationale = rationale(req, m)
-		res.Results = append(res.Results, m)
+	out := RecallResult{
+		Coverage:    string(res.Coverage),
+		RetrievalAt: res.RetrievalAt,
+		Results:     make([]SOPMatch, 0, len(res.Results)),
 	}
-	if err := rows.Err(); err != nil {
-		return RecallResult{}, err
+	backend := rankerLabel(res.Ranker)
+	for _, h := range res.Results {
+		lineage, _ := lineageOf(h.Tags)
+		out.Results = append(out.Results, SOPMatch{
+			SOPID:          lineage,
+			Title:          h.Title,
+			Excerpt:        h.Excerpt,
+			Score:          h.Score,
+			MatchRationale: h.MatchRationale,
+			Tags:           stripReserved(h.Tags),
+			Recommendation: h.Advice,
+			Status:         sopStatus(h.Status),
+			Backend:        backend,
+		})
+	}
+	return out, nil
+}
+
+// browseByTag is the empty-query path: current SOPs, tag-overlap filtered,
+// newest first. Preserves the pre-substrate "no query, just tags" behavior the
+// substrate's recall (which requires a query) intentionally doesn't cover.
+func (s *Store) browseByTag(ctx context.Context, tenantID uuid.UUID, req RecallRequest, limit int) (RecallResult, error) {
+	entries, err := s.sub.List(ctx, tenantID.String(), CorpusProcedures, substrate.ListFilter{IncludeRetired: req.IncludeRetired})
+	if err != nil {
+		return RecallResult{}, fmt.Errorf("recall_sops (browse): %w", err)
+	}
+	res := RecallResult{Coverage: CoverageEmpty, RetrievalAt: time.Now().UTC()}
+	for _, e := range entries {
+		if len(req.Tags) > 0 && len(intersect(req.Tags, stripReserved(e.Tags))) == 0 {
+			continue
+		}
+		lineage, ok := lineageOf(e.Tags)
+		if !ok {
+			continue
+		}
+		res.Results = append(res.Results, SOPMatch{
+			SOPID:          lineage,
+			Title:          e.Title,
+			Excerpt:        excerpt(e.Body),
+			MatchRationale: browseRationale(req.Tags, stripReserved(e.Tags)),
+			Tags:           stripReserved(e.Tags),
+			Recommendation: e.Advice,
+			Status:         sopStatus(e.Status),
+		})
+	}
+	// List already returns newest-created first; a revised SOP's new row keeps
+	// that ordering meaningful.
+	if len(res.Results) > limit {
+		res.Results = res.Results[:limit]
 	}
 	if len(res.Results) > 0 {
 		res.Coverage = CoverageComplete
@@ -123,7 +139,10 @@ func (s *Store) RecallSOPs(ctx context.Context, tenantID uuid.UUID, req RecallRe
 	return res, nil
 }
 
-// excerpt truncates a SOP body to the rune budget on a word boundary.
+// excerptRunes bounds a browse excerpt (design/06 §4.2 rune stand-in). Recall
+// excerpts come pre-budgeted from the substrate (§5.6).
+const excerptRunes = 1000
+
 func excerpt(body string) string {
 	r := []rune(body)
 	if len(r) <= excerptRunes {
@@ -136,22 +155,18 @@ func excerpt(body string) string {
 	return cut + "…"
 }
 
-// rationale builds the v0 match_rationale (design/06 §4.1): a short prose
-// explanation. Richer rationale (embedding similarity, outcome) is Phase G.
-func rationale(req RecallRequest, m SOPMatch) string {
-	parts := make([]string, 0, 3)
-	if len(req.Tags) > 0 {
-		if overlap := intersect(req.Tags, m.Tags); len(overlap) > 0 {
-			parts = append(parts, "tags "+strings.Join(overlap, ", ")+" (hard filter)")
-		}
+func rankerLabel(r substrate.Ranker) string {
+	if r.BackendVersion == "" {
+		return r.Backend
 	}
-	if req.Query != "" {
-		parts = append(parts, fmt.Sprintf("full-text score %.3f", m.Score))
+	return r.Backend + "/" + r.BackendVersion
+}
+
+func browseRationale(reqTags, sopTags []string) string {
+	if overlap := intersect(reqTags, sopTags); len(overlap) > 0 {
+		return "tags " + strings.Join(overlap, ", ") + " (hard filter); recency"
 	}
-	if len(parts) == 0 {
-		return "recency (no query or tag filter)"
-	}
-	return strings.Join(parts, "; ")
+	return "recency (no query)"
 }
 
 func intersect(a, b []string) []string {

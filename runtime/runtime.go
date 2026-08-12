@@ -25,8 +25,10 @@ import (
 	"github.com/sd-strax/reckon/config"
 	"github.com/sd-strax/reckon/internal/adapterplugin"
 	"github.com/sd-strax/reckon/internal/branding"
+	"github.com/sd-strax/reckon/internal/secretref"
 	"github.com/sd-strax/reckon/internal/secrets"
 	"github.com/sd-strax/reckon/knowledge"
+	"github.com/sd-strax/reckon/knowledge/substrate"
 	"github.com/sd-strax/reckon/module"
 	"github.com/sd-strax/reckon/server"
 	"github.com/sd-strax/reckon/supervisor"
@@ -201,7 +203,16 @@ func serve(cfg config.Config) error {
 		// reckon_temporal database here today.
 		Databases: []supervisor.DatabaseSpec{
 			{Name: "reckon_main", Migrations: aggregate.Migrations()},
-			{Name: "reckon_knowledge", Migrations: knowledge.Migrations()},
+			{
+				Name:       "reckon_knowledge",
+				Migrations: knowledge.Migrations(),
+				// The memory substrate owns its schema (00-substrate §12) and
+				// versions it independently, so it shares reckon_knowledge under
+				// its own tracking table rather than colliding on version 1.
+				ExtraMigrations: []supervisor.ExtraMigrationSet{
+					{FS: substrate.Migrations(), Table: "substrate_schema_migrations"},
+				},
+			},
 			// Keycloak's state database (05 §12.4: one DB engine for everything).
 			// No migrations — Keycloak owns and migrates its own schema.
 			{Name: "reckon_keycloak"},
@@ -252,7 +263,10 @@ func serve(cfg config.Config) error {
 		return fmt.Errorf("open knowledge db: %w", err)
 	}
 	defer knowledgeDB.Close()
-	knowledgeStore := knowledge.NewStore(knowledgeDB)
+	knowledgeStore, err := buildKnowledge(cfg, knowledgeDB)
+	if err != nil {
+		return fmt.Errorf("build knowledge service: %w", err)
+	}
 
 	// The out-of-process adapter host (Phase E, 11 §2) scans <data>/adapters and
 	// owns one plugin process per enabled instance, shared across the read
@@ -446,6 +460,61 @@ func buildGate2(cfg config.Config) (*action.Gate2, *action.ActionCatalog, error)
 		return nil, nil, fmt.Errorf("build Gate 2: %w", err)
 	}
 	return gate2, action.DefaultActionCatalog(), nil
+}
+
+// buildKnowledge constructs the SOP knowledge store over the memory substrate.
+// The substrate declares reckon's two corpora and, when embeddings are
+// configured, gets the OpenAI-compatible embedder for semantic recall. The
+// secret reference is resolved here at the composition root, so the substrate
+// only ever receives a constructed Embedder with a resolved literal — config
+// reading and secret resolution stay host concerns (00-substrate §12). With no
+// embeddings configured the substrate runs its attributed keyword fallback.
+func buildKnowledge(cfg config.Config, db *sql.DB) (*knowledge.Store, error) {
+	corpora := []substrate.CorpusDef{
+		{Name: knowledge.CorpusProcedures, Archetype: substrate.Curated, Governance: substrate.Lightweight},
+		{Name: knowledge.CorpusCaseSummaries, Archetype: substrate.Derived},
+	}
+	var opts []substrate.Option
+	if emb := cfg.Knowledge.Embeddings; emb.BaseURL != "" {
+		if emb.Model == "" {
+			return nil, fmt.Errorf("knowledge.embeddings: model is required when base_url is set")
+		}
+		key, err := resolveEmbeddingKey(emb.APIKey)
+		if err != nil {
+			return nil, err
+		}
+		embedder, err := substrate.NewOpenAICompatEmbedder(emb.BaseURL, key, emb.Model, nil)
+		if err != nil {
+			return nil, fmt.Errorf("knowledge.embeddings: %w", err)
+		}
+		opts = append(opts, substrate.WithEmbedder(embedder))
+		log.Printf("%s: knowledge semantic recall via %s (model %s)", branding.CLI, emb.BaseURL, emb.Model)
+	} else {
+		log.Printf("%s: knowledge embeddings not configured — recall runs the keyword fallback", branding.CLI)
+	}
+	store, err := substrate.NewPostgres(db, corpora, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("construct substrate: %w", err)
+	}
+	return knowledge.NewStore(store), nil
+}
+
+// resolveEmbeddingKey resolves the embeddings API key. Empty is allowed (self-
+// hosted endpoints that need no auth); a non-empty value must be a secret
+// REFERENCE, never a literal — resolved here so plaintext never sits in config
+// or reaches the substrate.
+func resolveEmbeddingKey(ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if !secretref.IsRef(ref) {
+		return "", fmt.Errorf("knowledge.embeddings.api_key must be a secret reference (keychain:// / env:// / vault://), not a literal")
+	}
+	key, err := secretref.Resolve(ref)
+	if err != nil {
+		return "", fmt.Errorf("resolve knowledge.embeddings.api_key: %w", err)
+	}
+	return key, nil
 }
 
 // buildBackendActionResolver builds the write-side action resolver for the
