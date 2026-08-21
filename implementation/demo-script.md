@@ -19,22 +19,46 @@ Everything below is fixtures — no real tenant, no real adapters.
 
 ```
 reckon init                 # a fixture-free real install
+# --- configure embeddings (see below) before starting ---
 reckon start                # brings up the stack (first run downloads deps)
 reckon dev-auth             # a local login (the shipped realm has none)
 reckon demo seed            # populate the demo world — refuses if not virgin
 reckon stop && reckon start # restart so the fixture capabilities activate
 ```
 
-`reckon demo seed` does two things at once:
+**Configure vector recall first.** The knowledge rail's relevance scores,
+similarity bands, and the "have we seen this before?" case recall are all
+cosine-similarity over embeddings — the full product, not a keyword fallback.
+Add an embeddings backend to your config (`~/.reckon/config.yaml`) before the
+first `reckon start`:
 
-- **Loads Northwind's institutional knowledge** into the corpus — three SOPs
-  (RDP-containment, credential-theft triage, host-isolation) and **two prior
-  concluded cases** (an RDP pivot on `FINANCE-07`, LSASS dumping on
-  `WORKSTATION-22`). This is the history the compounding loop draws on.
-- **Wires the fixture scenario** so the agent has telemetry to query.
+```yaml
+knowledge:
+  embeddings:
+    base_url: https://api.openai.com/v1
+    model: text-embedding-3-small
+    api_key: env://OPENAI_API_KEY        # a secret REFERENCE, never a literal
+```
+
+`api_key` is a secret *reference*, never a literal. For a demo, `env://` is the
+least ceremony — `export OPENAI_API_KEY=sk-…` in the shell that runs the stack;
+for a longer-lived install use `keychain://<service>/<name>` instead. Either way
+this is a *separate* key from your Anthropic BYOK key (the reasoning LLM has no
+embeddings endpoint). `reckon demo seed` **refuses without an embeddings
+backend** — the demo can never fall into the keyword-only path, because the prior
+cases are embedded at seed time so similarity recall can rank them.
+
+`reckon demo seed` then does two things:
+
+- **Seeds two prior concluded cases** into the corpus — an RDP pivot on
+  `FINANCE-07` and LSASS dumping on `WORKSTATION-22` — embedded at write time.
+  This is the history the compounding loop recalls by similarity.
+- **Wires the fixture scenario** (telemetry to query) and **stages the SOP docs
+  to disk** (`~/.reckon/sops/`) — it prints the path. The SOPs are *not* loaded
+  into the corpus; you import one **live** in Act 1, as part of the story.
 
 Then in the **workbench**: reload, sign in, set your BYOK `ANTHROPIC_API_KEY`.
-The knowledge is now consultable and the fixtures are live.
+The fixtures are live and the prior cases are consultable.
 
 > If you seeded onto a dirty install it will refuse and tell you the counts —
 > run `reckon demo reset` first (it wipes everything back to a clean install),
@@ -42,7 +66,22 @@ The knowledge is now consultable and the fixtures are live.
 
 ---
 
-## Act 1 — Investigate (the agent does the legwork)
+## Act 1 — Teach reckon the playbook (a live import)
+
+Open the door with the knowledge, not the alert. Northwind has a written runbook
+for exactly this class of incident — **`~/.reckon/sops/lateral-movement-rdp-containment.md`**
+(the path `demo seed` printed). Open it and walk the audience through it: it's a
+plain markdown SOP with YAML frontmatter — a title, an author, tags, a
+recommendation. Ordinary institutional knowledge, the kind every SOC has sitting
+in a wiki.
+
+Now bring it into reckon **live**. In the workbench, run **Import SOPs…**, pick
+that file. It lands in the corpus in one motion — no library to manage, no
+ceremony. *This is the import capability, shown, not seeded behind the curtain.*
+Hold the thought: in a minute you'll see the SOP you just imported surface on its
+own, exactly when it's relevant.
+
+## Act 2 — Investigate (the agent does the legwork)
 
 An alert fires: an interactive RDP logon into **`WIN-FILE01`**, a file server,
 from an account with no reason to be there. Start a **New Investigation** →
@@ -56,14 +95,17 @@ logon, post-logon discovery, the C2 beacon) and lays out what it found — the
 analytical surfaces (timeline, entities, evidence) populate as it works.
 
 **The compounding payoff, first half.** As the investigation takes shape, the
-**knowledge rail** surfaces — with relevance scores and bands — Northwind's
-*"Lateral Movement via RDP — Containment"* SOP **and the prior `FINANCE-07`
-case**, flagged as a near-match. The analyst decides what the AI reasons over:
-tick both to include them. The next turn is now grounded in Northwind's own
-playbook and its own history. *(Nothing was force-fed — the retriever proposes,
-the analyst disposes. That's the injection dial.)*
+**knowledge rail** surfaces — with relevance scores and similarity bands — the
+*"Lateral Movement via RDP — Containment"* SOP **you imported a minute ago** and
+the prior `FINANCE-07` case, flagged as a near-match. Nobody wired them to this
+investigation; the retriever found them by meaning. The analyst decides what the
+AI reasons over: tick both to include them. The next turn is now grounded in
+Northwind's own playbook and its own history. *(Nothing was force-fed — the
+retriever proposes, the analyst disposes. That's the injection dial. And the
+scores and bands are the vector backend at work — the reason we configured
+embeddings up front.)*
 
-## Act 2 — Decide (grounded in pins)
+## Act 3 — Decide (grounded in pins)
 
 Drive the hypothesis to a verdict the way [`road-test.md` §2–3](road-test.md)
 lays out: the agent proposes *"stolen valid account used for hands-on-keyboard
@@ -71,7 +113,7 @@ lateral movement (T1021.001)"*, the analyst acknowledges it, evidence gets
 pinned, and the verdict of record lands as **true-positive** — grounded in the
 pins, not vibes.
 
-## Act 3 — Act (evidence precedes action)
+## Act 4 — Act (evidence precedes action)
 
 Now, and only now, remediate. Request **host isolation** on `WIN-FILE01`. Watch
 the authorization chain: Gate 2 evaluates the action, the trust tier is set by
@@ -80,7 +122,7 @@ write adapter, and the result comes back honestly. Isolation is reversible —
 show the reversal if you want to make the "we never claim an undo we can't
 verify" point.
 
-## Act 4 — Conclude and compound (the whole reason for the demo)
+## Act 5 — Conclude and compound (the whole reason for the demo)
 
 Conclude the investigation with its verdict. Two things happen, both client-side
 on the BYOK key — **the backend never holds a model key**:

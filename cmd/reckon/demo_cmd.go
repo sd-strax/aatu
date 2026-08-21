@@ -61,6 +61,22 @@ func runDemoSeed(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Vector recall is the point of the demo — the knowledge rail's relevance
+	// scores, similarity bands, and the "similar past case" recall are all
+	// cosine-only; without an embedder they degrade to keyword fallback, which
+	// reads as a half-finished product. And the seed embeds the prior cases at
+	// write time, so an embedder must be live BEFORE seeding (a case stored with
+	// no vector makes later similarity recall error, not degrade). A running
+	// backend with embeddings configured necessarily has a live embedder
+	// (buildKnowledge fails startup otherwise), so this file-level check is a
+	// sound proxy for the backend's state under the demo's configure→start→seed
+	// order. Refuse early, before touching the network.
+	if cfg.Knowledge.Embeddings.BaseURL == "" {
+		return fmt.Errorf("configure an embeddings backend before seeding the demo — vector recall powers the knowledge rail and similar-case retrieval.\n"+
+			"  add a knowledge.embeddings block to your config (base_url + model + api_key), then `%s start`.\n"+
+			"  see implementation/demo-script.md for the exact block", branding.CLI)
+	}
+
 	// The knowledge pack lands in the running backend's database, so the stack
 	// must be up. (The fixtures + config are disk-only, but seeding knowledge is
 	// the guarded, authoritative step — do it first so a non-virgin install is
@@ -109,7 +125,7 @@ func runDemoSeed(args []string) error {
 		return fmt.Errorf("seed knowledge: HTTP %d: %s", resp.StatusCode, string(body))
 	}
 	var seeded struct {
-		SOPs, Cases int
+		Cases int
 	}
 	_ = json.Unmarshal(body, &seeded)
 
@@ -128,8 +144,9 @@ func runDemoSeed(args []string) error {
 	}
 
 	fmt.Printf("%s demo seeded.\n", branding.CLI)
-	fmt.Printf("  knowledge: %d SOPs + %d prior cases loaded (consultable during investigations)\n", seeded.SOPs, seeded.Cases)
+	fmt.Printf("  knowledge: %d prior cases loaded (recalled by similarity during investigations)\n", seeded.Cases)
 	fmt.Printf("  scenario:  %s  (fixtures at %s)\n", seed.Scenario, seed.FixtureRoot)
+	fmt.Printf("  sop docs:  staged at %s — import them LIVE during the demo (workbench: \"Import SOPs…\")\n", seed.SOPDocs)
 	fmt.Printf("  config:    demo.enabled = true, capability wired at %s\n", seed.CapabilityConfig)
 	fmt.Println()
 	fmt.Println("Restart the stack to activate the demo capabilities:")
@@ -181,6 +198,7 @@ func runDemoReset(args []string) error {
 		filepath.Join(cfg.Data.Dir, "archive"), // demo export bundles
 		filepath.Join(base, "fixtures"),        // seeded fixture scenarios
 		filepath.Join(base, "capability"),      // seeded demo tenant config
+		filepath.Join(base, "sops"),            // staged SOP docs for live import
 	}
 	for _, t := range targets {
 		if err := os.RemoveAll(t); err != nil {

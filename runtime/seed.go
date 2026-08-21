@@ -16,6 +16,7 @@ type SeedResult struct {
 	FixtureRoot      string // <base>/fixtures — cfg.Capability.FixtureRoot
 	CapabilityConfig string // <base>/capability/<scenario>.yaml — cfg.Capability.ConfigPath
 	Scenario         string // the seeded fixture scenario
+	SOPDocs          string // <base>/sops — SOP markdown staged for live import
 }
 
 // SeedDemo materializes the embedded demo scenario + a merged tenant config
@@ -81,7 +82,38 @@ func SeedDemo(base string) (SeedResult, error) {
 		return SeedResult{}, fmt.Errorf("write capability config: %w", err)
 	}
 
-	return SeedResult{FixtureRoot: fixtureRoot, CapabilityConfig: configPath, Scenario: scenario}, nil
+	// 3. Stage the SOP markdown docs to disk. Unlike the prior-case summaries
+	// (seeded into the corpus by the backend), the SOPs are imported LIVE during
+	// the demo — the presenter walks the audience through a doc, then imports it
+	// via the workbench. The file picker needs real files on disk, which a plain
+	// install does not have (the docs live embedded in DemoFS), so materialize them.
+	sopDir := filepath.Join(base, "sops")
+	if err := os.MkdirAll(sopDir, 0o755); err != nil {
+		return SeedResult{}, fmt.Errorf("create sop docs dir: %w", err)
+	}
+	sopEntries, err := fs.ReadDir(reckon.DemoFS, reckon.DemoKnowledgeSOPs)
+	if err != nil {
+		return SeedResult{}, fmt.Errorf("read embedded sop docs: %w", err)
+	}
+	for _, e := range sopEntries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := reckon.DemoFS.ReadFile(reckon.DemoKnowledgeSOPs + "/" + e.Name())
+		if err != nil {
+			return SeedResult{}, fmt.Errorf("read embedded sop %s: %w", e.Name(), err)
+		}
+		if err := os.WriteFile(filepath.Join(sopDir, e.Name()), data, 0o644); err != nil {
+			return SeedResult{}, fmt.Errorf("stage sop %s: %w", e.Name(), err)
+		}
+	}
+
+	return SeedResult{
+		FixtureRoot:      fixtureRoot,
+		CapabilityConfig: configPath,
+		Scenario:         scenario,
+		SOPDocs:          sopDir,
+	}, nil
 }
 
 // mergeTenantConfigs concatenates the read + write example configs into one

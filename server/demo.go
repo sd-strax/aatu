@@ -11,7 +11,6 @@ import (
 
 	reckon "github.com/sd-strax/reckon"
 	"github.com/sd-strax/reckon/authz"
-	"github.com/sd-strax/reckon/internal/sopdoc"
 	"github.com/sd-strax/reckon/knowledge"
 	"github.com/sd-strax/reckon/module"
 )
@@ -19,10 +18,13 @@ import (
 // DemoSeedResult reports what the demo-seed endpoint loaded into the knowledge
 // corpus. The fixtures + capability config are materialized client-side by the
 // CLI (runtime.SeedDemo); this endpoint owns only the DB-backed half.
+//
+// Only prior-case summaries are seeded. The demo's SOPs are NOT loaded here —
+// they are staged to disk by the CLI and imported LIVE during the demo (the
+// workbench "Import SOPs…" command), so the audience sees the import capability
+// and watches the just-imported SOP light up the knowledge rail on the next turn.
 type DemoSeedResult struct {
-	SOPs      int `json:"sops"`
-	Cases     int `json:"cases"`
-	SOPsTotal int `json:"sops_total"` // sops in the corpus after seeding
+	Cases int `json:"cases"`
 }
 
 // demoInstallState is the virginity readout returned in a 409 when the install
@@ -33,9 +35,11 @@ type demoInstallState struct {
 }
 
 // seedDemoKnowledge handles POST /api/admin/demo/seed (analyst): load the
-// embedded demo knowledge pack (institutional SOPs + prior-case summaries) into
-// the knowledge corpus. It is the DB half of `reckon demo seed`; the CLI has
-// already checked reachability and will write the fixtures + capability config.
+// embedded prior-case summaries into the knowledge corpus (the history the
+// similarity-recall loop draws on). SOPs are deliberately NOT seeded here — they
+// are imported live during the demo. It is the DB half of `reckon demo seed`;
+// the CLI has already checked reachability and will write the fixtures +
+// capability config and stage the SOP docs to disk.
 //
 // The virginity guard is enforced HERE, server-side, not just in the CLI: the
 // seed only runs on an install with no investigations and no SOPs, so it can
@@ -116,44 +120,17 @@ type demoCase struct {
 	SummaryText        string                    `json:"summary_text"`
 }
 
-// loadDemoKnowledge reads the embedded demo knowledge pack and writes it into
-// the corpus: SOPs via Import (idempotent upsert on source.url) and prior cases
-// via WriteSummary (idempotent revision on the source ref). Both are re-runnable
-// by construction, though the virginity guard means this normally runs once.
+// loadDemoKnowledge reads the embedded prior-case summaries and writes them into
+// the corpus via WriteSummary (idempotent revision on the source ref), re-runnable
+// by construction though the virginity guard means it normally runs once. The
+// summaries embed at write time when the substrate has an embedder configured, so
+// similarity recall ranks them by cosine — the CLI refuses the seed without an
+// embeddings backend, so the demo can never land in the keyword-only fallback.
+//
+// SOPs are NOT written here; they are imported live during the demo.
 func (b *Backend) loadDemoKnowledge(ctx context.Context) (DemoSeedResult, error) {
 	var res DemoSeedResult
 	tenant := module.SingleTenantUUID
-
-	sops, err := fs.ReadDir(reckon.DemoFS, reckon.DemoKnowledgeSOPs)
-	if err != nil {
-		return res, fmt.Errorf("read sop pack: %w", err)
-	}
-	for _, e := range sops {
-		if e.IsDir() {
-			continue
-		}
-		raw, err := reckon.DemoFS.ReadFile(path.Join(reckon.DemoKnowledgeSOPs, e.Name()))
-		if err != nil {
-			return res, fmt.Errorf("read sop %s: %w", e.Name(), err)
-		}
-		doc, err := sopdoc.Parse(raw, sopdoc.TitleStem(e.Name()))
-		if err != nil {
-			return res, fmt.Errorf("parse sop %s: %w", e.Name(), err)
-		}
-		if _, _, err := b.cfg.Knowledge.Import(ctx, knowledge.SOP{
-			TenantID: tenant,
-			Title:    doc.Title, Body: doc.Body, Tags: doc.Tags,
-			Recommendation: doc.Recommendation,
-			AuthorID:       doc.Author,
-			ImportedBy:     "demo-seed",
-			Source: &knowledge.SOPSource{
-				System: doc.SourceSystem, URL: doc.SourceURL, Version: doc.SourceVersion,
-			},
-		}); err != nil {
-			return res, fmt.Errorf("import sop %s: %w", e.Name(), err)
-		}
-		res.SOPs++
-	}
 
 	cases, err := fs.ReadDir(reckon.DemoFS, reckon.DemoKnowledgeCases)
 	if err != nil {
@@ -192,8 +169,5 @@ func (b *Backend) loadDemoKnowledge(ctx context.Context) (DemoSeedResult, error)
 		res.Cases++
 	}
 
-	if after, err := b.cfg.Knowledge.List(ctx, tenant, true); err == nil {
-		res.SOPsTotal = len(after)
-	}
 	return res, nil
 }
