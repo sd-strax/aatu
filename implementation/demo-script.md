@@ -55,7 +55,7 @@ cases are embedded at seed time so similarity recall can rank them.
   This is the history the compounding loop recalls by similarity.
 - **Wires the fixture scenario** (telemetry to query) and **stages the SOP docs
   to disk** (`~/.reckon/sops/`) — it prints the path. The SOPs are *not* loaded
-  into the corpus; you import one **live** in Act 1, as part of the story.
+  into the corpus; you import one **live** on stage (Act 2), as part of the story.
 
 Then in the **workbench**: reload, sign in, set your BYOK `ANTHROPIC_API_KEY`.
 The fixtures are live and the prior cases are consultable.
@@ -66,44 +66,60 @@ The fixtures are live and the prior cases are consultable.
 
 ---
 
-## Act 1 — Teach reckon the playbook (a live import)
-
-Open the door with the knowledge, not the alert. Northwind has a written runbook
-for exactly this class of incident — **`~/.reckon/sops/lateral-movement-rdp-containment.md`**
-(the path `demo seed` printed). Open it and walk the audience through it: it's a
-plain markdown SOP with YAML frontmatter — a title, an author, tags, a
-recommendation. Ordinary institutional knowledge, the kind every SOC has sitting
-in a wiki.
-
-Now bring it into reckon **live**. In the workbench, run **Import SOPs…**, pick
-that file. It lands in the corpus in one motion — no library to manage, no
-ceremony. *This is the import capability, shown, not seeded behind the curtain.*
-Hold the thought: in a minute you'll see the SOP you just imported surface on its
-own, exactly when it's relevant.
-
-## Act 2 — Investigate (the agent does the legwork)
+## Act 1 — Ask what we know (the gap, in the agent's own words)
 
 An alert fires: an interactive RDP logon into **`WIN-FILE01`**, a file server,
-from an account with no reason to be there. Start a **New Investigation** →
-seed `WIN-FILE01` → in the composer:
+from an account with no reason to be there. Start a **New Investigation** → seed
+`WIN-FILE01`. Before pulling a single log, ask the agent in the composer:
 
-> *"Investigate WIN-FILE01 for signs of compromise. Pull the process, logon, and
-> network telemetry and tell me if this looks like lateral movement."*
+> *"Before we dig in — do we have an established runbook for containing RDP
+> lateral movement?"*
+
+The agent calls its `recall_sops` tool, finds **nothing**, and says so — *"no SOP
+on file for this."* It does **not** invent a procedure: the agent is explicitly
+instructed that an empty retrieval is evidence of absence. It may note the two
+prior cases it *does* remember — `FINANCE-07`, `WORKSTATION-22` — surfaced on the
+**knowledge rail** as near-matches. So the honest starting state: **we remember
+similar incidents, but we have no codified playbook.** That gap is the setup.
+
+*(Say this one out loud — it's the differentiator: an empty corpus makes the
+agent admit it, not hallucinate a runbook.)*
+
+## Act 2 — Teach it the playbook, and watch it land
+
+Northwind *does* have that runbook, sitting in a wiki —
+**`~/.reckon/sops/lateral-movement-rdp-containment.md`** (the path `demo seed`
+printed). Open it in a tab and walk the audience through it: plain markdown, YAML
+frontmatter — title, author, tags, recommendation. Ordinary institutional
+knowledge, the kind every SOC has.
+
+Bring it into reckon **live**: run **Import SOPs…**, pick that file. It lands in
+one motion — no library to manage, no ceremony. *The import capability, shown,
+not seeded behind the curtain.* Now ask again:
+
+> *"Now — with our runbook in hand, what's the containment procedure here?"*
+
+This time `recall_sops` finds the *"Lateral Movement via RDP — Containment"* SOP
+**you imported thirty seconds ago**, and the agent grounds its answer in it and
+cites it. **Voilà** — the same question, a different answer, because the corpus
+changed under it.
+
+Then turn it loose on the investigation itself:
+
+> *"Pull the process, logon, and network telemetry for WIN-FILE01 and tell me if
+> this is lateral movement."*
 
 The agent queries the fixture telemetry, assembles the host timeline (the RDP
-logon, post-logon discovery, the C2 beacon) and lays out what it found — the
-analytical surfaces (timeline, entities, evidence) populate as it works.
+logon, post-logon discovery, the C2 beacon), and the analytical surfaces
+(timeline, entities, evidence) populate as it works.
 
-**The compounding payoff, first half.** As the investigation takes shape, the
-**knowledge rail** surfaces — with relevance scores and similarity bands — the
-*"Lateral Movement via RDP — Containment"* SOP **you imported a minute ago** and
-the prior `FINANCE-07` case, flagged as a near-match. Nobody wired them to this
+**The compounding payoff.** As it reasons, the **knowledge rail** shows — with
+relevance scores and similarity bands — the RDP SOP you just imported *and* the
+prior `FINANCE-07` case, flagged as a near-match. Nobody wired them to this
 investigation; the retriever found them by meaning. The analyst decides what the
-AI reasons over: tick both to include them. The next turn is now grounded in
-Northwind's own playbook and its own history. *(Nothing was force-fed — the
-retriever proposes, the analyst disposes. That's the injection dial. And the
-scores and bands are the vector backend at work — the reason we configured
-embeddings up front.)*
+AI reasons over: tick both to include them. *(The retriever proposes, the analyst
+disposes — the injection dial. And the scores and bands are the vector backend at
+work, the reason we configured embeddings up front.)*
 
 ## Act 3 — Decide (grounded in pins)
 
